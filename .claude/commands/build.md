@@ -19,4 +19,6 @@ Read and execute: `$ARGUMENTS`
    - Tasks completed
    - Files created/modified  
    - Test results (if applicable)
-   - Any deviations from plan and why
+   - Any deviations from plan and why0
+
+5. **Update our progress.md**

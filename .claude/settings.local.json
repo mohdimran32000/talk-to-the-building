@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source:*)",
+      "Bash(uvicorn:*)",
+      "Bash(curl:*)",
+      "Bash(./venv/Scripts/python.exe:*)",
+      "Bash(venv/Scripts/python:*)",
+      "Bash(venv/Scripts/pip install:*)",
+      "Bash(BASE_URL=http://localhost:8001 venv/Scripts/python:*)",
+      "Bash(tasklist:*)",
+      "Bash(taskkill:*)",
+      "Bash(netstat:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(where supabase:*)",
+      "Bash(where psql:*)",
+      "Bash(\"C:/RAG Automators/claude-code-agentic-rag-masterclass/backend/venv/Scripts/python\":*)",
+      "Bash(nslookup:*)",
+      "Bash(do taskkill:*)",
+      "Bash(wmic process:*)",
+      "Bash(git -C \"/c/RAG Automators/claude-code-agentic-rag-masterclass\" remote -v)"
+    ]
+  }
+}

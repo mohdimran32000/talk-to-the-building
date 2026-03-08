@@ -1,0 +1,150 @@
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Button } from '@/components/ui/button'
+import { toast } from 'sonner'
+import { getSettings, updateSettings, getModels, type GlobalSettings, type GlobalSettingsUpdate, type GeminiModel } from '@/lib/api'
+
+export default function AdminSettings() {
+  const navigate = useNavigate()
+  const [settings, setSettings] = useState<GlobalSettings | null>(null)
+  const [llmApiKey, setLlmApiKey] = useState('')
+  const [llmModel, setLlmModel] = useState('')
+  const [langsmithApiKey, setLangsmithApiKey] = useState('')
+  const [langsmithProject, setLangsmithProject] = useState('')
+  const [langsmithTracing, setLangsmithTracing] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [models, setModels] = useState<GeminiModel[]>([])
+  const [loadingModels, setLoadingModels] = useState(true)
+
+  useEffect(() => {
+    getSettings().then((s) => {
+      setSettings(s)
+      setLlmModel(s.llm_model || '')
+      setLangsmithProject(s.langsmith_project || '')
+      setLangsmithTracing(s.langsmith_tracing)
+    }).catch(() => toast.error('Failed to load settings'))
+
+    getModels().then(setModels).catch(() => {
+      setModels([{ id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview' }])
+    }).finally(() => setLoadingModels(false))
+  }, [])
+
+  async function handleSave() {
+    if (!settings) return
+    setSaving(true)
+    try {
+      const data: GlobalSettingsUpdate = {}
+      if (llmApiKey) data.llm_api_key = llmApiKey
+      if (llmModel !== (settings.llm_model || '')) data.llm_model = llmModel
+      if (langsmithApiKey) data.langsmith_api_key = langsmithApiKey
+      if (langsmithProject !== (settings.langsmith_project || '')) data.langsmith_project = langsmithProject
+      if (langsmithTracing !== settings.langsmith_tracing) data.langsmith_tracing = langsmithTracing
+
+      const updated = await updateSettings(data)
+      setSettings(updated)
+      setLlmApiKey('')
+      setLangsmithApiKey('')
+      toast.success('Settings saved')
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to save settings')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!settings) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-muted-foreground">Loading settings...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto max-w-2xl p-6">
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Admin Settings</h1>
+        <Button variant="outline" onClick={() => navigate('/')}>Back to Chat</Button>
+      </div>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>LLM Configuration</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="llm-api-key">API Key</Label>
+            <Input
+              id="llm-api-key"
+              type="password"
+              placeholder={settings.llm_api_key_set ? 'Key is set (leave blank to keep)' : 'Enter API key'}
+              value={llmApiKey}
+              onChange={(e) => setLlmApiKey(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="llm-model">Model</Label>
+            <select
+              id="llm-model"
+              value={llmModel}
+              onChange={(e) => setLlmModel(e.target.value)}
+              disabled={loadingModels}
+              className="flex h-9 w-full rounded-md border border-input bg-background text-foreground px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+            >
+              {loadingModels ? (
+                <option>Loading models...</option>
+              ) : (
+                models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))
+              )}
+            </select>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>LangSmith Observability</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="langsmith-api-key">API Key</Label>
+            <Input
+              id="langsmith-api-key"
+              type="password"
+              placeholder={settings.langsmith_api_key_set ? 'Key is set (leave blank to keep)' : 'Enter API key'}
+              value={langsmithApiKey}
+              onChange={(e) => setLangsmithApiKey(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="langsmith-project">Project Name</Label>
+            <Input
+              id="langsmith-project"
+              value={langsmithProject}
+              onChange={(e) => setLangsmithProject(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              id="langsmith-tracing"
+              type="checkbox"
+              checked={langsmithTracing}
+              onChange={(e) => setLangsmithTracing(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            <Label htmlFor="langsmith-tracing">Enable Tracing</Label>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Button onClick={handleSave} disabled={saving} className="w-full">
+        {saving ? 'Saving...' : 'Save Settings'}
+      </Button>
+    </div>
+  )
+}

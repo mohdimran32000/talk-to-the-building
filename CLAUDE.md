@@ -36,5 +36,17 @@ RAG app with chat (default) and document ingestion interfaces. Config via env va
 3. **Validate** - Test and verify the implementation works correctly. Use browser testing where applicable via an appropriate MCP
 4. **Iterate** - Fix any issues found during validation
 
+## Testing
+- **Backend validation suite:** `cd backend && venv/Scripts/python scripts/test_all.py` (67 tests)
+  - Covers: health, auth rejection, thread CRUD, messages + SSE, file upload/ingestion, RAG retrieval + memory, RLS isolation
+  - Requires backend running on localhost:8001
+- **Frontend Playwright suite:** `cd frontend && npx playwright test e2e/full-suite.spec.ts` (26 tests)
+  - Covers: auth flow, threads, messages, documents, theme toggle, console errors
+  - Requires both backend (8001) and frontend (5173) running
+- **When building new features:** Add tests to the appropriate backend test module or create a new one in `backend/scripts/`. Add UI tests to `frontend/e2e/full-suite.spec.ts`. Update `backend/scripts/test_all.py` if adding a new module.
+- **When to run tests:** Do NOT run the full test suite automatically. Only run tests when the user explicitly asks (e.g., "run tests", "verify", "check if anything broke"). For small/cosmetic changes (colors, text, styling), tests are unnecessary unless requested.
+- **Test helpers:** `backend/scripts/test_helpers.py` provides auth, SSE parsing, polling, and cleanup utilities
+- **CRITICAL: Tests must NEVER delete all user data.** Tests must only clean up resources they created (tracked by ID). Never use blanket "delete all threads/files" cleanup. Never run `DELETE FROM` or `TRUNCATE` on production tables. Never write migrations with `DROP TABLE` on tables that hold user data.
+
 ## Progress
 Check PROGRESS.md for current module status. Update it as you complete tasks.

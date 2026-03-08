@@ -1,0 +1,6 @@
+-- Fix: text-embedding-004 unavailable; using gemini-embedding-001 with output_dimensionality=768
+-- NO DB MIGRATION NEEDED — schema stays at vector(768)
+-- The fix is code-side: embed_text() and embed_batch() now pass output_dimensionality=768
+-- to truncate gemini-embedding-001 output from 3072 → 768 dims.
+--
+-- This file is kept for documentation purposes only. Nothing to run.
