@@ -35,6 +35,8 @@ class DocumentResponse(BaseModel):
     mime_type: str
     status: str
     error_message: Optional[str] = None
+    content_hash: Optional[str] = None
+    action: Optional[str] = None  # "created" | "skipped" | "updated" (only on upload response)
     created_at: datetime
     updated_at: datetime
 

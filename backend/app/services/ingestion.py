@@ -11,6 +11,8 @@ from typing import List
 
 from google import genai
 
+from app.services.record_manager import compute_chunk_hash, compute_file_hash
+
 logger = logging.getLogger(__name__)
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 EMBEDDING_DIMS = 768  # Truncate to 768 dims (pgvector ivfflat max is 2000)
@@ -120,20 +122,80 @@ def ingest_document(
                 "content": chunk,
                 "embedding": embedding,
                 "chunk_index": idx,
+                "content_hash": compute_chunk_hash(chunk),
             }
             for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings))
         ]
         for i in range(0, len(rows), 100):
             supabase_client.table("document_chunks").insert(rows[i : i + 100]).execute()
 
+        file_hash = compute_file_hash(file_content)
         supabase_client.table("documents").update(
-            {"status": "ready", "updated_at": "now()"}
+            {"status": "ready", "content_hash": file_hash, "updated_at": "now()"}
         ).eq("id", document_id).execute()
         logger.info(f"Ingested document {document_id}: {len(chunks)} chunks")
 
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Ingestion failed for document {document_id}: {error_msg}")
+        try:
+            supabase_client.table("documents").update(
+                {"status": "failed", "error_message": error_msg, "updated_at": "now()"}
+            ).eq("id", document_id).execute()
+        except Exception as inner_e:
+            logger.error(f"Could not update failed status: {inner_e}")
+
+
+def ingest_document_update(
+    document_id: str,
+    file_content: bytes,
+    mime_type: str,
+    file_name: str,
+    user_id: str,
+    supabase_client,
+) -> None:
+    """Re-ingest a document: delete all old chunks, re-chunk and re-embed from scratch."""
+    try:
+        supabase_client.table("documents").update(
+            {"status": "processing", "updated_at": "now()"}
+        ).eq("id", document_id).execute()
+
+        # Delete all existing chunks
+        supabase_client.table("document_chunks").delete().eq("document_id", document_id).execute()
+
+        text = extract_text(file_content, mime_type, file_name)
+        if not text.strip():
+            raise ValueError("No extractable text found in document")
+
+        chunks = chunk_text(text, chunk_size=500, overlap=50)
+        if not chunks:
+            raise ValueError("Chunking produced no chunks")
+
+        embeddings = embed_batch(chunks)
+
+        rows = [
+            {
+                "document_id": document_id,
+                "user_id": user_id,
+                "content": chunk,
+                "embedding": embedding,
+                "chunk_index": idx,
+                "content_hash": compute_chunk_hash(chunk),
+            }
+            for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings))
+        ]
+        for i in range(0, len(rows), 100):
+            supabase_client.table("document_chunks").insert(rows[i:i+100]).execute()
+
+        file_hash = compute_file_hash(file_content)
+        supabase_client.table("documents").update(
+            {"status": "ready", "content_hash": file_hash, "updated_at": "now()"}
+        ).eq("id", document_id).execute()
+
+        logger.info(f"Re-ingested document {document_id}: {len(chunks)} chunks")
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Update ingestion failed for {document_id}: {error_msg}")
         try:
             supabase_client.table("documents").update(
                 {"status": "failed", "error_message": error_msg, "updated_at": "now()"}

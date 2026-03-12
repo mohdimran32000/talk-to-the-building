@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from app.auth import get_current_user, get_supabase_client
 from app.models.schemas import DocumentResponse
-from app.services.ingestion import ingest_document
+from app.services.ingestion import ingest_document, ingest_document_update
+from app.services.record_manager import compute_file_hash, determine_action
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -13,14 +14,50 @@ async def upload_file(
     user_id: str = Depends(get_current_user),
 ):
     supabase = get_supabase_client()
-    # Must read before add_task — UploadFile stream closes after handler returns
     contents = await file.read()
+    file_name = file.filename or "unnamed"
+    mime_type = file.content_type or "application/octet-stream"
 
+    # Record Manager: check for duplicates
+    file_hash = compute_file_hash(contents)
+    record_action = determine_action(file_hash, file_name, user_id, supabase)
+
+    if record_action.action == "skip":
+        doc = supabase.table("documents").select("*") \
+            .eq("id", record_action.document_id).single().execute().data
+        doc["action"] = "skipped"
+        return doc
+
+    if record_action.action == "update":
+        supabase.table("documents").update({
+            "file_size": len(contents),
+            "mime_type": mime_type,
+            "status": "pending",
+            "error_message": None,
+            "updated_at": "now()",
+        }).eq("id", record_action.document_id).execute()
+
+        doc = supabase.table("documents").select("*") \
+            .eq("id", record_action.document_id).single().execute().data
+
+        background_tasks.add_task(
+            ingest_document_update,
+            document_id=doc["id"],
+            file_content=contents,
+            mime_type=mime_type,
+            file_name=file_name,
+            user_id=user_id,
+            supabase_client=supabase,
+        )
+        doc["action"] = "updated"
+        return doc
+
+    # action == "create": new document
     doc = supabase.table("documents").insert({
         "user_id": user_id,
-        "file_name": file.filename or "unnamed",
+        "file_name": file_name,
         "file_size": len(contents),
-        "mime_type": file.content_type or "application/octet-stream",
+        "mime_type": mime_type,
         "status": "pending",
     }).execute().data[0]
 
@@ -28,11 +65,12 @@ async def upload_file(
         ingest_document,
         document_id=doc["id"],
         file_content=contents,
-        mime_type=file.content_type or "application/octet-stream",
-        file_name=file.filename or "unnamed",
+        mime_type=mime_type,
+        file_name=file_name,
         user_id=user_id,
         supabase_client=supabase,
     )
+    doc["action"] = "created"
     return doc
 
 

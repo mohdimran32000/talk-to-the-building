@@ -44,7 +44,15 @@ export default function Chat() {
     setIsUploading(true)
     try {
       const uploaded = await uploadFile(file)
-      setFiles((prev) => [uploaded, ...prev])
+
+      if (uploaded.action === 'skipped') {
+        toast.info('File already uploaded with identical content — skipped')
+      } else if (uploaded.action === 'updated') {
+        toast.success('File content changed — re-ingesting updated content')
+        setFiles((prev) => prev.map((f) => f.id === uploaded.id ? uploaded : f))
+      } else {
+        setFiles((prev) => [uploaded, ...prev])
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to upload file')
     } finally {

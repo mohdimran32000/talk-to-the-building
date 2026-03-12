@@ -1,4 +1,4 @@
-"""File upload, ingestion polling, and delete tests."""
+"""File upload, ingestion polling, delete, and record manager dedup tests."""
 import sys
 import os
 import requests
@@ -23,6 +23,7 @@ def run():
     headers = h.auth_headers(token)
 
     doc_id = None
+    dedup_doc_id = None
 
     try:
         h.section("File Upload")
@@ -91,9 +92,56 @@ def run():
         )
         h.test("Upload with no file returns 422", r.status_code == 422, f"status={r.status_code}")
 
+        # ── Record Manager — Deduplication ──
+
+        h.section("Record Manager — Deduplication")
+
+        # Upload a file
+        r = requests.post(
+            f"{h.BASE_URL}/api/files/upload",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("dedup_test.txt", b"Hello world content", "text/plain")},
+        )
+        h.test("Dedup: first upload returns 200", r.status_code == 200, f"status={r.status_code}")
+        first_doc = r.json() if r.status_code == 200 else {}
+        dedup_doc_id = first_doc.get("id")
+        h.test("Dedup: action is created", first_doc.get("action") == "created", str(first_doc.get("action")))
+
+        # Wait for ingestion
+        if dedup_doc_id:
+            h.poll_document_status(token, dedup_doc_id, "ready", max_wait=15)
+
+        # Upload same file again (identical content)
+        r = requests.post(
+            f"{h.BASE_URL}/api/files/upload",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("dedup_test.txt", b"Hello world content", "text/plain")},
+        )
+        h.test("Dedup: duplicate upload returns 200", r.status_code == 200, f"status={r.status_code}")
+        skip_doc = r.json() if r.status_code == 200 else {}
+        h.test("Dedup: action is skipped", skip_doc.get("action") == "skipped", str(skip_doc.get("action")))
+        h.test("Dedup: same document ID", skip_doc.get("id") == dedup_doc_id, f"{skip_doc.get('id')} vs {dedup_doc_id}")
+
+        # Upload with same name but different content
+        r = requests.post(
+            f"{h.BASE_URL}/api/files/upload",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("dedup_test.txt", b"Updated content here", "text/plain")},
+        )
+        h.test("Dedup: update upload returns 200", r.status_code == 200, f"status={r.status_code}")
+        update_doc = r.json() if r.status_code == 200 else {}
+        h.test("Dedup: action is updated", update_doc.get("action") == "updated", str(update_doc.get("action")))
+        h.test("Dedup: same document ID on update", update_doc.get("id") == dedup_doc_id, f"{update_doc.get('id')} vs {dedup_doc_id}")
+
+        # Wait for re-ingestion
+        if dedup_doc_id:
+            h.poll_document_status(token, dedup_doc_id, "ready", max_wait=15)
+
     finally:
         if doc_id:
             requests.delete(f"{h.BASE_URL}/api/files/{doc_id}", headers=headers)
+        if dedup_doc_id:
+            requests.delete(f"{h.BASE_URL}/api/files/{dedup_doc_id}", headers=headers)
 
     return h.passed, h.failed
 

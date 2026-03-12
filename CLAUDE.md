@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-RAG app with chat (default) and document ingestion interfaces. Config via env vars, no admin UI.
+RAG app with chat (default) and document ingestion interfaces. Config via admin settings UI.
 
 ## Stack
 - Frontend: React + Vite + Tailwind + shadcn/ui
 - Backend: Python + FastAPI
 - Database: Supabase (Postgres, pgvector, Auth, Storage, Realtime)
-- LLM: OpenAI (Module 1), OpenRouter (Module 2+)
+- LLM: Google Gemini (native google-genai SDK)
 - Observability: LangSmith
 
 ## Rules
@@ -15,7 +15,7 @@ RAG app with chat (default) and document ingestion interfaces. Config via env va
 - Use Pydantic for structured LLM outputs
 - All tables need Row-Level Security - users only see their own data
 - Stream chat responses via SSE
-- Use Supabase Realtime for ingestion status updates
+- Use polling (not Realtime) for ingestion status updates
 - Module 2+ uses stateless completions - store and send chat history yourself
 - Ingestion is manual file upload only - no connectors or automated pipelines
 
@@ -37,8 +37,8 @@ RAG app with chat (default) and document ingestion interfaces. Config via env va
 4. **Iterate** - Fix any issues found during validation
 
 ## Testing
-- **Backend validation suite:** `cd backend && venv/Scripts/python scripts/test_all.py` (67 tests)
-  - Covers: health, auth rejection, thread CRUD, messages + SSE, file upload/ingestion, RAG retrieval + memory, RLS isolation
+- **Backend validation suite:** `cd backend && venv/Scripts/python scripts/test_all.py` (83 tests)
+  - Covers: health, auth rejection, thread CRUD, messages + SSE, file upload/ingestion, record manager dedup, RAG retrieval + memory, RLS isolation, admin settings
   - Requires backend running on localhost:8001
 - **Frontend Playwright suite:** `cd frontend && npx playwright test e2e/full-suite.spec.ts` (26 tests)
   - Covers: auth flow, threads, messages, documents, theme toggle, console errors

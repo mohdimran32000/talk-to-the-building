@@ -186,16 +186,16 @@ Track your progress through the masterclass. Update this file as you complete mo
 - [x] Task 3: Auth rejection tests (`test_auth.py`) — 10/10 passing
 - [x] Task 4: Thread CRUD tests (`test_threads.py`) — 15/15 passing
 - [x] Task 5: Messages + SSE tests (`test_messages.py`) — 10/10 passing
-- [x] Task 6: File upload/ingestion tests (`test_files.py`) — 14/14 passing
+- [x] Task 6: File upload/ingestion tests (`test_files.py`) — 22/22 passing (includes 8 record manager dedup tests)
 - [x] Task 7: RAG retrieval + memory tests (`test_rag.py`) — 8/8 passing
 - [x] Task 8: RLS isolation tests (`test_rls.py`) — 8/8 passing
-- [x] Task 9: Unified runner (`test_all.py`) — 67/67 passing
+- [x] Task 9: Unified runner (`test_all.py`) — 83/83 passing
 - [x] Task 10: Frontend Playwright suite (`full-suite.spec.ts`) — created (26 tests)
 - [x] Task 11: CLAUDE.md updated with testing instructions for future agents
 
 #### Run Commands
 ```bash
-# Backend (67 tests)
+# Backend (83 tests)
 cd backend && venv/Scripts/python scripts/test_all.py
 
 # Frontend (26 tests)
@@ -227,7 +227,7 @@ cd frontend && npx playwright test e2e/full-suite.spec.ts
 - [x] Task 11: Backend tests — 8 settings tests added to suite
 - [x] Task 12: Frontend Playwright tests — 2 admin settings tests added
 
-#### Backend Test Results (75/75 passing)
+#### Backend Test Results (83/83 passing)
 ```
 cd backend && venv/Scripts/python scripts/test_all.py
 ```
@@ -235,7 +235,7 @@ cd backend && venv/Scripts/python scripts/test_all.py
 - Auth: 10/10
 - Threads: 15/15
 - Messages: 10/10
-- Files: 14/14
+- Files: 22/22 (includes 8 Record Manager dedup tests)
 - RAG: 8/8
 - RLS: 8/8
 - Settings: 8/8
@@ -264,6 +264,36 @@ cd backend && venv/Scripts/python scripts/test_all.py
 | `frontend/src/components/ThreadSidebar.tsx` | Modified |
 | `frontend/e2e/full-suite.spec.ts` | Modified |
 
+### Module 3: Record Manager
+- [x] Task 1: Database migration — `content_hash` columns + unique constraint on `(user_id, file_name)` — ran in Supabase SQL Editor
+- [x] Task 2: Record Manager service — `compute_file_hash()`, `compute_chunk_hash()`, `determine_action()`
+- [x] Task 3: Updated ingestion service — chunk hashes on insert, `ingest_document_update()` with full re-ingest
+- [x] Task 4: Updated upload endpoint — dedup check before insert (create/skip/update paths)
+- [x] Task 5: Frontend feedback — toast messages for skipped/updated/created actions
+- [x] Task 6: Tests — 6 dedup tests added to `test_files.py`
+
+#### Record Manager Logic
+- **Skip**: identical content (same SHA-256 hash) → return existing document, zero processing
+- **Update**: same filename but different content → delete all old chunks, re-chunk and re-embed from scratch
+- **Create**: new filename → normal ingestion pipeline
+
+#### Design Decision — Full Re-ingest over Chunk Diffing
+- Original plan had chunk-level diffing (`diff_chunks()`) that compared individual chunk hashes to only re-embed changed chunks
+- Simplified to full re-ingest on update: delete all old chunks → re-chunk → re-embed everything
+- Simpler, less error-prone, and the skip path already prevents unnecessary work for identical files
+
+#### Files Changed (Module 3)
+| File | Action |
+|------|--------|
+| `backend/migrations/006_record_manager.sql` | Created — **pending: run in Supabase SQL Editor** |
+| `backend/app/services/record_manager.py` | Created (`compute_file_hash`, `compute_chunk_hash`, `determine_action`) |
+| `backend/app/services/ingestion.py` | Modified (chunk hashes on insert, `ingest_document_update()` full re-ingest) |
+| `backend/app/routers/files.py` | Modified (dedup check: create/skip/update paths) |
+| `backend/app/models/schemas.py` | Modified (added `content_hash`, `action` to `DocumentResponse`) |
+| `frontend/src/lib/api.ts` | Modified (added `content_hash`, `action` to `Document` interface) |
+| `frontend/src/pages/Chat.tsx` | Modified (toast feedback for skip/update/create) |
+| `backend/scripts/test_files.py` | Modified (6 dedup tests: create → skip → update) |
+
 #### Enhancements Beyond Plan
 - **Dynamic model dropdown**: `GET /api/settings/models` fetches available Gemini models from the API, filtered to chat-capable ones (22 models). Frontend renders a `<select>` dropdown instead of free text input.
 - **Dark mode fix**: Select dropdown uses `bg-background text-foreground` for proper theme support.
@@ -273,3 +303,21 @@ cd backend && venv/Scripts/python scripts/test_all.py
 - `test@test.com` promoted to admin
 - API tested: GET settings (200), PUT non-admin (403), PUT admin (200), profile (200), models (200, 22 models)
 - Admin settings page accessible, model dropdown functional, save works with toast
+
+### Module 4: Metadata Extraction
+- [ ] Task 1: Database migration — `metadata` JSONB on documents + `metadata_schema` JSONB on global_settings + filtered RPC
+- [ ] Task 2: Pydantic schemas — `MetadataFieldDefinition`, update `DocumentResponse`, `MessageCreate`, `GlobalSettings*`
+- [ ] Task 3: Settings service — `get_metadata_schema()` + expose via settings API
+- [ ] Task 4: Metadata extraction service — dynamic prompt/schema from admin config, Gemini structured output
+- [ ] Task 5: Ingestion integration — extract metadata after text extraction, store on document
+- [ ] Task 6: Filtered retrieval — `metadata_filter` param on `retrieve_chunks()`, new RPC
+- [ ] Task 7: API endpoints — `metadata_filter` in message request body
+- [ ] Task 8: Frontend types & API — dynamic metadata types, filter param on `sendMessage()`
+- [ ] Task 9: Metadata display — badges + expandable detail in FileUploadPanel
+- [ ] Task 10: Metadata filter bar — dynamic controls based on schema (text/list/boolean/number/date)
+- [ ] Task 11: Backend tests — 8 metadata tests
+- [ ] Task 12: Frontend tests — 2 metadata tests
+- [ ] Task 13: Update PROGRESS.md
+
+#### Plan
+See `.agent/plans/6.metadata-extraction.md` for full implementation details.

@@ -121,6 +121,8 @@ export interface Document {
   mime_type: string
   status: 'pending' | 'processing' | 'ready' | 'failed'
   error_message: string | null
+  content_hash: string | null
+  action?: 'created' | 'skipped' | 'updated'
   created_at: string
   updated_at: string
 }
