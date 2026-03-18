@@ -17,6 +17,7 @@ class ThreadResponse(BaseModel):
 
 class MessageCreate(BaseModel):
     content: str
+    metadata_filter: Optional[dict] = None
 
 
 class MessageResponse(BaseModel):
@@ -36,9 +37,17 @@ class DocumentResponse(BaseModel):
     status: str
     error_message: Optional[str] = None
     content_hash: Optional[str] = None
+    metadata: Optional[dict] = None
     action: Optional[str] = None  # "created" | "skipped" | "updated" (only on upload response)
     created_at: datetime
     updated_at: datetime
+
+
+class MetadataFieldDefinition(BaseModel):
+    name: str
+    type: str  # "text", "list", "boolean", "number", "date"
+    required: bool = False
+    description: str = ""
 
 
 class ProfileResponse(BaseModel):
@@ -55,6 +64,7 @@ class GlobalSettingsResponse(BaseModel):
     langsmith_tracing: bool = True
     llm_api_key_set: bool = False
     langsmith_api_key_set: bool = False
+    metadata_schema: Optional[list[dict]] = None
     updated_at: Optional[datetime] = None
 
 
@@ -64,3 +74,4 @@ class GlobalSettingsUpdate(BaseModel):
     langsmith_api_key: Optional[str] = None
     langsmith_project: Optional[str] = None
     langsmith_tracing: Optional[bool] = None
+    metadata_schema: Optional[list[dict]] = None

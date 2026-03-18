@@ -30,6 +30,25 @@ def get_llm_model() -> str:
     return model or "gemini-3-flash-preview"
 
 
+DEFAULT_METADATA_SCHEMA = [
+    {"name": "document_type", "type": "text", "required": True, "description": "Document category (e.g. report, email, article, manual, notes, code, other)"},
+    {"name": "topic", "type": "text", "required": True, "description": "Primary topic in 2-5 words"},
+    {"name": "summary", "type": "text", "required": True, "description": "1-3 sentence summary"},
+    {"name": "language", "type": "text", "required": True, "description": "ISO 639-1 language code (e.g. en, es, fr)"},
+    {"name": "entities", "type": "list", "required": False, "description": "Key people, organizations, dates, products (max 10)"},
+    {"name": "keywords", "type": "list", "required": False, "description": "3-8 keywords for discoverability"},
+    {"name": "is_technical", "type": "boolean", "required": False, "description": "Whether the document is technical in nature"},
+    {"name": "page_count", "type": "number", "required": False, "description": "Number of pages or sections"},
+    {"name": "publish_date", "type": "date", "required": False, "description": "Publication or creation date if mentioned (YYYY-MM-DD)"},
+]
+
+
+def get_metadata_schema() -> list[dict]:
+    settings = get_settings()
+    schema = settings.get("metadata_schema") if settings else None
+    return schema or DEFAULT_METADATA_SCHEMA
+
+
 def invalidate_cache():
     _cache["data"] = None
     _cache["expires"] = 0

@@ -109,6 +109,17 @@ def ingest_document(
         if not text.strip():
             raise ValueError("No extractable text found in document")
 
+        # Extract metadata before chunking
+        try:
+            from app.services.metadata import extract_metadata
+            metadata = extract_metadata(text)
+            supabase_client.table("documents").update(
+                {"metadata": metadata, "updated_at": "now()"}
+            ).eq("id", document_id).execute()
+            logger.info(f"Extracted metadata for document {document_id}")
+        except Exception as e:
+            logger.warning(f"Metadata extraction failed (non-fatal) for {document_id}: {e}")
+
         chunks = chunk_text(text, chunk_size=500, overlap=50)
         if not chunks:
             raise ValueError("Chunking produced no chunks")
@@ -166,6 +177,17 @@ def ingest_document_update(
         text = extract_text(file_content, mime_type, file_name)
         if not text.strip():
             raise ValueError("No extractable text found in document")
+
+        # Re-extract metadata on update
+        try:
+            from app.services.metadata import extract_metadata
+            metadata = extract_metadata(text)
+            supabase_client.table("documents").update(
+                {"metadata": metadata, "updated_at": "now()"}
+            ).eq("id", document_id).execute()
+            logger.info(f"Re-extracted metadata for document {document_id}")
+        except Exception as e:
+            logger.warning(f"Metadata extraction failed (non-fatal) for {document_id}: {e}")
 
         chunks = chunk_text(text, chunk_size=500, overlap=50)
         if not chunks:

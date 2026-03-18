@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 from app.auth import get_current_user, get_supabase_client
 from app.models.schemas import MessageCreate, MessageResponse
-from app.services.openai_client import stream_response, retrieve_chunks
+from app.services.openai_client import stream_response
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/threads/{thread_id}/messages", tags=["messages"])
 
 
@@ -41,14 +42,13 @@ async def send_message(
     history = supabase.table("messages").select("role, content").eq("thread_id", thread_id).order("created_at", desc=False).execute()
     messages = [{"role": m["role"], "content": m["content"]} for m in history.data]
 
-    # BYO retrieval: embed query + similarity search (skipped if no ready documents)
-    context_chunks = []
+    # Check if user has ready documents (enables search tool)
+    has_documents = False
     try:
         ready_docs = supabase.table("documents").select("id").eq("user_id", user_id).eq("status", "ready").limit(1).execute()
-        if ready_docs.data:
-            context_chunks = retrieve_chunks(query=body.content, user_id=user_id, supabase_client=supabase, top_k=5)
+        has_documents = bool(ready_docs.data)
     except Exception as e:
-        logging.getLogger(__name__).warning(f"Retrieval failed (non-fatal): {e}")
+        logger.warning(f"Document check failed (non-fatal): {e}")
 
     def event_generator():
         full_response = ""
@@ -57,7 +57,9 @@ async def send_message(
                 messages=messages,
                 thread_id=thread_id,
                 user_id=user_id,
-                context_chunks=context_chunks,
+                supabase_client=supabase,
+                has_documents=has_documents,
+                manual_metadata_filter=body.metadata_filter,
             ):
                 if event_type == "token":
                     full_response += data

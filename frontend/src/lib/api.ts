@@ -49,12 +49,20 @@ export interface Profile {
   updated_at: string
 }
 
+export interface MetadataFieldDefinition {
+  name: string
+  type: string
+  required: boolean
+  description: string
+}
+
 export interface GlobalSettings {
   llm_model: string | null
   langsmith_project: string | null
   langsmith_tracing: boolean
   llm_api_key_set: boolean
   langsmith_api_key_set: boolean
+  metadata_schema: MetadataFieldDefinition[] | null
   updated_at: string | null
 }
 
@@ -64,6 +72,7 @@ export interface GlobalSettingsUpdate {
   langsmith_api_key?: string
   langsmith_project?: string
   langsmith_tracing?: boolean
+  metadata_schema?: MetadataFieldDefinition[]
 }
 
 export async function getProfile(): Promise<Profile> {
@@ -121,6 +130,7 @@ export interface Document {
   mime_type: string
   status: 'pending' | 'processing' | 'ready' | 'failed'
   error_message: string | null
+  metadata: Record<string, any> | null
   content_hash: string | null
   action?: 'created' | 'skipped' | 'updated'
   created_at: string
@@ -162,15 +172,20 @@ export async function sendMessage(
   onToken: (token: string) => void,
   onDone: (responseId: string) => void,
   signal?: AbortSignal,
+  metadataFilter?: Record<string, any>,
 ) {
   const token = await getToken()
+  const body: Record<string, any> = { content }
+  if (metadataFilter && Object.keys(metadataFilter).length > 0) {
+    body.metadata_filter = metadataFilter
+  }
   const res = await fetch(`/api/threads/${threadId}/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
     signal,
   })
 

@@ -17,6 +17,7 @@ import test_files
 import test_rag
 import test_rls
 import test_settings
+import test_metadata
 
 SUITES = [
     ("Health", test_health),
@@ -27,6 +28,7 @@ SUITES = [
     ("RAG", test_rag),
     ("RLS", test_rls),
     ("Settings", test_settings),
+    ("Metadata", test_metadata),
 ]
 
 

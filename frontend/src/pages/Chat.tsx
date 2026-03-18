@@ -5,6 +5,7 @@ import ThreadSidebar from '@/components/ThreadSidebar'
 import MessageList from '@/components/MessageList'
 import MessageInput from '@/components/MessageInput'
 import FileUploadPanel from '@/components/FileUploadPanel'
+import MetadataFilterBar from '@/components/MetadataFilterBar'
 import {
   getThreads,
   createThread,
@@ -14,9 +15,11 @@ import {
   getUploadedFiles,
   uploadFile,
   deleteFile,
+  getSettings,
   type Thread,
   type Message,
   type UploadedFile,
+  type MetadataFieldDefinition,
 } from '@/lib/api'
 
 export default function Chat() {
@@ -29,6 +32,8 @@ export default function Chat() {
   const [loadingThreads, setLoadingThreads] = useState(true)
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [isUploading, setIsUploading] = useState(false)
+  const [metadataSchema, setMetadataSchema] = useState<MetadataFieldDefinition[] | null>(null)
+  const [metadataFilters, setMetadataFilters] = useState<Record<string, any>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const loadFiles = useCallback(async () => {
@@ -37,6 +42,15 @@ export default function Chat() {
       setFiles(data)
     } catch {
       // Silently fail — files panel is supplementary
+    }
+  }, [])
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const settings = await getSettings()
+      setMetadataSchema(settings.metadata_schema || null)
+    } catch {
+      // Silently fail
     }
   }, [])
 
@@ -73,6 +87,12 @@ export default function Chat() {
     setFiles((prev) =>
       prev.map((f) => (f.id === documentId ? { ...f, status: status as UploadedFile['status'], error_message: errorMessage || f.error_message } : f))
     )
+    // Reload files when a document becomes ready to get its metadata
+    if (status === 'ready') {
+      setTimeout(() => {
+        getUploadedFiles().then(setFiles).catch(() => {})
+      }, 500)
+    }
   }, [])
 
   const loadThreads = useCallback(async () => {
@@ -89,7 +109,8 @@ export default function Chat() {
   useEffect(() => {
     loadThreads()
     loadFiles()
-  }, [loadThreads, loadFiles])
+    loadSettings()
+  }, [loadThreads, loadFiles, loadSettings])
 
   const loadMessages = useCallback(async (threadId: string) => {
     try {
@@ -193,6 +214,7 @@ export default function Chat() {
           }, 500)
         },
         controller.signal,
+        Object.keys(metadataFilters).length > 0 ? metadataFilters : undefined,
       )
     } catch (err) {
       setIsStreaming(false)
@@ -220,6 +242,8 @@ export default function Chat() {
     }
   }
 
+  const hasReadyDocs = files.some((f) => f.status === 'ready' && f.metadata)
+
   return (
     <div className="flex h-screen">
       <ThreadSidebar
@@ -244,7 +268,16 @@ export default function Chat() {
               onUpload={handleUploadFile}
               onDelete={handleDeleteFile}
               onStatusUpdate={handleStatusUpdate}
+              metadataSchema={metadataSchema}
             />
+            {hasReadyDocs && metadataSchema && (
+              <MetadataFilterBar
+                schema={metadataSchema}
+                documents={files}
+                filters={metadataFilters}
+                onFilterChange={setMetadataFilters}
+              />
+            )}
             <MessageList
               messages={messages}
               streamingContent={streamingContent}

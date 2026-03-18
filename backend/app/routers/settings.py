@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.auth import get_current_user, get_admin_user, get_user_profile, get_supabase_client
 from app.models.schemas import GlobalSettingsResponse, GlobalSettingsUpdate, ProfileResponse
-from app.services.settings import get_settings, get_llm_api_key, invalidate_cache
+from app.services.settings import get_settings, get_llm_api_key, get_metadata_schema, invalidate_cache
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -15,6 +15,7 @@ async def read_settings(user_id: str = Depends(get_current_user)):
         langsmith_tracing=settings.get("langsmith_tracing", True),
         llm_api_key_set=bool(settings.get("llm_api_key")),
         langsmith_api_key_set=bool(settings.get("langsmith_api_key")),
+        metadata_schema=get_metadata_schema(),
         updated_at=settings.get("updated_at"),
     )
 
@@ -40,6 +41,7 @@ async def update_settings(
         langsmith_tracing=settings.get("langsmith_tracing", True),
         llm_api_key_set=bool(settings.get("llm_api_key")),
         langsmith_api_key_set=bool(settings.get("langsmith_api_key")),
+        metadata_schema=get_metadata_schema(),
         updated_at=settings.get("updated_at"),
     )
 

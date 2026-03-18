@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
-import type { UploadedFile } from '@/lib/api'
+import type { UploadedFile, MetadataFieldDefinition } from '@/lib/api'
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -25,12 +25,24 @@ function statusBadge(status: string) {
   )
 }
 
+function metadataBadge(label: string, value: string) {
+  return (
+    <span
+      className="inline-block rounded-full bg-purple-100 text-purple-800 px-2 py-0.5 text-xs font-medium"
+      title={`${label}: ${value}`}
+    >
+      {value}
+    </span>
+  )
+}
+
 interface FileUploadPanelProps {
   files: UploadedFile[]
   isUploading: boolean
   onUpload: (file: File) => void
   onDelete: (fileId: string) => void
   onStatusUpdate: (documentId: string, status: string, errorMessage?: string) => void
+  metadataSchema?: MetadataFieldDefinition[] | null
 }
 
 export default function FileUploadPanel({
@@ -39,8 +51,10 @@ export default function FileUploadPanel({
   onUpload,
   onDelete,
   onStatusUpdate,
+  metadataSchema,
 }: FileUploadPanelProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const [expandedFileId, setExpandedFileId] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Poll for status updates on pending/processing documents
@@ -76,6 +90,13 @@ export default function FileUploadPanel({
       onUpload(file)
       e.target.value = ''
     }
+  }
+
+  const formatMetadataValue = (value: any): string => {
+    if (value === null || value === undefined) return '-'
+    if (Array.isArray(value)) return value.join(', ')
+    if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+    return String(value)
   }
 
   return (
@@ -116,31 +137,54 @@ export default function FileUploadPanel({
 
           <div className="space-y-1">
             {files.map((f) => (
-              <div
-                key={f.id}
-                className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-1.5 text-sm"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="truncate" title={f.file_name}>
-                    {f.file_name}
-                  </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatSize(f.file_size)}
-                  </span>
-                  {statusBadge(f.status)}
-                  {f.status === 'failed' && f.error_message && (
-                    <span className="text-xs text-red-600 truncate max-w-[200px]" title={f.error_message}>
-                      {f.error_message}
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={() => onDelete(f.id)}
-                  className="ml-2 shrink-0 text-muted-foreground hover:text-destructive text-xs"
-                  title="Delete file"
+              <div key={f.id}>
+                <div
+                  className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-1.5 text-sm cursor-pointer"
+                  onClick={() => setExpandedFileId(expandedFileId === f.id ? null : f.id)}
                 >
-                  ✕
-                </button>
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                    <span className="truncate" title={f.file_name}>
+                      {f.file_name}
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatSize(f.file_size)}
+                    </span>
+                    {statusBadge(f.status)}
+                    {f.status === 'failed' && f.error_message && (
+                      <span className="text-xs text-red-600 truncate max-w-[200px]" title={f.error_message}>
+                        {f.error_message}
+                      </span>
+                    )}
+                    {f.status === 'ready' && f.metadata && (
+                      <>
+                        {f.metadata.document_type && metadataBadge('Type', f.metadata.document_type)}
+                        {f.metadata.topic && metadataBadge('Topic', f.metadata.topic)}
+                      </>
+                    )}
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDelete(f.id) }}
+                    className="ml-2 shrink-0 text-muted-foreground hover:text-destructive text-xs"
+                    title="Delete file"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {expandedFileId === f.id && f.status === 'ready' && f.metadata && (
+                  <div className="ml-3 mt-1 mb-2 p-2 rounded bg-muted/20 text-xs space-y-1">
+                    {(metadataSchema || []).map((field) => {
+                      const val = f.metadata?.[field.name]
+                      if (val === null || val === undefined) return null
+                      return (
+                        <div key={field.name} className="flex gap-2">
+                          <span className="font-medium text-muted-foreground min-w-[100px]">{field.name}:</span>
+                          <span className="text-foreground">{formatMetadataValue(val)}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             ))}
           </div>

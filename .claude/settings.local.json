@@ -18,7 +18,9 @@
       "Bash(nslookup:*)",
       "Bash(do taskkill:*)",
       "Bash(wmic process:*)",
-      "Bash(git -C \"/c/RAG Automators/claude-code-agentic-rag-masterclass\" remote -v)"
+      "Bash(git -C \"/c/RAG Automators/claude-code-agentic-rag-masterclass\" remote -v)",
+      "Read backend/.env",
+      "Bash(cd:*)"
     ]
   }
 }

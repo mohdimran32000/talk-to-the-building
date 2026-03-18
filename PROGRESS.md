@@ -305,19 +305,108 @@ cd backend && venv/Scripts/python scripts/test_all.py
 - Admin settings page accessible, model dropdown functional, save works with toast
 
 ### Module 4: Metadata Extraction
-- [ ] Task 1: Database migration — `metadata` JSONB on documents + `metadata_schema` JSONB on global_settings + filtered RPC
-- [ ] Task 2: Pydantic schemas — `MetadataFieldDefinition`, update `DocumentResponse`, `MessageCreate`, `GlobalSettings*`
-- [ ] Task 3: Settings service — `get_metadata_schema()` + expose via settings API
-- [ ] Task 4: Metadata extraction service — dynamic prompt/schema from admin config, Gemini structured output
-- [ ] Task 5: Ingestion integration — extract metadata after text extraction, store on document
-- [ ] Task 6: Filtered retrieval — `metadata_filter` param on `retrieve_chunks()`, new RPC
-- [ ] Task 7: API endpoints — `metadata_filter` in message request body
-- [ ] Task 8: Frontend types & API — dynamic metadata types, filter param on `sendMessage()`
-- [ ] Task 9: Metadata display — badges + expandable detail in FileUploadPanel
-- [ ] Task 10: Metadata filter bar — dynamic controls based on schema (text/list/boolean/number/date)
-- [ ] Task 11: Backend tests — 8 metadata tests
-- [ ] Task 12: Frontend tests — 2 metadata tests
-- [ ] Task 13: Update PROGRESS.md
+- [x] Task 1: Database migration — `metadata` JSONB on documents + `metadata_schema` JSONB on global_settings + filtered RPC
+- [x] Task 2: Pydantic schemas — `MetadataFieldDefinition`, update `DocumentResponse`, `MessageCreate`, `GlobalSettings*`
+- [x] Task 3: Settings service — `get_metadata_schema()` + expose via settings API
+- [x] Task 4: Metadata extraction service — dynamic prompt/schema from admin config, Gemini structured output
+- [x] Task 5: Ingestion integration — extract metadata after text extraction, store on document
+- [x] Task 6: Filtered retrieval — `metadata_filter` param on `retrieve_chunks()`, new RPC
+- [x] Task 7: API endpoints — `metadata_filter` in message request body
+- [x] Task 8: Frontend types & API — dynamic metadata types, filter param on `sendMessage()`
+- [x] Task 9: Metadata display — badges + expandable detail in FileUploadPanel
+- [x] Task 10: Metadata filter bar — dynamic controls based on schema (text/list/boolean/number/date)
+- [x] Task 11: Backend tests — 10 metadata tests added to suite
+- [x] Task 12: Frontend tests — 2 metadata tests added
+- [x] Task 13: Update PROGRESS.md
 
-#### Plan
-See `.agent/plans/6.metadata-extraction.md` for full implementation details.
+#### Files Changed (Module 4)
+| File | Action |
+|------|--------|
+| `backend/migrations/007_document_metadata.sql` | Created |
+| `backend/app/models/schemas.py` | Modified (MetadataFieldDefinition, metadata on DocumentResponse/MessageCreate/GlobalSettings) |
+| `backend/app/services/settings.py` | Modified (get_metadata_schema with fallback) |
+| `backend/app/routers/settings.py` | Modified (metadata_schema in GET/PUT responses) |
+| `backend/app/services/metadata.py` | Created (extract_metadata, dynamic prompt/schema, Gemini structured output) |
+| `backend/app/services/ingestion.py` | Modified (metadata extraction step in ingest + update pipelines) |
+| `backend/app/services/openai_client.py` | Modified (metadata_filter param, new RPC) |
+| `backend/app/routers/messages.py` | Modified (pass metadata_filter to retrieval) |
+| `backend/scripts/test_metadata.py` | Created (10 tests) |
+| `backend/scripts/test_all.py` | Modified (added Metadata suite) |
+| `frontend/src/lib/api.ts` | Modified (MetadataFieldDefinition, metadata on Document/GlobalSettings, metadataFilter on sendMessage) |
+| `frontend/src/components/FileUploadPanel.tsx` | Modified (metadata badges + expandable detail) |
+| `frontend/src/components/MetadataFilterBar.tsx` | Created (dynamic filter controls) |
+| `frontend/src/pages/Chat.tsx` | Modified (settings fetch, filter state, MetadataFilterBar, pass filters to sendMessage) |
+| `frontend/e2e/full-suite.spec.ts` | Modified (2 metadata tests) |
+
+#### Metadata Extraction Pipeline
+```
+Upload → Extract text → Extract metadata (Gemini structured output) → Chunk → Embed → Store
+```
+
+#### Default Metadata Schema (9 fields)
+- `document_type` (text, required) — report, email, article, etc.
+- `topic` (text, required) — primary topic in 2-5 words
+- `summary` (text, required) — 1-3 sentence summary
+- `language` (text, required) — ISO 639-1 code
+- `entities` (list, optional) — people, orgs, dates, products
+- `keywords` (list, optional) — 3-8 keywords
+- `is_technical` (boolean, optional) — technical document flag
+- `page_count` (number, optional) — pages/sections
+- `publish_date` (date, optional) — YYYY-MM-DD if mentioned
+
+#### Notes
+- Migration `007_document_metadata.sql` ran successfully in Supabase SQL Editor
+- Existing documents will have `metadata = null` — unfiltered retrieval still works for them
+- Metadata extraction adds ~1-2s to ingestion (one Gemini call on truncated text)
+- Schema changes only affect new ingestions — re-upload to re-extract (Record Manager handles as update)
+- Filter bar only appears when ready documents with metadata exist
+
+### Module 4b: Agentic Auto-Filter (Tool Calling)
+- [x] Task 1: `search_documents` tool definition in openai_client.py — dynamic from metadata schema
+- [x] Task 2: Tool calling flow in `stream_response()` — LLM calls tool → execute retrieval → feed back results
+- [x] Task 3: Refactored messages.py — passes `has_documents` + `supabase_client` to stream_response
+- [x] Task 4: Manual filter override preserved — UI filters bypass tool calling, use direct retrieval
+- [x] Task 5: Update PROGRESS.md
+
+#### How It Works (Tool Calling)
+```
+User asks: "how many UPS do we have?"
+  → LLM Call #1: sees search_documents tool, decides to call it
+  → LLM generates: search_documents(query="how many UPS (Uninterruptible Power Supplies)?")
+  → System executes: embed query → pgvector similarity search → returns 5 chunks
+  → LLM Call #2 (streaming): receives chunks as context → generates answer
+  → "You have 27 UPS units: 3x 8kVA, 4x 6kVA, 20x 3kVA..."
+
+User asks: "Hello, how are you?"
+  → LLM Call #1: sees search_documents tool, decides NOT to call it
+  → Responds directly: "Hello! I'm doing well, how can I help?"
+  → Only 1 LLM call — no wasted retrieval
+```
+
+#### Architecture
+- **Hybrid approach**: Call #1 (non-streaming) for tool decision, Call #2 (streaming) for answer with context injection
+- Tool parameters are **dynamically built** from the admin's metadata schema
+- LLM has **agency** — decides whether to call the tool and what filters to use
+- LLM **rephrases queries** for better retrieval (e.g. "UPS" → "Uninterruptible Power Supplies")
+- Manual UI filters still work — bypass tool calling, use direct retrieval with context injection
+- If tool building fails, falls back to no-tool chat (graceful degradation)
+
+#### Design Decisions
+- **Tool calling over sequential calls** — LLM controls the flow, skips search for non-document queries
+- **Hybrid tool execution** — first call detects tool call, executes retrieval, second call uses context injection to avoid Gemini `thought_signature` round-trip limitation
+- **Manual filters take precedence** — if user sets filters in the UI, skip tool calling and pre-retrieve
+- **No frontend changes** — tool calling is transparent to the user
+- **LangSmith tracing** — `search_documents` shows as a child `tool` span under `gemini_chat`
+
+#### Verified in LangSmith
+- `gemini_chat` (llm) parent trace with `has_documents: true`
+- `search_documents` (tool) child trace with query and retrieved chunks
+- Final answer correctly uses retrieved context
+
+#### Files Changed (Module 4b)
+| File | Action |
+|------|--------|
+| `backend/app/services/openai_client.py` | Rewritten (search_documents tool, hybrid tool call + context injection) |
+| `backend/app/routers/messages.py` | Rewritten (passes supabase_client + has_documents, manual filter override) |
+| `backend/app/services/metadata.py` | Modified (extract_query_filters kept for reference but no longer used in pipeline) |
+| `backend/scripts/test_metadata.py` | Modified (auto-filter tests) |
