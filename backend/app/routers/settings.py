@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from app.auth import get_current_user, get_admin_user, get_user_profile, get_supabase_client
 from app.models.schemas import GlobalSettingsResponse, GlobalSettingsUpdate, ProfileResponse
-from app.services.settings import get_settings, get_llm_api_key, get_metadata_schema, invalidate_cache
+from app.services.settings import get_settings, get_llm_api_key, get_metadata_schema, invalidate_cache, get_hybrid_search_enabled, get_reranking_enabled, get_reranking_provider
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -16,6 +16,10 @@ async def read_settings(user_id: str = Depends(get_current_user)):
         llm_api_key_set=bool(settings.get("llm_api_key")),
         langsmith_api_key_set=bool(settings.get("langsmith_api_key")),
         metadata_schema=get_metadata_schema(),
+        hybrid_search_enabled=settings.get("hybrid_search_enabled", True),
+        reranking_enabled=settings.get("reranking_enabled", False),
+        reranking_provider=settings.get("reranking_provider", "gemini"),
+        cohere_api_key_set=bool(settings.get("cohere_api_key")),
         updated_at=settings.get("updated_at"),
     )
 
@@ -42,6 +46,10 @@ async def update_settings(
         llm_api_key_set=bool(settings.get("llm_api_key")),
         langsmith_api_key_set=bool(settings.get("langsmith_api_key")),
         metadata_schema=get_metadata_schema(),
+        hybrid_search_enabled=settings.get("hybrid_search_enabled", True),
+        reranking_enabled=settings.get("reranking_enabled", False),
+        reranking_provider=settings.get("reranking_provider", "gemini"),
+        cohere_api_key_set=bool(settings.get("cohere_api_key")),
         updated_at=settings.get("updated_at"),
     )
 

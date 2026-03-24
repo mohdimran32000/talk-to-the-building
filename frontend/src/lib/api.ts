@@ -63,6 +63,10 @@ export interface GlobalSettings {
   llm_api_key_set: boolean
   langsmith_api_key_set: boolean
   metadata_schema: MetadataFieldDefinition[] | null
+  hybrid_search_enabled: boolean
+  reranking_enabled: boolean
+  reranking_provider: string
+  cohere_api_key_set: boolean
   updated_at: string | null
 }
 
@@ -73,6 +77,10 @@ export interface GlobalSettingsUpdate {
   langsmith_project?: string
   langsmith_tracing?: boolean
   metadata_schema?: MetadataFieldDefinition[]
+  hybrid_search_enabled?: boolean
+  reranking_enabled?: boolean
+  reranking_provider?: string
+  cohere_api_key?: string
 }
 
 export async function getProfile(): Promise<Profile> {

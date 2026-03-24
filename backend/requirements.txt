@@ -7,5 +7,5 @@ supabase
 langsmith
 sse-starlette
 python-multipart
-pypdf
-python-docx
+docling
+cohere

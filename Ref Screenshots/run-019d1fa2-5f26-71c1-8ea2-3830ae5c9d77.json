@@ -1,0 +1,44 @@
+{
+  "inputs": {
+    "has_documents": true,
+    "manual_metadata_filter": null,
+    "messages": [
+      {
+        "content": "whats the water consumption for year 2024?",
+        "role": "user"
+      }
+    ],
+    "supabase_client": "<supabase._sync.client.Client object at 0x000001E866C24440>",
+    "thread_id": "1e43249f-780c-4f6e-b444-20e067cb016e",
+    "user_id": "27089048-7194-4379-911c-ec20c61b9176"
+  },
+  "outputs": {
+    "output": [
+      [
+        "done",
+        ""
+      ]
+    ]
+  },
+  "metadata": {
+    "LANGSMITH_PROJECT": "rag-masterclass",
+    "LANGSMITH_TRACING": "true",
+    "ls_method": "traceable",
+    "ls_run_depth": 0,
+    "revision_id": "Module-4b-Agentic-Auto-Filter-dirty"
+  },
+  "langsmith": {
+    "organization": {
+      "name": "Personal",
+      "id": "8eec18c1-55d3-4e4b-8360-fa0c6fcceec2"
+    },
+    "workspace": {
+      "name": "Workspace 1",
+      "id": "4cb7438f-0510-4d68-a317-6c0bc388e8a0"
+    },
+    "tracing_project": {
+      "id": "4c9c188e-e0d5-45d6-b249-982701878aeb",
+      "name": "rag-masterclass"
+    }
+  }
+}

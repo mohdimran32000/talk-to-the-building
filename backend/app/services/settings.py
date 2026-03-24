@@ -49,6 +49,30 @@ def get_metadata_schema() -> list[dict]:
     return schema or DEFAULT_METADATA_SCHEMA
 
 
+def get_hybrid_search_enabled() -> bool:
+    settings = get_settings()
+    val = settings.get("hybrid_search_enabled") if settings else None
+    return val if val is not None else True
+
+
+def get_reranking_enabled() -> bool:
+    settings = get_settings()
+    val = settings.get("reranking_enabled") if settings else None
+    return val if val is not None else False
+
+
+def get_reranking_provider() -> str:
+    settings = get_settings()
+    val = settings.get("reranking_provider") if settings else None
+    return val or "gemini"
+
+
+def get_cohere_api_key() -> str:
+    settings = get_settings()
+    key = settings.get("cohere_api_key") if settings else None
+    return key or ""
+
+
 def invalidate_cache():
     _cache["data"] = None
     _cache["expires"] = 0

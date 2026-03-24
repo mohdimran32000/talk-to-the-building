@@ -7,6 +7,7 @@ RAG app with chat (default) and document ingestion interfaces. Config via admin 
 - Backend: Python + FastAPI
 - Database: Supabase (Postgres, pgvector, Auth, Storage, Realtime)
 - LLM: Google Gemini (native google-genai SDK)
+- Document Parsing: Docling (layout-aware, OCR, 17+ format types)
 - Observability: LangSmith
 
 ## Rules
@@ -37,8 +38,8 @@ RAG app with chat (default) and document ingestion interfaces. Config via admin 
 4. **Iterate** - Fix any issues found during validation
 
 ## Testing
-- **Backend validation suite:** `cd backend && venv/Scripts/python scripts/test_all.py` (83 tests)
-  - Covers: health, auth rejection, thread CRUD, messages + SSE, file upload/ingestion, record manager dedup, RAG retrieval + memory, RLS isolation, admin settings
+- **Backend validation suite:** `cd backend && venv/Scripts/python scripts/test_all.py` (98 tests)
+  - Covers: health, auth rejection, thread CRUD, messages + SSE, file upload/ingestion, record manager dedup, RAG retrieval + memory, RLS isolation, admin settings, metadata
   - Requires backend running on localhost:8001
 - **Frontend Playwright suite:** `cd frontend && npx playwright test e2e/full-suite.spec.ts` (26 tests)
   - Covers: auth flow, threads, messages, documents, theme toggle, console errors

@@ -3,9 +3,9 @@ Ingestion service for Module 2: BYO Retrieval.
 Pipeline: update status → extract text → chunk → embed (batch) → insert chunks → update status
 """
 import os
-import io
 import json
 import logging
+import tempfile
 import time
 from typing import List
 
@@ -21,23 +21,37 @@ _client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 def extract_text(file_content: bytes, mime_type: str, file_name: str) -> str:
     ext = os.path.splitext(file_name)[1].lower()
-    if mime_type == "application/pdf" or ext == ".pdf":
-        import pypdf
-        reader = pypdf.PdfReader(io.BytesIO(file_content))
-        return "\n".join(p.extract_text() or "" for p in reader.pages)
-    if mime_type in (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/msword",
-    ) or ext in (".docx", ".doc"):
-        import docx as docx_lib
-        doc = docx_lib.Document(io.BytesIO(file_content))
-        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    if mime_type == "application/json" or ext == ".json":
+
+    # Plain text formats — no parsing needed
+    if ext in (".txt", ".md", ".csv", ".xml"):
+        return file_content.decode("utf-8", errors="replace")
+
+    # JSON — pretty-print
+    if ext == ".json" or mime_type == "application/json":
         try:
             return json.dumps(json.loads(file_content.decode("utf-8", errors="replace")), indent=2)
         except Exception:
-            pass
-    return file_content.decode("utf-8", errors="replace")
+            return file_content.decode("utf-8", errors="replace")
+
+    # Rich formats (PDF, DOCX, PPTX, XLSX, HTML, images, etc.) — use docling
+    from docling.document_converter import DocumentConverter
+
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(file_content)
+        tmp_path = tmp.name
+    try:
+        converter = DocumentConverter()
+        result = converter.convert(tmp_path)
+        text = result.document.export_to_markdown()
+        if not text.strip():
+            # Fallback to UTF-8 decode if docling returns nothing
+            return file_content.decode("utf-8", errors="replace")
+        return text
+    except Exception:
+        # If docling fails, fall back to raw decode
+        return file_content.decode("utf-8", errors="replace")
+    finally:
+        os.unlink(tmp_path)
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
@@ -78,18 +92,23 @@ def embed_text(text: str) -> List[float]:
     return response.embeddings[0].values
 
 
-def embed_batch(texts: List[str]) -> List[List[float]]:
+def embed_batch(texts: List[str], batch_size: int = 100) -> List[List[float]]:
     if not texts:
         return []
-    try:
-        response = _embed_with_retry(
-            _client.models.embed_content,
-            model=EMBEDDING_MODEL, contents=texts,
-            config={"output_dimensionality": EMBEDDING_DIMS},
-        )
-        return [e.values for e in response.embeddings]
-    except Exception:
-        return [embed_text(t) for t in texts]
+    all_embeddings = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        try:
+            response = _embed_with_retry(
+                _client.models.embed_content,
+                model=EMBEDDING_MODEL, contents=batch,
+                config={"output_dimensionality": EMBEDDING_DIMS},
+            )
+            all_embeddings.extend([e.values for e in response.embeddings])
+        except Exception:
+            # Fallback: embed one at a time for this batch
+            all_embeddings.extend([embed_text(t) for t in batch])
+    return all_embeddings
 
 
 def ingest_document(

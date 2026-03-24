@@ -81,18 +81,38 @@ def _build_search_tool() -> types.Tool:
 
 
 def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, metadata_filter: Optional[dict] = None) -> List[str]:
-    """Embed query and do cosine similarity search via pgvector RPC."""
+    """Embed query and search via hybrid (vector + keyword RRF) or vector-only RPC."""
     from app.services.ingestion import embed_text
+    from app.services.settings import get_hybrid_search_enabled, get_reranking_enabled
+
     query_embedding = embed_text(query)
-    result = supabase_client.rpc("match_document_chunks_with_filters", {
-        "query_embedding": query_embedding,
-        "match_user_id": user_id,
-        "match_count": top_k,
-        "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
-    }).execute()
-    if not result.data:
-        return []
-    return [row["content"] for row in result.data]
+    hybrid = get_hybrid_search_enabled()
+    reranking = get_reranking_enabled()
+
+    if hybrid:
+        fetch_count = top_k * 4 if reranking else top_k
+        result = supabase_client.rpc("match_document_chunks_hybrid", {
+            "query_embedding": query_embedding,
+            "query_text": query,
+            "match_user_id": user_id,
+            "match_count": fetch_count,
+            "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
+        }).execute()
+    else:
+        result = supabase_client.rpc("match_document_chunks_with_filters", {
+            "query_embedding": query_embedding,
+            "match_user_id": user_id,
+            "match_count": top_k,
+            "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
+        }).execute()
+
+    chunks = [row["content"] for row in (result.data or [])]
+
+    if hybrid and reranking and len(chunks) > top_k:
+        from app.services.reranker import rerank_chunks
+        chunks = rerank_chunks(query, chunks, top_k)
+
+    return chunks
 
 
 @traceable(name="search_documents", run_type="tool")
@@ -197,7 +217,7 @@ Document excerpts:
     system_text = SYSTEM_PROMPT_NO_DOCS
     if has_documents:
         try:
-            tools = [_build_search_tool()]
+            tools = [types.Tool(function_declarations=[_build_search_tool()])]
             system_text = SYSTEM_PROMPT
             tool_config = types.ToolConfig(
                 function_calling_config=types.FunctionCallingConfig(mode="AUTO")
@@ -209,6 +229,7 @@ Document excerpts:
         system_instruction=system_text,
         tools=tools,
         tool_config=tool_config,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
 
     # Use non-streaming generate_content to handle the full tool call loop
@@ -219,9 +240,36 @@ Document excerpts:
         config=config,
     )
 
+    # Handle malformed function calls — retry without tools using context injection
+    if (response.candidates and
+        response.candidates[0].finish_reason and
+        response.candidates[0].finish_reason.name == "MALFORMED_FUNCTION_CALL"):
+        logger.warning("Gemini returned MALFORMED_FUNCTION_CALL — falling back to pre-retrieval")
+        last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+        chunks = _execute_search_documents(
+            search_query=last_user_msg, metadata_filter=None,
+            user_id=user_id, supabase_client=supabase_client,
+        )
+        context = "\n\n---\n\n".join(chunks) if chunks else "No relevant documents found."
+        fallback_system = f"""You are a helpful assistant with access to the user's uploaded documents.
+Use the provided document excerpts to answer questions accurately.
+If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
+
+Document excerpts:
+{context}"""
+        response_fb = client.models.generate_content_stream(
+            model=model, contents=contents,
+            config=types.GenerateContentConfig(system_instruction=fallback_system),
+        )
+        for chunk in response_fb:
+            if chunk.text:
+                yield ("token", chunk.text)
+        yield ("done", "")
+        return
+
     # Check if we got a function call
     has_function_call = False
-    if response.candidates and response.candidates[0].content:
+    if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
         for part in response.candidates[0].content.parts:
             if part.function_call:
                 has_function_call = True
@@ -262,9 +310,14 @@ Document excerpts:
                 yield ("token", chunk.text)
     else:
         # No tool call — LLM responded directly
-        if response.candidates and response.candidates[0].content:
+        has_text = False
+        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
             for part in response.candidates[0].content.parts:
                 if part.text:
+                    has_text = True
                     yield ("token", part.text)
+        if not has_text:
+            logger.warning(f"Gemini returned empty response (finish_reason={response.candidates[0].finish_reason if response.candidates else 'no candidates'})")
+            yield ("token", "I'm sorry, I couldn't generate a response. Please try again.")
 
     yield ("done", "")

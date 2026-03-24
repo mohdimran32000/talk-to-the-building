@@ -124,7 +124,7 @@ export default function FileUploadPanel({
               ref={inputRef}
               type="file"
               className="hidden"
-              accept=".pdf,.txt,.md,.csv,.json,.html,.xml,.doc,.docx"
+              accept=".pdf,.txt,.md,.csv,.json,.html,.htm,.xhtml,.xml,.docx,.dotx,.docm,.dotm,.pptx,.potx,.ppsx,.pptm,.potm,.ppsm,.xlsx,.xlsm,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp,.adoc,.asciidoc,.tex"
               onChange={handleFileChange}
             />
           </div>

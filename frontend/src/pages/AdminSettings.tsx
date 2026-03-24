@@ -15,6 +15,10 @@ export default function AdminSettings() {
   const [langsmithApiKey, setLangsmithApiKey] = useState('')
   const [langsmithProject, setLangsmithProject] = useState('')
   const [langsmithTracing, setLangsmithTracing] = useState(true)
+  const [hybridSearchEnabled, setHybridSearchEnabled] = useState(true)
+  const [rerankingEnabled, setRerankingEnabled] = useState(false)
+  const [rerankingProvider, setRerankingProvider] = useState('gemini')
+  const [cohereApiKey, setCohereApiKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [models, setModels] = useState<GeminiModel[]>([])
   const [loadingModels, setLoadingModels] = useState(true)
@@ -25,6 +29,9 @@ export default function AdminSettings() {
       setLlmModel(s.llm_model || '')
       setLangsmithProject(s.langsmith_project || '')
       setLangsmithTracing(s.langsmith_tracing)
+      setHybridSearchEnabled(s.hybrid_search_enabled)
+      setRerankingEnabled(s.reranking_enabled)
+      setRerankingProvider(s.reranking_provider)
     }).catch(() => toast.error('Failed to load settings'))
 
     getModels().then(setModels).catch(() => {
@@ -42,11 +49,16 @@ export default function AdminSettings() {
       if (langsmithApiKey) data.langsmith_api_key = langsmithApiKey
       if (langsmithProject !== (settings.langsmith_project || '')) data.langsmith_project = langsmithProject
       if (langsmithTracing !== settings.langsmith_tracing) data.langsmith_tracing = langsmithTracing
+      if (hybridSearchEnabled !== settings.hybrid_search_enabled) data.hybrid_search_enabled = hybridSearchEnabled
+      if (rerankingEnabled !== settings.reranking_enabled) data.reranking_enabled = rerankingEnabled
+      if (rerankingProvider !== settings.reranking_provider) data.reranking_provider = rerankingProvider
+      if (cohereApiKey) data.cohere_api_key = cohereApiKey
 
       const updated = await updateSettings(data)
       setSettings(updated)
       setLlmApiKey('')
       setLangsmithApiKey('')
+      setCohereApiKey('')
       toast.success('Settings saved')
     } catch (e: any) {
       toast.error(e.message || 'Failed to save settings')
@@ -139,6 +151,68 @@ export default function AdminSettings() {
             />
             <Label htmlFor="langsmith-tracing">Enable Tracing</Label>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Retrieval Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-2">
+            <input
+              id="hybrid-search"
+              type="checkbox"
+              checked={hybridSearchEnabled}
+              onChange={(e) => setHybridSearchEnabled(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            <Label htmlFor="hybrid-search">Enable Hybrid Search (Vector + Keyword)</Label>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Combines semantic vector search with PostgreSQL full-text keyword search using Reciprocal Rank Fusion.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              id="reranking"
+              type="checkbox"
+              checked={rerankingEnabled}
+              onChange={(e) => setRerankingEnabled(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            <Label htmlFor="reranking">Enable LLM Reranking</Label>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Re-scores and reorders results after retrieval. Improves relevance but adds latency.
+          </p>
+          {rerankingEnabled && (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="reranking-provider">Reranking Provider</Label>
+                <select
+                  id="reranking-provider"
+                  value={rerankingProvider}
+                  onChange={(e) => setRerankingProvider(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-background text-foreground px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                >
+                  <option value="gemini">Gemini (LLM-as-Judge)</option>
+                  <option value="cohere">Cohere (Rerank API)</option>
+                </select>
+              </div>
+              {rerankingProvider === 'cohere' && (
+                <div className="space-y-2">
+                  <Label htmlFor="cohere-api-key">Cohere API Key</Label>
+                  <Input
+                    id="cohere-api-key"
+                    type="password"
+                    placeholder={settings.cohere_api_key_set ? 'Key is set (leave blank to keep)' : 'Enter Cohere API key'}
+                    value={cohereApiKey}
+                    onChange={(e) => setCohereApiKey(e.target.value)}
+                  />
+                </div>
+              )}
+            </>
+          )}
         </CardContent>
       </Card>
 

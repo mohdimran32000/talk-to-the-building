@@ -65,6 +65,10 @@ class GlobalSettingsResponse(BaseModel):
     llm_api_key_set: bool = False
     langsmith_api_key_set: bool = False
     metadata_schema: Optional[list[dict]] = None
+    hybrid_search_enabled: bool = True
+    reranking_enabled: bool = False
+    reranking_provider: str = "gemini"
+    cohere_api_key_set: bool = False
     updated_at: Optional[datetime] = None
 
 
@@ -75,3 +79,7 @@ class GlobalSettingsUpdate(BaseModel):
     langsmith_project: Optional[str] = None
     langsmith_tracing: Optional[bool] = None
     metadata_schema: Optional[list[dict]] = None
+    hybrid_search_enabled: Optional[bool] = None
+    reranking_enabled: Optional[bool] = None
+    reranking_provider: Optional[str] = None
+    cohere_api_key: Optional[str] = None

@@ -410,3 +410,104 @@ User asks: "Hello, how are you?"
 | `backend/app/routers/messages.py` | Rewritten (passes supabase_client + has_documents, manual filter override) |
 | `backend/app/services/metadata.py` | Modified (extract_query_filters kept for reference but no longer used in pipeline) |
 | `backend/scripts/test_metadata.py` | Modified (auto-filter tests) |
+
+### Module 5: Multi-Format Support (Docling)
+- [x] Task 1: Install docling — replaced `pypdf` + `python-docx` with `docling` (includes PyTorch + ML models for layout analysis)
+- [x] Task 2: Rewrite `extract_text()` — docling `DocumentConverter` + `export_to_markdown()` for rich formats, plain text/JSON fallbacks preserved
+- [x] Task 3: Update frontend accepted file types — expanded to all docling-supported formats (30+ extensions)
+- [x] Task 4: Remove stale imports — removed `io`, `pypdf`, `python-docx` references
+- [x] Task 5: Verification — 86/98 tests passing (12 failures pre-existing: auth token expiry + LLM rate limiting, unrelated to docling)
+
+#### How It Works
+```
+Upload → detect extension →
+  Plain text (.txt, .md, .csv, .xml): direct UTF-8 decode
+  JSON (.json): pretty-print
+  Rich formats (everything else): docling DocumentConverter → export_to_markdown()
+```
+
+#### Supported Formats (via Docling)
+| Category | Extensions |
+|----------|-----------|
+| PDF | `.pdf` |
+| Word | `.docx`, `.dotx`, `.docm`, `.dotm` |
+| PowerPoint | `.pptx`, `.potx`, `.ppsx`, `.pptm`, `.potm`, `.ppsm` |
+| Excel | `.xlsx`, `.xlsm` |
+| HTML | `.html`, `.htm`, `.xhtml` |
+| Images (OCR) | `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`, `.bmp`, `.webp` |
+| AsciiDoc | `.adoc`, `.asciidoc` |
+| LaTeX | `.tex` |
+
+#### Why Docling over pypdf/python-docx
+- **Layout-aware parsing** — ML models detect headings, tables, figures, reading order
+- **Table detection** — extracts structured tables as markdown (better for RAG chunking)
+- **OCR** — scanned PDFs and images now supported (previously failed with "No extractable text")
+- **Single library** — replaces two libraries, covers 17+ format types
+- **GPU-accelerated** — uses NVIDIA GTX 4050 via PyTorch/CUDA
+
+#### Files Changed (Module 5)
+| File | Action |
+|------|--------|
+| `backend/requirements.txt` | Replaced `pypdf` + `python-docx` with `docling` |
+| `backend/app/services/ingestion.py` | Rewrote `extract_text()` — docling for rich formats, plain text/JSON fallbacks |
+| `frontend/src/components/FileUploadPanel.tsx` | Expanded accept list to 30+ extensions |
+
+#### What Stays the Same
+- Chunking (500 words, 50 overlap)
+- Embedding (gemini-embedding-001 @ 768 dims)
+- Database schema — no changes
+- Record Manager — no changes
+- Metadata extraction — no changes
+- API endpoints — no changes
+
+### Module 6: Hybrid Search & Reranking
+- [x] Task 1: Database migration — `tsv` tsvector column + GIN index + auto-populate trigger + hybrid RRF RPC + settings columns
+- [x] Task 2: Settings service & schemas — `get_hybrid_search_enabled()`, `get_reranking_enabled()`, `get_reranking_provider()`, `get_cohere_api_key()`
+- [x] Task 3: Hybrid retrieval — `retrieve_chunks()` calls new hybrid RPC when enabled, vector-only fallback
+- [x] Task 4: Configurable reranker — Gemini (LLM-as-judge, default) + Cohere (Rerank API, optional)
+- [x] Task 5: Frontend admin settings — Retrieval Settings card with hybrid/reranking toggles + provider dropdown + Cohere API key
+- [x] Task 6: Tests — `test_hybrid.py` (9 tests) + registered in `test_all.py`
+
+#### How It Works
+```
+User query → embed query →
+  ┌─────────────────────┐     ┌──────────────────────┐
+  │  Vector Search       │     │  Keyword Search       │
+  │  (pgvector cosine)   │     │  (PostgreSQL tsvector) │
+  └──────────┬──────────┘     └──────────┬───────────┘
+             └───────────┬───────────────┘
+                         ▼
+                ┌────────────────┐
+                │  RRF Fusion     │  (Reciprocal Rank Fusion)
+                └────────┬───────┘
+                         ▼
+                ┌────────────────┐
+                │  Reranker       │  ← optional (Gemini or Cohere)
+                └────────┬───────┘
+                         ▼
+                  Top-K chunks → LLM generates answer
+```
+
+#### Architecture
+- **Hybrid search in SQL** — single `match_document_chunks_hybrid()` RPC runs both vector and keyword search, merges via RRF
+- **RRF formula**: `score = 1/(k + vector_rank) + 1/(k + keyword_rank)` where k=60
+- **tsvector auto-populated** via Postgres trigger on INSERT/UPDATE — zero ingestion code changes
+- **Reranker is configurable** — Gemini (LLM-as-judge) default, Cohere (dedicated Rerank API) optional
+- **Over-fetch for reranking** — retrieves `top_k * 4` candidates, reranks down to `top_k`
+- **Backward compatible** — existing `search_documents` tool calling flow unchanged, hybrid is transparent
+- **Admin-configurable** — hybrid ON by default, reranking OFF by default, all toggleable via settings UI
+
+#### Files Changed (Module 6)
+| File | Action |
+|------|--------|
+| `backend/migrations/008_hybrid_search.sql` | Created (tsvector, GIN index, trigger, hybrid RPC, settings columns) |
+| `backend/app/services/settings.py` | Modified (4 new getters: hybrid, reranking, provider, cohere key) |
+| `backend/app/models/schemas.py` | Modified (hybrid/reranking fields on GlobalSettings schemas) |
+| `backend/app/routers/settings.py` | Modified (new fields in response constructors) |
+| `backend/app/services/openai_client.py` | Modified (retrieve_chunks gains hybrid path + reranker) |
+| `backend/app/services/reranker.py` | Created (Gemini + Cohere reranking providers) |
+| `backend/requirements.txt` | Modified (added cohere) |
+| `frontend/src/lib/api.ts` | Modified (hybrid/reranking settings types) |
+| `frontend/src/pages/AdminSettings.tsx` | Modified (Retrieval Settings card) |
+| `backend/scripts/test_hybrid.py` | Created (9 tests) |
+| `backend/scripts/test_all.py` | Modified (registered Hybrid suite) |
