@@ -1,3 +1,5 @@
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from app.auth import get_current_user, get_supabase_client
 from app.models.schemas import DocumentResponse
@@ -5,6 +7,13 @@ from app.services.ingestion import ingest_document, ingest_document_update
 from app.services.record_manager import compute_file_hash, determine_action
 
 router = APIRouter(prefix="/api/files", tags=["files"])
+
+_ingestion_semaphore = threading.Semaphore(3)
+
+
+def _throttled_ingest(func, *args, **kwargs):
+    with _ingestion_semaphore:
+        func(*args, **kwargs)
 
 
 @router.post("/upload", response_model=DocumentResponse)
@@ -41,6 +50,7 @@ async def upload_file(
             .eq("id", record_action.document_id).single().execute().data
 
         background_tasks.add_task(
+            _throttled_ingest,
             ingest_document_update,
             document_id=doc["id"],
             file_content=contents,
@@ -62,6 +72,7 @@ async def upload_file(
     }).execute().data[0]
 
     background_tasks.add_task(
+        _throttled_ingest,
         ingest_document,
         document_id=doc["id"],
         file_content=contents,

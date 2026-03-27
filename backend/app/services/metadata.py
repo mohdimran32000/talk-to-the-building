@@ -105,8 +105,54 @@ def _get_fallback(schema: list[dict]) -> dict:
     return result
 
 
-def extract_metadata(text: str) -> dict:
+def enrich_tabular_text(text: str, file_name: str, file_content: bytes = None) -> str:
+    """For CSV/XLSX files, prepend filename and column headers so the LLM has
+    enough context to extract meaningful metadata instead of 'unknown'."""
+    import csv, io, os
+
+    ext = os.path.splitext(file_name)[1].lower() if file_name else ""
+    if ext not in (".csv", ".xlsx", ".xlsm") or not file_content:
+        return text
+
+    parts = [f"File name: {file_name}\n"]
+
+    try:
+        if ext == ".csv":
+            decoded = file_content.decode("utf-8", errors="replace")
+            reader = csv.DictReader(io.StringIO(decoded))
+            headers = reader.fieldnames or []
+            parts.append(f"Columns: {', '.join(headers)}\n")
+            sample_rows = []
+            for i, row in enumerate(reader):
+                if i >= 5:
+                    break
+                sample_rows.append(", ".join(f"{k}={v}" for k, v in row.items()))
+            if sample_rows:
+                parts.append("Sample rows:\n" + "\n".join(sample_rows) + "\n")
+
+        elif ext in (".xlsx", ".xlsm"):
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(file_content), read_only=True, data_only=True)
+            for sheet in wb.worksheets:
+                rows = list(sheet.iter_rows(max_row=6, values_only=True))
+                if not rows:
+                    continue
+                headers = [str(h) if h else "" for h in rows[0]]
+                parts.append(f"Sheet '{sheet.title}' columns: {', '.join(headers)}\n")
+                for row in rows[1:]:
+                    parts.append(", ".join(f"{h}={v}" for h, v in zip(headers, row) if v is not None))
+                parts.append("")
+            wb.close()
+    except Exception:
+        pass  # Fall through to raw text
+
+    parts.append(text)
+    return "\n".join(parts)
+
+
+def extract_metadata(text: str, file_name: str = "", file_content: bytes = None) -> dict:
     """Extract structured metadata from document text using Gemini."""
+    text = enrich_tabular_text(text, file_name, file_content)
     schema = get_metadata_schema()
     prompt = build_extraction_prompt(text, schema)
     response_schema = build_response_schema(schema)

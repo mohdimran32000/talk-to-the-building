@@ -25,6 +25,7 @@ class MessageResponse(BaseModel):
     thread_id: str
     role: str
     content: str
+    tool_metadata: Optional[dict] = None
     created_at: datetime
 
 
@@ -69,6 +70,9 @@ class GlobalSettingsResponse(BaseModel):
     reranking_enabled: bool = False
     reranking_provider: str = "gemini"
     cohere_api_key_set: bool = False
+    text_to_sql_enabled: bool = False
+    web_search_enabled: bool = False
+    tavily_api_key_set: bool = False
     updated_at: Optional[datetime] = None
 
 
@@ -83,3 +87,6 @@ class GlobalSettingsUpdate(BaseModel):
     reranking_enabled: Optional[bool] = None
     reranking_provider: Optional[str] = None
     cohere_api_key: Optional[str] = None
+    text_to_sql_enabled: Optional[bool] = None
+    web_search_enabled: Optional[bool] = None
+    tavily_api_key: Optional[str] = None

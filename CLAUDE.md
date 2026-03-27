@@ -38,8 +38,8 @@ RAG app with chat (default) and document ingestion interfaces. Config via admin 
 4. **Iterate** - Fix any issues found during validation
 
 ## Testing
-- **Backend validation suite:** `cd backend && venv/Scripts/python scripts/test_all.py` (98 tests)
-  - Covers: health, auth rejection, thread CRUD, messages + SSE, file upload/ingestion, record manager dedup, RAG retrieval + memory, RLS isolation, admin settings, metadata
+- **Backend validation suite:** `cd backend && venv/Scripts/python scripts/test_all.py` (112 tests)
+  - Covers: health, auth rejection, thread CRUD, messages + SSE, file upload/ingestion, record manager dedup, RAG retrieval + memory, RLS isolation, admin settings, metadata, hybrid search, additional tools
   - Requires backend running on localhost:8001
 - **Frontend Playwright suite:** `cd frontend && npx playwright test e2e/full-suite.spec.ts` (26 tests)
   - Covers: auth flow, threads, messages, documents, theme toggle, console errors

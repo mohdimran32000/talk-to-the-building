@@ -34,6 +34,9 @@ export default function Chat() {
   const [isUploading, setIsUploading] = useState(false)
   const [metadataSchema, setMetadataSchema] = useState<MetadataFieldDefinition[] | null>(null)
   const [metadataFilters, setMetadataFilters] = useState<Record<string, any>>({})
+  const [subAgentContent, setSubAgentContent] = useState('')
+  const [isSubAgentActive, setIsSubAgentActive] = useState(false)
+  const [subAgentDocName, setSubAgentDocName] = useState('')
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const loadFiles = useCallback(async () => {
@@ -206,6 +209,9 @@ export default function Chat() {
           setMessages((prev) => [...prev, assistantMsg])
           setIsStreaming(false)
           setStreamingContent('')
+          setSubAgentContent('')
+          setIsSubAgentActive(false)
+          setSubAgentDocName('')
           abortControllerRef.current = null
           // Reload from DB in background to get server-persisted IDs
           setTimeout(() => {
@@ -215,6 +221,18 @@ export default function Chat() {
         },
         controller.signal,
         Object.keys(metadataFilters).length > 0 ? metadataFilters : undefined,
+        // Sub-agent callbacks
+        (data) => {
+          setIsSubAgentActive(true)
+          setSubAgentDocName(data.document_name)
+          setSubAgentContent('')
+        },
+        (token) => {
+          setSubAgentContent((prev) => prev + token)
+        },
+        () => {
+          setIsSubAgentActive(false)
+        },
       )
     } catch (err) {
       setIsStreaming(false)
@@ -282,6 +300,9 @@ export default function Chat() {
               messages={messages}
               streamingContent={streamingContent}
               isStreaming={isStreaming}
+              subAgentContent={subAgentContent}
+              isSubAgentActive={isSubAgentActive}
+              subAgentDocName={subAgentDocName}
             />
             <MessageInput onSend={handleSendMessage} onStop={handleStopStreaming} disabled={isStreaming} isStreaming={isStreaming} />
           </>

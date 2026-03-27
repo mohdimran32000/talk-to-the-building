@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message } from '@/lib/api'
@@ -7,6 +7,43 @@ interface MessageListProps {
   messages: Message[]
   streamingContent: string
   isStreaming: boolean
+  subAgentContent?: string
+  isSubAgentActive?: boolean
+  subAgentDocName?: string
+}
+
+function SubAgentSection({
+  documentName,
+  content,
+  isActive,
+  defaultExpanded = false,
+}: {
+  documentName: string
+  content?: string
+  isActive?: boolean
+  defaultExpanded?: boolean
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+
+  return (
+    <div className="border-l-2 border-blue-400/50 pl-3 ml-1 my-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+      >
+        <span className="font-mono">{expanded ? '▼' : '▶'}</span>
+        <span>
+          {isActive ? `Analyzing "${documentName}"...` : `Used: analyze_document on "${documentName}"`}
+        </span>
+        {isActive && <span className="animate-pulse ml-1">●</span>}
+      </button>
+      {expanded && content && (
+        <div className="mt-1 text-xs opacity-80">
+          <MarkdownContent content={content} />
+        </div>
+      )}
+    </div>
+  )
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -60,7 +97,10 @@ function MarkdownContent({ content }: { content: string }) {
   )
 }
 
-export default function MessageList({ messages, streamingContent, isStreaming }: MessageListProps) {
+export default function MessageList({
+  messages, streamingContent, isStreaming,
+  subAgentContent = '', isSubAgentActive = false, subAgentDocName = '',
+}: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -89,7 +129,18 @@ export default function MessageList({ messages, streamingContent, isStreaming }:
                 : 'bg-muted text-foreground'
             }`}
           >
-            {msg.role === 'assistant' ? (
+            {msg.role === 'assistant' && msg.tool_metadata?.tools_used?.length ? (
+              <>
+                {msg.tool_metadata.tools_used.map((tool, i) => (
+                  <SubAgentSection
+                    key={i}
+                    documentName={tool.document_name || 'unknown'}
+                    content={tool.sub_agent_result}
+                  />
+                ))}
+                <MarkdownContent content={msg.content} />
+              </>
+            ) : msg.role === 'assistant' ? (
               <MarkdownContent content={msg.content} />
             ) : (
               msg.content
@@ -101,11 +152,19 @@ export default function MessageList({ messages, streamingContent, isStreaming }:
       {isStreaming && (
         <div className="flex justify-start">
           <div className="max-w-[75%] rounded-lg bg-muted px-4 py-2 text-sm">
+            {(isSubAgentActive || subAgentContent) && subAgentDocName && (
+              <SubAgentSection
+                documentName={subAgentDocName}
+                content={subAgentContent}
+                isActive={isSubAgentActive}
+                defaultExpanded={true}
+              />
+            )}
             {streamingContent ? (
               <MarkdownContent content={streamingContent} />
-            ) : (
+            ) : !isSubAgentActive && !subAgentContent ? (
               <span className="text-muted-foreground animate-pulse">Thinking...</span>
-            )}
+            ) : null}
           </div>
         </div>
       )}

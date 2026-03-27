@@ -9,3 +9,5 @@ sse-starlette
 python-multipart
 docling
 cohere
+duckdb
+tavily-python

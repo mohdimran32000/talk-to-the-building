@@ -19,6 +19,8 @@ import test_rls
 import test_settings
 import test_metadata
 import test_hybrid
+import test_tools
+import test_sub_agents
 
 SUITES = [
     ("Health", test_health),
@@ -31,6 +33,8 @@ SUITES = [
     ("Settings", test_settings),
     ("Metadata", test_metadata),
     ("Hybrid", test_hybrid),
+    ("Tools", test_tools),
+    ("Sub-Agents", test_sub_agents),
 ]
 
 

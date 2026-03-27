@@ -6,13 +6,22 @@ _cache = {"data": None, "expires": 0}
 CACHE_TTL = 60  # seconds
 
 
+_SETTINGS_COLUMNS = ",".join([
+    "id", "llm_api_key", "llm_model", "langsmith_api_key", "langsmith_project",
+    "langsmith_tracing", "metadata_schema", "hybrid_search_enabled",
+    "reranking_enabled", "reranking_provider", "cohere_api_key",
+    "text_to_sql_enabled", "web_search_enabled", "tavily_api_key",
+    "updated_at", "updated_by",
+])
+
+
 def get_settings() -> dict:
     now = time.time()
     if _cache["data"] is not None and now < _cache["expires"]:
         return _cache["data"]
 
     sb = get_supabase_client()
-    result = sb.table("global_settings").select("*").eq("id", 1).single().execute()
+    result = sb.table("global_settings").select(_SETTINGS_COLUMNS).eq("id", 1).single().execute()
     _cache["data"] = result.data
     _cache["expires"] = now + CACHE_TTL
     return result.data
@@ -70,6 +79,24 @@ def get_reranking_provider() -> str:
 def get_cohere_api_key() -> str:
     settings = get_settings()
     key = settings.get("cohere_api_key") if settings else None
+    return key or ""
+
+
+def get_text_to_sql_enabled() -> bool:
+    settings = get_settings()
+    val = settings.get("text_to_sql_enabled") if settings else None
+    return val if val is not None else False
+
+
+def get_web_search_enabled() -> bool:
+    settings = get_settings()
+    val = settings.get("web_search_enabled") if settings else None
+    return val if val is not None else False
+
+
+def get_tavily_api_key() -> str:
+    settings = get_settings()
+    key = settings.get("tavily_api_key") if settings else None
     return key or ""
 
 

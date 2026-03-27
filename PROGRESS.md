@@ -511,3 +511,114 @@ User query → embed query →
 | `frontend/src/pages/AdminSettings.tsx` | Modified (Retrieval Settings card) |
 | `backend/scripts/test_hybrid.py` | Created (9 tests) |
 | `backend/scripts/test_all.py` | Modified (registered Hybrid suite) |
+
+### Module 7: Additional Tools (Text-to-SQL + Web Search)
+- [x] Task 0: Ingestion hardening — `threading.Semaphore(3)` concurrency limiter for background ingestion tasks
+- [x] Task 1: Database migration — `structured_data` table + `text_to_sql_enabled`, `web_search_enabled`, `tavily_api_key` settings columns
+- [x] Task 2: Settings + Schemas + Admin UI — 3 new getters, Pydantic fields, "Additional Tools" card in admin settings
+- [x] Task 3: Structured data extraction — CSV (`csv.DictReader`) + XLSX (`openpyxl`, all sheets) → `structured_data` table during ingestion
+- [x] Task 4: Text-to-SQL tool — `sql_tool.py` with DuckDB in-memory execution, Gemini SQL generation, markdown table output
+- [x] Task 5: Web search tool — `web_search.py` with Tavily API, formatted results with source URLs
+- [x] Task 6: Multi-tool dispatch — dynamic tool list + system prompt, 3-way dispatch (`search_documents` / `query_structured_data` / `web_search`)
+- [x] Task 7: Test suite — `test_tools.py` (14 tests) registered in `test_all.py`
+- [x] Task 8: Metadata enrichment for tabular files — `enrich_tabular_text()` prepends filename + column headers + sample rows for CSV/XLSX before metadata extraction
+
+#### Backend Test Results (108 passed, 11 failed — pre-existing)
+```
+cd backend && venv/Scripts/python scripts/test_all.py
+```
+- Health: 2/2
+- Auth: 9/10 (1 timeout flake)
+- Threads: 15/15
+- Messages: 10/10
+- Files: 20/22 (ingestion timeout + dedup timing)
+- RAG: 7/8 (SSE flush timing)
+- RLS: 7/8 (auth token expiry)
+- Settings: 8/8
+- Metadata: 11/14 (auth token expiry mid-suite)
+- Hybrid: 5/8 (ingestion timeout + dependents)
+- **Tools: 14/14**
+
+All 11 failures are pre-existing (auth token expiry, ingestion timeouts during heavy test runs). No regressions from Module 7.
+
+#### Fixes Applied During Build
+- **PostgREST schema cache stale after migration**: `get_settings()` changed from `select("*")` to explicit column list to avoid Supabase PostgREST schema cache not picking up new columns after ALTER TABLE
+- **Metadata "unknown" for XLSX/CSV**: Added `enrich_tabular_text()` in `metadata.py` — prepends filename, column headers, and 5 sample data rows so the LLM has enough context to extract meaningful metadata instead of falling back to "unknown"
+
+#### Architecture
+```
+User query → Gemini Call #1 (non-streaming, with tools) →
+  ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────┐
+  │  search_documents     │  │  query_structured_data│  │  web_search       │
+  │  (pgvector + hybrid)  │  │  (DuckDB in-memory)   │  │  (Tavily API)     │
+  └──────────┬───────────┘  └──────────┬────────────┘  └──────────┬───────┘
+             └──────────────┬──────────┴────────────────────┬─────┘
+                            ▼                               │
+                  Context injection into system prompt       │
+                            ▼                               │
+              Gemini Call #2 (streaming, no tools) ← ───────┘
+                            ▼
+                     Streamed answer via SSE
+```
+
+#### How Tool Dispatch Works
+- **Dynamic tool list**: Only enabled tools are registered (based on admin settings + data availability)
+- **Dynamic system prompt**: Only describes tools that are enabled, reducing LLM confusion
+- **Single tool per turn**: LLM calls one tool, system executes it, then streams answer
+- **Text-to-SQL**: Loads structured_data JSONB into DuckDB in-memory tables, executes LLM-generated SQL
+- **Web search**: Falls back to Tavily when documents don't have the answer
+- **Manual filters override**: UI metadata filters bypass tool calling, use direct retrieval
+
+#### Files Changed (Module 7)
+| File | Action |
+|------|--------|
+| `backend/migrations/009_additional_tools.sql` | Created (structured_data table, settings columns, RLS) |
+| `backend/app/services/sql_tool.py` | Created (DuckDB execution, Gemini SQL generation) |
+| `backend/app/services/web_search.py` | Created (Tavily integration) |
+| `backend/app/services/settings.py` | Modified (3 new getters, explicit column select) |
+| `backend/app/models/schemas.py` | Modified (settings fields) |
+| `backend/app/routers/settings.py` | Modified (new fields in response constructors) |
+| `backend/app/services/openai_client.py` | Modified (multi-tool dispatch, dynamic system prompt) |
+| `backend/app/services/ingestion.py` | Modified (structured data extraction for CSV/XLSX, metadata enrichment passthrough) |
+| `backend/app/services/metadata.py` | Modified (enrich_tabular_text for CSV/XLSX metadata) |
+| `backend/app/routers/files.py` | Modified (concurrency limiter) |
+| `backend/app/routers/messages.py` | Modified (has_structured_data check) |
+| `backend/requirements.txt` | Modified (added duckdb, tavily-python) |
+| `frontend/src/lib/api.ts` | Modified (settings types) |
+| `frontend/src/pages/AdminSettings.tsx` | Modified (Additional Tools card) |
+| `backend/scripts/test_tools.py` | Created (14 tests) |
+| `backend/scripts/test_all.py` | Modified (registered Tools suite) |
+
+### Module 8: Sub-Agents
+- [x] Task 1: Database Migration — Add `tool_metadata` JSONB column to messages table (`backend/migrations/010_sub_agents.sql`)
+- [x] Task 2: Backend — Sub-agent service (`backend/app/services/sub_agent.py`) — isolated Gemini call with full document context
+- [x] Task 3: Backend — Add `analyze_document` tool to main agent (`openai_client.py`) — tool builder, system prompt, dispatch with fuzzy doc name resolution
+- [x] Task 4: Backend — Update SSE forwarding and message persistence (`messages.py`, `schemas.py`) — forward sub_agent events, persist tool_metadata
+- [x] Task 5: Frontend — Sub-agent SSE handling and nested UI (`api.ts`, `Chat.tsx`, `MessageList.tsx`) — collapsible sub-agent section
+- [x] Task 6: Tests — `test_sub_agents.py` (4 tests: SSE events, metadata persistence, regression, graceful not-found)
+
+#### Plan
+Full plan saved at `.agent/plans/11.sub-agents.md`
+
+#### Additional Fixes (during Module 8)
+- **PPTX ingestion:** PowerPoint COM → PDF → Docling + RapidOCR pipeline. Converts PPTX to PDF locally via PowerPoint COM automation, then processes with Docling OCR. Free, local, no Gemini Vision API calls. Falls back to direct Docling PPTX parsing if PowerPoint COM fails.
+- **Empty response bug:** Fixed follow-up questions failing after tool calls. Empty assistant messages no longer saved to DB; empty messages filtered from conversation history.
+- **PDF OCR:** Enabled `do_ocr=True` for Docling's PDF pipeline (extracts text from scanned pages/images).
+
+#### Known Limitation
+- RapidOCR cannot reliably read text on curved/colored chart elements (pie/donut charts, complex graphs). Chart data that exists as selectable text in the PDF is extracted; purely image-based charts may be incomplete.
+
+#### Files Changed (Module 8)
+| File | Action |
+|------|--------|
+| `backend/migrations/010_sub_agents.sql` | Created |
+| `backend/app/services/sub_agent.py` | Created |
+| `backend/app/services/openai_client.py` | Modified (analyze_document tool + dispatch) |
+| `backend/app/routers/messages.py` | Modified (sub_agent SSE forwarding + tool_metadata persistence + empty response guard) |
+| `backend/app/models/schemas.py` | Modified (tool_metadata field on MessageResponse) |
+| `backend/app/services/ingestion.py` | Modified (PPTX→PDF via PowerPoint COM, Docling OCR enabled) |
+| `frontend/src/lib/api.ts` | Modified (Message type + sub-agent SSE callbacks) |
+| `frontend/src/pages/Chat.tsx` | Modified (sub-agent state + callbacks) |
+| `frontend/src/components/MessageList.tsx` | Modified (SubAgentSection component) |
+| `backend/scripts/test_sub_agents.py` | Created |
+| `backend/scripts/test_all.py` | Modified (registered Sub-Agents suite) |

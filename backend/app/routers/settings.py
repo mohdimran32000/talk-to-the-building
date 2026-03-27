@@ -20,6 +20,9 @@ async def read_settings(user_id: str = Depends(get_current_user)):
         reranking_enabled=settings.get("reranking_enabled", False),
         reranking_provider=settings.get("reranking_provider", "gemini"),
         cohere_api_key_set=bool(settings.get("cohere_api_key")),
+        text_to_sql_enabled=settings.get("text_to_sql_enabled", False),
+        web_search_enabled=settings.get("web_search_enabled", False),
+        tavily_api_key_set=bool(settings.get("tavily_api_key")),
         updated_at=settings.get("updated_at"),
     )
 
@@ -50,6 +53,9 @@ async def update_settings(
         reranking_enabled=settings.get("reranking_enabled", False),
         reranking_provider=settings.get("reranking_provider", "gemini"),
         cohere_api_key_set=bool(settings.get("cohere_api_key")),
+        text_to_sql_enabled=settings.get("text_to_sql_enabled", False),
+        web_search_enabled=settings.get("web_search_enabled", False),
+        tavily_api_key_set=bool(settings.get("tavily_api_key")),
         updated_at=settings.get("updated_at"),
     )
 

@@ -20,7 +20,17 @@
       "Bash(wmic process:*)",
       "Bash(git -C \"/c/RAG Automators/claude-code-agentic-rag-masterclass\" remote -v)",
       "Read backend/.env",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(../venv/Scripts/python test_tools.py)",
+      "Bash(../venv/Scripts/python test_all.py)",
+      "Bash(powershell -Command \"Get-CimInstance Win32_Process -Filter \\\\\"Name='python.exe'\\\\\" | Select-Object ProcessId, CommandLine | Format-List\")",
+      "Bash(venv/Scripts/python -c \":*)",
+      "Bash(where soffice:*)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Bash(ls \"C:/Program Files \\(x86\\)/Microsoft Office\")",
+      "Bash(where powerpnt:*)",
+      "Bash(reg query:*)"
     ]
   }
 }

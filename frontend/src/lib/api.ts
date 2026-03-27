@@ -36,6 +36,13 @@ export interface Message {
   thread_id: string
   role: 'user' | 'assistant'
   content: string
+  tool_metadata?: {
+    tools_used: Array<{
+      tool: string
+      document_name?: string
+      sub_agent_result?: string
+    }>
+  } | null
   created_at: string
 }
 
@@ -67,6 +74,9 @@ export interface GlobalSettings {
   reranking_enabled: boolean
   reranking_provider: string
   cohere_api_key_set: boolean
+  text_to_sql_enabled: boolean
+  web_search_enabled: boolean
+  tavily_api_key_set: boolean
   updated_at: string | null
 }
 
@@ -81,6 +91,9 @@ export interface GlobalSettingsUpdate {
   reranking_enabled?: boolean
   reranking_provider?: string
   cohere_api_key?: string
+  text_to_sql_enabled?: boolean
+  web_search_enabled?: boolean
+  tavily_api_key?: string
 }
 
 export async function getProfile(): Promise<Profile> {
@@ -181,6 +194,9 @@ export async function sendMessage(
   onDone: (responseId: string) => void,
   signal?: AbortSignal,
   metadataFilter?: Record<string, any>,
+  onSubAgentStart?: (data: { document_name: string }) => void,
+  onSubAgentToken?: (token: string) => void,
+  onSubAgentDone?: () => void,
 ) {
   const token = await getToken()
   const body: Record<string, any> = { content }
@@ -230,6 +246,12 @@ export async function sendMessage(
         const event = JSON.parse(jsonStr)
         if (event.type === 'token') {
           onToken(event.content)
+        } else if (event.type === 'sub_agent_start') {
+          onSubAgentStart?.(event)
+        } else if (event.type === 'sub_agent_token') {
+          onSubAgentToken?.(event.content)
+        } else if (event.type === 'sub_agent_done') {
+          onSubAgentDone?.()
         } else if (event.type === 'done') {
           onDone(event.response_id)
         }

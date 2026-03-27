@@ -19,6 +19,9 @@ export default function AdminSettings() {
   const [rerankingEnabled, setRerankingEnabled] = useState(false)
   const [rerankingProvider, setRerankingProvider] = useState('gemini')
   const [cohereApiKey, setCohereApiKey] = useState('')
+  const [textToSqlEnabled, setTextToSqlEnabled] = useState(false)
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false)
+  const [tavilyApiKey, setTavilyApiKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [models, setModels] = useState<GeminiModel[]>([])
   const [loadingModels, setLoadingModels] = useState(true)
@@ -32,6 +35,8 @@ export default function AdminSettings() {
       setHybridSearchEnabled(s.hybrid_search_enabled)
       setRerankingEnabled(s.reranking_enabled)
       setRerankingProvider(s.reranking_provider)
+      setTextToSqlEnabled(s.text_to_sql_enabled)
+      setWebSearchEnabled(s.web_search_enabled)
     }).catch(() => toast.error('Failed to load settings'))
 
     getModels().then(setModels).catch(() => {
@@ -53,12 +58,16 @@ export default function AdminSettings() {
       if (rerankingEnabled !== settings.reranking_enabled) data.reranking_enabled = rerankingEnabled
       if (rerankingProvider !== settings.reranking_provider) data.reranking_provider = rerankingProvider
       if (cohereApiKey) data.cohere_api_key = cohereApiKey
+      if (textToSqlEnabled !== settings.text_to_sql_enabled) data.text_to_sql_enabled = textToSqlEnabled
+      if (webSearchEnabled !== settings.web_search_enabled) data.web_search_enabled = webSearchEnabled
+      if (tavilyApiKey) data.tavily_api_key = tavilyApiKey
 
       const updated = await updateSettings(data)
       setSettings(updated)
       setLlmApiKey('')
       setLangsmithApiKey('')
       setCohereApiKey('')
+      setTavilyApiKey('')
       toast.success('Settings saved')
     } catch (e: any) {
       toast.error(e.message || 'Failed to save settings')
@@ -212,6 +221,52 @@ export default function AdminSettings() {
                 </div>
               )}
             </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Additional Tools</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-2">
+            <input
+              id="text-to-sql"
+              type="checkbox"
+              checked={textToSqlEnabled}
+              onChange={(e) => setTextToSqlEnabled(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            <Label htmlFor="text-to-sql">Enable Text-to-SQL</Label>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Lets the LLM write SQL queries against tabular data from uploaded CSV/XLSX files using DuckDB.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              id="web-search"
+              type="checkbox"
+              checked={webSearchEnabled}
+              onChange={(e) => setWebSearchEnabled(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300"
+            />
+            <Label htmlFor="web-search">Enable Web Search</Label>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Falls back to web search when your documents don't have the answer. Uses Tavily API.
+          </p>
+          {webSearchEnabled && (
+            <div className="space-y-2">
+              <Label htmlFor="tavily-api-key">Tavily API Key</Label>
+              <Input
+                id="tavily-api-key"
+                type="password"
+                placeholder={settings.tavily_api_key_set ? 'Key is set (leave blank to keep)' : 'Enter Tavily API key'}
+                value={tavilyApiKey}
+                onChange={(e) => setTavilyApiKey(e.target.value)}
+              />
+            </div>
           )}
         </CardContent>
       </Card>
