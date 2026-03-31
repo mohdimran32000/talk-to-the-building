@@ -622,3 +622,51 @@ Full plan saved at `.agent/plans/11.sub-agents.md`
 | `frontend/src/components/MessageList.tsx` | Modified (SubAgentSection component) |
 | `backend/scripts/test_sub_agents.py` | Created |
 | `backend/scripts/test_all.py` | Modified (registered Sub-Agents suite) |
+
+### Bugfix: SQL Tool Failure Silently Swallowing Responses
+- [x] Diagnosed: queries triggering `query_structured_data` tool returned zero SSE tokens ("Thinking..." forever)
+- [x] Root cause: SQL tool generated invalid SQL for wide tables with generic column names (col_0, col_1...), then second Gemini streaming call (context injection with error message) returned zero chunks — `gemini-3-flash-preview` silently produces nothing when system prompt contains an error
+- [x] Fix 1: SQL tool fallback — when SQL fails and user has documents, automatically falls back to `search_documents` (vector search on document chunks)
+- [x] Fix 2: Non-streaming fallback — when streaming context injection returns empty, retries with non-streaming `generate_content`
+- [x] Fix 3: Last-resort safeguard — if both streaming and non-streaming produce nothing, yields raw tool result text
+- [x] Fix 4: SQL schema for wide tables — tables with >30 columns now show sample rows instead of full column listings
+- [x] Fix 5: Frontend error handling — SSE parser now handles `error` events instead of silently ignoring them
+- [x] Fix 6: Backend error logging — `messages.py` now logs exceptions with traceback and yields `error` + `done` events
+
+#### Files Changed (Bugfix)
+| File | Action |
+|------|--------|
+| `backend/app/services/openai_client.py` | Modified (SQL→search fallback, non-streaming fallback, result truncation) |
+| `backend/app/services/sql_tool.py` | Modified (wide table schema handling with sample rows) |
+| `backend/app/routers/messages.py` | Modified (error event logging + done after error) |
+| `frontend/src/lib/api.ts` | Modified (error SSE event handling) |
+
+### Improvement: Text-to-SQL Reliability
+- [x] Fix 1: Smart header detection — scan first 10 rows, score each as potential header (fill ratio, text vs numbers, string length, uniqueness). Works for headers in row 0, 1, 3, or anywhere.
+- [x] Fix 2: Column name sanitization — real Excel header names used (`annual_amount`, `start_date`) instead of generic `col_0`, `col_1`
+- [x] Fix 3: SQL table name auto-correction — fuzzy matches truncated/wrong table names against real ones (e.g. `amc_summary_20` → `amc_summary_2023_sheet1`)
+- [x] Fix 4: VARCHAR type casting — prompt instructs Gemini to use `TRY_CAST(column AS DOUBLE)` for numeric operations since DuckDB stores all columns as VARCHAR
+- [x] Fix 5: Prompt reinforcement — exact table names listed explicitly with instructions not to truncate
+
+#### Verified via LangSmith Traces
+- SQL tool generates correct query: `SELECT SUM(TRY_CAST(annual_amount AS DOUBLE)) FROM "amc_summary_2023_sheet1"`
+- Returns exact result: **2,470,585.08** — no fallback to document search needed
+- Only 2 LLM calls (tool decision + answer) instead of 3+ with fallback, significantly faster
+
+#### Additional Fix: DuckDB Type Inference
+- SQL queries with many numeric columns (e.g. `SUM(jan + feb + ... + dec)`) were getting truncated due to verbose `TRY_CAST` on every column
+- Fix: DuckDB tables now created with **inferred types** — numeric columns are DOUBLE, text columns are VARCHAR
+- Gemini generates compact SQL like `SELECT SUM(jan + feb + mar + ...) FROM "table"` instead of `SELECT SUM(TRY_CAST(jan AS DOUBLE) + TRY_CAST(feb AS DOUBLE) + ...)`
+- `max_output_tokens` increased from 500 → 2048 as additional safeguard
+- Prompt updated to tell Gemini not to cast already-typed columns
+
+#### Known Limitation: SQL Tool + Multi-Section Spreadsheets
+- Spreadsheets with multiple labeled sections (e.g. MDB-CG-2 and MDB-CG-3 as separate row groups) cannot be filtered by section via SQL — the section label is not a column
+- For these queries, the SQL tool fails and falls back to `search_documents` (vector search), which correctly finds the answer from document chunks
+- This is expected behavior — the fallback path works well for complex spreadsheet layouts
+
+#### Files Changed (SQL Reliability)
+| File | Action |
+|------|--------|
+| `backend/app/services/ingestion.py` | Modified (smart header detection with `_score_header_row()`, column name sanitization, deduplication) |
+| `backend/app/services/sql_tool.py` | Modified (`_fix_table_names()` fuzzy matcher, DuckDB type inference, compact SQL prompt, explicit table name list, max_output_tokens=2048) |

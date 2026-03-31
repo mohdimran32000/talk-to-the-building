@@ -200,6 +200,7 @@ def embed_batch(texts: List[str], batch_size: int = 100) -> List[List[float]]:
 
 
 MAX_ROWS_PER_SHEET = 10_000
+MAX_HEADER_SCAN_ROWS = 10  # How many rows to scan looking for headers
 
 
 def _sanitize_table_name(file_name: str, sheet_title: str = "") -> str:
@@ -207,6 +208,46 @@ def _sanitize_table_name(file_name: str, sheet_title: str = "") -> str:
     name = f"{base}_{sheet_title}" if sheet_title else base
     name = re.sub(r"[^a-zA-Z0-9_]", "_", name.lower()).strip("_")
     return re.sub(r"_+", "_", name)
+
+
+def _score_header_row(row: tuple, total_cols: int) -> float:
+    """Score how likely a row is to be a header. Higher = more likely."""
+    if not row:
+        return -1
+    non_null = [v for v in row if v is not None]
+    if not non_null:
+        return -1
+
+    score = 0.0
+    # Headers should have many non-null values relative to total columns
+    fill_ratio = len(non_null) / max(total_cols, 1)
+    score += fill_ratio * 40  # 0-40 points
+
+    text_count = 0
+    numeric_count = 0
+    short_count = 0
+    for v in non_null:
+        s = str(v).strip()
+        if not s:
+            continue
+        # Headers are typically short text labels
+        if isinstance(v, str) or (not isinstance(v, (int, float))):
+            text_count += 1
+        else:
+            numeric_count += 1
+        if len(s) <= 30:
+            short_count += 1
+
+    if non_null:
+        # Headers should be mostly text, not numbers
+        score += (text_count / len(non_null)) * 30  # 0-30 points
+        # Headers should be short strings
+        score += (short_count / len(non_null)) * 20  # 0-20 points
+        # Bonus: many distinct values (not all the same)
+        unique_ratio = len(set(str(v) for v in non_null)) / len(non_null)
+        score += unique_ratio * 10  # 0-10 points
+
+    return score
 
 
 def _extract_structured_data(
@@ -238,14 +279,48 @@ def _extract_structured_data(
             sheet_rows = list(sheet.iter_rows(values_only=True))
             if not sheet_rows or len(sheet_rows) < 2:
                 continue
-            headers = [str(h) if h is not None else f"col_{i}" for i, h in enumerate(sheet_rows[0])]
-            if not any(h.strip() for h in headers if h):
+
+            # Smart header detection: scan first N rows, pick the best header
+            total_cols = len(sheet_rows[0])
+            scan_limit = min(MAX_HEADER_SCAN_ROWS, len(sheet_rows) - 1)  # need at least 1 data row after
+            best_idx = 0
+            best_score = -1
+            for idx in range(scan_limit):
+                score = _score_header_row(sheet_rows[idx], total_cols)
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+
+            header_row_idx = best_idx
+            data_start_idx = header_row_idx + 1
+            if header_row_idx > 0:
+                logger.info(f"Sheet '{sheet.title}': detected header at row {header_row_idx} (score={best_score:.1f})")
+
+            raw_headers = [str(h).strip() if h is not None else f"col_{i}" for i, h in enumerate(sheet_rows[header_row_idx])]
+            if not any(h.strip() for h in raw_headers if h):
                 continue
+
+            # Sanitize header names: lowercase, replace special chars, deduplicate
+            seen = {}
+            clean_headers = []
+            for h in raw_headers:
+                sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", h).strip("_")
+                sanitized = re.sub(r"_+", "_", sanitized).lower()
+                if not sanitized or sanitized.startswith("col_"):
+                    sanitized = f"col_{len(clean_headers)}"
+                # Handle duplicate column names
+                if sanitized in seen:
+                    seen[sanitized] += 1
+                    sanitized = f"{sanitized}_{seen[sanitized]}"
+                else:
+                    seen[sanitized] = 0
+                clean_headers.append(sanitized)
+
             data_rows = []
-            for row in sheet_rows[1:MAX_ROWS_PER_SHEET + 1]:
-                data_rows.append({h: v for h, v in zip(headers, row)})
+            for row in sheet_rows[data_start_idx:MAX_ROWS_PER_SHEET + data_start_idx]:
+                data_rows.append({h: v for h, v in zip(clean_headers, row)})
             if data_rows:
-                tables.append((_sanitize_table_name(file_name, sheet.title), headers, data_rows))
+                tables.append((_sanitize_table_name(file_name, sheet.title), clean_headers, data_rows))
         wb.close()
 
     for table_name, columns, rows in tables:

@@ -93,7 +93,9 @@ async def send_message(
                 elif event_type == "done":
                     yield json.dumps({"type": "done"})
         except Exception as e:
+            logger.error(f"Stream error for thread {thread_id}: {e}", exc_info=True)
             yield json.dumps({"type": "error", "content": str(e)})
+            yield json.dumps({"type": "done"})
             return
 
         # Only persist if we got a non-empty response (avoids corrupting conversation history)

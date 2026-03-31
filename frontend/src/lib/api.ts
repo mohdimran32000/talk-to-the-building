@@ -197,6 +197,7 @@ export async function sendMessage(
   onSubAgentStart?: (data: { document_name: string }) => void,
   onSubAgentToken?: (token: string) => void,
   onSubAgentDone?: () => void,
+  onError?: (message: string) => void,
 ) {
   const token = await getToken()
   const body: Record<string, any> = { content }
@@ -246,6 +247,10 @@ export async function sendMessage(
         const event = JSON.parse(jsonStr)
         if (event.type === 'token') {
           onToken(event.content)
+        } else if (event.type === 'error') {
+          const msg = event.content || 'An error occurred while generating the response'
+          onError?.(msg)
+          throw new Error(msg)
         } else if (event.type === 'sub_agent_start') {
           onSubAgentStart?.(event)
         } else if (event.type === 'sub_agent_token') {

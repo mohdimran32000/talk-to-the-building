@@ -398,12 +398,34 @@ Document excerpts:
                 user_id=user_id,
                 supabase_client=supabase_client,
             )
-            result_text = "\n\n---\n\n".join(chunks) if chunks else "No relevant documents found."
+            if chunks:
+                result_text = "\n\n---\n\n".join(chunks)
+            elif web_search_enabled:
+                # Fallback: document search returned nothing, try web search
+                logger.info(f"search_documents returned empty, falling back to web_search for: {search_query}")
+                from app.services.web_search import execute_web_search
+                result_text = execute_web_search(search_query)
+                tool_name = "web_search"
+            else:
+                result_text = "No relevant documents found."
 
         elif tool_name == "query_structured_data":
             from app.services.sql_tool import execute_sql_query
             question = args.get("question", "")
             result_text = execute_sql_query(question, user_id, supabase_client)
+
+            # If SQL failed and user has documents, fall back to document search
+            if result_text.startswith("SQL query failed") and has_documents:
+                logger.info(f"SQL tool failed, falling back to search_documents for: {question}")
+                chunks = _execute_search_documents(
+                    search_query=question,
+                    metadata_filter=None,
+                    user_id=user_id,
+                    supabase_client=supabase_client,
+                )
+                if chunks:
+                    result_text = "\n\n---\n\n".join(chunks)
+                    tool_name = "search_documents"
 
         elif tool_name == "web_search":
             from app.services.web_search import execute_web_search
@@ -440,12 +462,15 @@ Document excerpts:
             result_text = f"Unknown tool: {tool_name}"
 
         # Context injection for the final answer (skip the tool round-trip)
+        # Truncate very large results to avoid empty Gemini responses
+        truncated_result = result_text[:8000] if len(result_text) > 8000 else result_text
         system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
+If the tool encountered an error, explain the issue to the user in simple terms and suggest they rephrase their question.
 If the results do not contain enough information, say so and answer from general knowledge if applicable.
 When citing web sources, include the URLs.
 
 Tool ({tool_name}) results:
-{result_text}"""
+{truncated_result}"""
 
         # Stream the final answer without tools (avoids thought_signature issue)
         response2 = client.models.generate_content_stream(
@@ -460,9 +485,26 @@ Tool ({tool_name}) results:
                 has_response2_text = True
                 yield ("token", chunk.text)
 
-        # Safeguard: if context injection returned nothing, yield the tool result directly
+        # Safeguard: if streaming returned nothing, try non-streaming as fallback
+        if not has_response2_text:
+            logger.warning(f"Context injection streaming returned empty for tool={tool_name}, trying non-streaming fallback")
+            try:
+                fallback = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(system_instruction=system_with_context),
+                )
+                if fallback.candidates and fallback.candidates[0].content and fallback.candidates[0].content.parts:
+                    for part in fallback.candidates[0].content.parts:
+                        if part.text:
+                            has_response2_text = True
+                            yield ("token", part.text)
+            except Exception as e:
+                logger.warning(f"Non-streaming fallback also failed: {e}")
+
+        # Last resort: yield the tool result directly
         if not has_response2_text and result_text:
-            logger.warning(f"Context injection returned empty for tool={tool_name}, yielding raw result")
+            logger.warning(f"All context injection attempts failed for tool={tool_name}, yielding raw result")
             yield ("token", result_text)
     else:
         # No tool call — LLM responded directly
