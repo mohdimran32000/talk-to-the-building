@@ -79,6 +79,15 @@ async def send_message(
                 if event_type == "token":
                     full_response += data
                     yield json.dumps({"type": "token", "content": data})
+                elif event_type == "tool_thinking":
+                    parsed = json.loads(data)
+                    yield json.dumps({"type": "tool_thinking", **parsed})
+                elif event_type == "tool_start":
+                    parsed = json.loads(data)
+                    yield json.dumps({"type": "tool_start", **parsed})
+                elif event_type == "tool_done":
+                    parsed = json.loads(data)
+                    yield json.dumps({"type": "tool_done", **parsed})
                 elif event_type == "sub_agent_start":
                     parsed = json.loads(data)
                     tool_metadata = {"tools_used": [{"document_name": parsed.get("document_name", "")}]}

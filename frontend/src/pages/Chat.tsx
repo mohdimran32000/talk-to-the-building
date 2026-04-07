@@ -21,6 +21,7 @@ import {
   type UploadedFile,
   type MetadataFieldDefinition,
 } from '@/lib/api'
+import type { ToolStep } from '@/components/ToolActivity'
 
 export default function Chat() {
   const { signOut } = useAuth()
@@ -37,6 +38,8 @@ export default function Chat() {
   const [subAgentContent, setSubAgentContent] = useState('')
   const [isSubAgentActive, setIsSubAgentActive] = useState(false)
   const [subAgentDocName, setSubAgentDocName] = useState('')
+  const [toolSteps, setToolSteps] = useState<ToolStep[]>([])
+  const [isToolThinking, setIsToolThinking] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const loadFiles = useCallback(async () => {
@@ -183,6 +186,8 @@ export default function Chat() {
     setMessages((prev) => [...prev, tempUserMsg])
     setIsStreaming(true)
     setStreamingContent('')
+    setToolSteps([])
+    setIsToolThinking(false)
 
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -212,6 +217,8 @@ export default function Chat() {
           setSubAgentContent('')
           setIsSubAgentActive(false)
           setSubAgentDocName('')
+          setToolSteps([])
+          setIsToolThinking(false)
           abortControllerRef.current = null
           // Reload from DB in background to get server-persisted IDs
           setTimeout(() => {
@@ -232,6 +239,24 @@ export default function Chat() {
         },
         () => {
           setIsSubAgentActive(false)
+        },
+        undefined, // onError
+        // Tool activity callbacks
+        () => {
+          setIsToolThinking(true)
+        },
+        (data) => {
+          setIsToolThinking(false)
+          setToolSteps((prev) => [...prev, { tool: data.tool, args: data.args, status: 'running' }])
+        },
+        (data) => {
+          setToolSteps((prev) =>
+            prev.map((s) =>
+              s.tool === data.tool && s.status === 'running'
+                ? { ...s, status: 'done', detail: data.detail }
+                : s
+            )
+          )
         },
       )
     } catch (err) {
@@ -303,6 +328,8 @@ export default function Chat() {
               subAgentContent={subAgentContent}
               isSubAgentActive={isSubAgentActive}
               subAgentDocName={subAgentDocName}
+              toolSteps={toolSteps}
+              isToolThinking={isToolThinking}
             />
             <MessageInput onSend={handleSendMessage} onStop={handleStopStreaming} disabled={isStreaming} isStreaming={isStreaming} />
           </>

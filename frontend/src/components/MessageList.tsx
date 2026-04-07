@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message } from '@/lib/api'
+import ToolActivity, { type ToolStep } from './ToolActivity'
 
 interface MessageListProps {
   messages: Message[]
@@ -10,6 +11,8 @@ interface MessageListProps {
   subAgentContent?: string
   isSubAgentActive?: boolean
   subAgentDocName?: string
+  toolSteps?: ToolStep[]
+  isToolThinking?: boolean
 }
 
 function SubAgentSection({
@@ -100,6 +103,7 @@ function MarkdownContent({ content }: { content: string }) {
 export default function MessageList({
   messages, streamingContent, isStreaming,
   subAgentContent = '', isSubAgentActive = false, subAgentDocName = '',
+  toolSteps = [], isToolThinking = false,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -152,6 +156,22 @@ export default function MessageList({
       {isStreaming && (
         <div className="flex justify-start">
           <div className="max-w-[75%] rounded-lg bg-muted px-4 py-2 text-sm">
+            {isToolThinking && toolSteps.length === 0 && !streamingContent && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <circle cx="8" cy="8" r="6.5" strokeDasharray="30" strokeDashoffset="10" />
+                </svg>
+                <span>Searching available tools</span>
+                <span className="inline-flex items-center gap-0.5 ml-0.5">
+                  <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_infinite]" />
+                  <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_0.2s_infinite]" />
+                  <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_0.4s_infinite]" />
+                </span>
+              </div>
+            )}
+            {toolSteps.length > 0 && (
+              <ToolActivity steps={toolSteps} />
+            )}
             {(isSubAgentActive || subAgentContent) && subAgentDocName && (
               <SubAgentSection
                 documentName={subAgentDocName}
@@ -162,8 +182,10 @@ export default function MessageList({
             )}
             {streamingContent ? (
               <MarkdownContent content={streamingContent} />
-            ) : !isSubAgentActive && !subAgentContent ? (
+            ) : !isToolThinking && !isSubAgentActive && !subAgentContent && toolSteps.length === 0 ? (
               <span className="text-muted-foreground animate-pulse">Thinking...</span>
+            ) : !streamingContent && toolSteps.length > 0 && toolSteps.every(s => s.status === 'done') && !isSubAgentActive ? (
+              <span className="text-muted-foreground animate-pulse mt-1 block">Generating response...</span>
             ) : null}
           </div>
         </div>

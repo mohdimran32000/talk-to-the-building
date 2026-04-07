@@ -187,6 +187,20 @@ export async function deleteFile(fileId: string): Promise<void> {
 
 // --- Messages ---
 
+export interface ToolThinkingEvent {
+  available_tools: string[]
+}
+
+export interface ToolStartEvent {
+  tool: string
+  args?: Record<string, any>
+}
+
+export interface ToolDoneEvent {
+  tool: string
+  detail?: string
+}
+
 export async function sendMessage(
   threadId: string,
   content: string,
@@ -198,6 +212,9 @@ export async function sendMessage(
   onSubAgentToken?: (token: string) => void,
   onSubAgentDone?: () => void,
   onError?: (message: string) => void,
+  onToolThinking?: (data: ToolThinkingEvent) => void,
+  onToolStart?: (data: ToolStartEvent) => void,
+  onToolDone?: (data: ToolDoneEvent) => void,
 ) {
   const token = await getToken()
   const body: Record<string, any> = { content }
@@ -247,6 +264,12 @@ export async function sendMessage(
         const event = JSON.parse(jsonStr)
         if (event.type === 'token') {
           onToken(event.content)
+        } else if (event.type === 'tool_thinking') {
+          onToolThinking?.(event as ToolThinkingEvent)
+        } else if (event.type === 'tool_start') {
+          onToolStart?.(event as ToolStartEvent)
+        } else if (event.type === 'tool_done') {
+          onToolDone?.(event as ToolDoneEvent)
         } else if (event.type === 'error') {
           const msg = event.content || 'An error occurred while generating the response'
           onError?.(msg)

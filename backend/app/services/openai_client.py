@@ -333,6 +333,11 @@ Document excerpts:
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
 
+    # Emit a thinking event when tools are available so the frontend can show status
+    if function_declarations:
+        tool_names = [fd.name for fd in function_declarations]
+        yield ("tool_thinking", json.dumps({"available_tools": tool_names}))
+
     # Use non-streaming generate_content to handle the full tool call loop
     # Then stream the final response to the user
     response = client.models.generate_content(
@@ -388,6 +393,9 @@ Document excerpts:
         tool_name = fc.name
         logger.info(f"Tool call: {tool_name}(args={args})")
 
+        # Emit tool_start event so frontend can show activity indicator
+        yield ("tool_start", json.dumps({"tool": tool_name, "args": args}))
+
         # Dispatch to the correct tool executor
         if tool_name == "search_documents":
             search_query = args.pop("query", "")
@@ -400,14 +408,19 @@ Document excerpts:
             )
             if chunks:
                 result_text = "\n\n---\n\n".join(chunks)
+                yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks)} relevant excerpts"}))
             elif web_search_enabled:
                 # Fallback: document search returned nothing, try web search
                 logger.info(f"search_documents returned empty, falling back to web_search for: {search_query}")
+                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No documents found"}))
+                yield ("tool_start", json.dumps({"tool": "web_search", "args": {"query": search_query}}))
                 from app.services.web_search import execute_web_search
                 result_text = execute_web_search(search_query)
                 tool_name = "web_search"
+                yield ("tool_done", json.dumps({"tool": "web_search", "detail": "Web results retrieved"}))
             else:
                 result_text = "No relevant documents found."
+                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No documents found"}))
 
         elif tool_name == "query_structured_data":
             from app.services.sql_tool import execute_sql_query
@@ -417,6 +430,8 @@ Document excerpts:
             # If SQL failed and user has documents, fall back to document search
             if result_text.startswith("SQL query failed") and has_documents:
                 logger.info(f"SQL tool failed, falling back to search_documents for: {question}")
+                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "SQL failed, falling back"}))
+                yield ("tool_start", json.dumps({"tool": "search_documents", "args": {"query": question}}))
                 chunks = _execute_search_documents(
                     search_query=question,
                     metadata_filter=None,
@@ -426,11 +441,15 @@ Document excerpts:
                 if chunks:
                     result_text = "\n\n---\n\n".join(chunks)
                     tool_name = "search_documents"
+                yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks) if chunks else 0} results"}))
+            else:
+                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "Query executed"}))
 
         elif tool_name == "web_search":
             from app.services.web_search import execute_web_search
             query = args.get("query", "")
             result_text = execute_web_search(query)
+            yield ("tool_done", json.dumps({"tool": "web_search", "detail": "Web results retrieved"}))
 
         elif tool_name == "analyze_document":
             from app.services.sub_agent import run_sub_agent
@@ -439,9 +458,9 @@ Document excerpts:
 
             # Resolve document_name → document_id via fuzzy match
             doc = supabase_client.table("documents") \
-                .select("id, original_filename") \
+                .select("id, file_name") \
                 .eq("user_id", user_id) \
-                .ilike("original_filename", f"%{doc_name}%") \
+                .ilike("file_name", f"%{doc_name}%") \
                 .order("created_at", desc=True) \
                 .limit(1).execute()
 
@@ -449,7 +468,7 @@ Document excerpts:
                 result_text = f"No document matching '{doc_name}' found."
             else:
                 doc_id = doc.data[0]["id"]
-                actual_name = doc.data[0]["original_filename"]
+                actual_name = doc.data[0]["file_name"]
                 sub_agent_result = ""
                 for evt_type, evt_data in run_sub_agent(doc_id, actual_name, question, user_id, supabase_client):
                     yield (evt_type, evt_data)
