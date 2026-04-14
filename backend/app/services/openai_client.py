@@ -35,18 +35,18 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
     parts = ["You are a helpful assistant with access to the following tools:"]
 
     if has_documents:
-        parts.append("- search_documents: Search the user's uploaded documents for relevant excerpts.")
-        parts.append("- analyze_document: Analyze a specific document in depth — use for summaries, key findings, or when the user references a document by name.")
+        parts.append("- analyze_document: Summarize, review, or analyze a specific document in depth. Loads the FULL document. MUST be used for any summarization request.")
+        parts.append("- search_documents: Find specific facts or snippets across documents. Only returns a few excerpts — NOT for summarization.")
     if has_structured_data:
         parts.append("- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons).")
     if web_search_enabled:
         parts.append("- web_search: Search the web for information not found in the user's documents.")
 
     parts.append("")
-    parts.append("Use the appropriate tool based on the question:")
+    parts.append("TOOL SELECTION RULES (follow strictly):")
     if has_documents:
-        parts.append("- For questions about document content or finding specific snippets, use search_documents.")
-        parts.append("- For summarizing, analyzing, or extracting information from a specific document by name, use analyze_document.")
+        parts.append("- ALWAYS use analyze_document when the user asks to summarize, analyze, review, or extract key findings from a specific document by name. This tool loads the FULL document — search_documents only returns a few snippets and cannot produce a real summary.")
+        parts.append("- Use search_documents ONLY for finding specific facts, quotes, or snippets across multiple documents (e.g. 'what does the contract say about payment terms?').")
     if has_structured_data:
         parts.append("- For quantitative questions about tabular data (numbers, totals, averages), use query_structured_data.")
     if web_search_enabled:
@@ -90,9 +90,9 @@ def _build_search_tool() -> types.Tool:
     return types.FunctionDeclaration(
         name="search_documents",
         description=(
-            "Search the user's uploaded documents. Use the query parameter for semantic search. "
-            "Optionally use metadata filter parameters to narrow results by document properties. "
-            "Only include filter parameters you are confident about based on the user's question."
+            "Find specific facts, quotes, or snippets across the user's documents. "
+            "Returns only a few matching excerpts — NOT suitable for summarizing or analyzing a whole document. "
+            "Do NOT use this for summarization requests — use analyze_document instead."
         ),
         parameters=types.Schema(
             type="OBJECT",
@@ -155,9 +155,9 @@ def _build_analyze_tool() -> types.FunctionDeclaration:
     return types.FunctionDeclaration(
         name="analyze_document",
         description=(
-            "Analyze a specific document in depth — use for summaries, key findings, "
-            "or when the user references a document by name. "
-            "NOT for cross-document search."
+            "REQUIRED for summarizing, reviewing, or analyzing a document. "
+            "Loads the FULL document content for comprehensive analysis. "
+            "Use this whenever the user says 'summarize', 'analyze', 'review', or 'explain' a document."
         ),
         parameters=types.Schema(
             type="OBJECT",
@@ -294,9 +294,13 @@ Document excerpts:
     text_to_sql_enabled = get_text_to_sql_enabled() and has_structured_data
     web_search_enabled = get_web_search_enabled()
 
-    # Build dynamic tool list
+    # Build dynamic tool list — analyze_document listed first to reduce positional bias
     function_declarations = []
     if has_documents:
+        try:
+            function_declarations.append(_build_analyze_tool())
+        except Exception as e:
+            logger.warning(f"Failed to build analyze tool (non-fatal): {e}")
         try:
             function_declarations.append(_build_search_tool())
         except Exception as e:
@@ -311,11 +315,6 @@ Document excerpts:
             function_declarations.append(_build_web_search_tool())
         except Exception as e:
             logger.warning(f"Failed to build web search tool (non-fatal): {e}")
-    if has_documents:
-        try:
-            function_declarations.append(_build_analyze_tool())
-        except Exception as e:
-            logger.warning(f"Failed to build analyze tool (non-fatal): {e}")
 
     tools = None
     tool_config = None
@@ -337,6 +336,23 @@ Document excerpts:
     if function_declarations:
         tool_names = [fd.name for fd in function_declarations]
         yield ("tool_thinking", json.dumps({"available_tools": tool_names}))
+
+    # Pre-check: detect summarization intent and force analyze_document
+    # Gemini Flash has a strong bias toward search_documents even when analyze_document
+    # is clearly the right tool. This deterministic override catches the obvious cases.
+    forced_tool = None
+    if has_documents and function_declarations:
+        import re
+        last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "").lower()
+        summarize_pattern = re.search(r'\b(summarize|summarise|summary|analyze|analyse|review|explain|overview)\b', last_user_msg)
+        if summarize_pattern:
+            # Check if user references a specific document (not a generic question)
+            generic_terms = {'document', 'documents', 'file', 'files', 'my'}
+            words = set(re.findall(r'\b\w+\b', last_user_msg))
+            non_generic = words - generic_terms - {summarize_pattern.group()} - {'the', 'a', 'an', 'for', 'me', 'can', 'you', 'please', 'of', 'this', 'that', 'it', 'to', 'in', 'do'}
+            if non_generic:
+                forced_tool = "analyze_document"
+                logger.info(f"Forcing analyze_document — detected summarization intent with specific terms: {non_generic}")
 
     # Use non-streaming generate_content to handle the full tool call loop
     # Then stream the final response to the user
@@ -391,6 +407,17 @@ Document excerpts:
 
         args = dict(fc.args) if fc.args else {}
         tool_name = fc.name
+
+        # Override tool choice if forced_tool is set and Gemini picked wrong
+        if forced_tool and tool_name != forced_tool:
+            logger.info(f"Overriding {tool_name} -> {forced_tool} (summarization intent detected)")
+            last_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            # Keep the original search query as document_name hint — the ilike
+            # fuzzy match in the analyze_document handler will resolve it
+            tool_name = forced_tool
+            original_query = args.get("query", "") or args.get("question", "") or last_msg
+            args = {"document_name": original_query, "question": last_msg}
+
         logger.info(f"Tool call: {tool_name}(args={args})")
 
         # Emit tool_start event so frontend can show activity indicator
@@ -525,6 +552,51 @@ Tool ({tool_name}) results:
         if not has_response2_text and result_text:
             logger.warning(f"All context injection attempts failed for tool={tool_name}, yielding raw result")
             yield ("token", result_text)
+    elif forced_tool == "analyze_document" and has_documents:
+        # Gemini didn't call any tool but we detected summarization intent — force analyze_document
+        logger.info("Gemini skipped tools but summarization detected — forcing analyze_document")
+        last_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+        tool_name = "analyze_document"
+        args = {"document_name": last_msg, "question": last_msg}
+        yield ("tool_start", json.dumps({"tool": tool_name, "args": args}))
+
+        from app.services.sub_agent import run_sub_agent
+        doc_name = args.get("document_name", "")
+        question = args.get("question", "")
+
+        doc = supabase_client.table("documents") \
+            .select("id, file_name") \
+            .eq("user_id", user_id) \
+            .ilike("file_name", f"%{doc_name}%") \
+            .order("created_at", desc=True) \
+            .limit(1).execute()
+
+        if not doc.data:
+            result_text = f"No document matching '{doc_name}' found."
+        else:
+            doc_id = doc.data[0]["id"]
+            actual_name = doc.data[0]["file_name"]
+            sub_agent_result = ""
+            for evt_type, evt_data in run_sub_agent(doc_id, actual_name, question, user_id, supabase_client):
+                yield (evt_type, evt_data)
+                if evt_type == "sub_agent_done":
+                    sub_agent_result = evt_data
+            result_text = sub_agent_result
+
+        if result_text:
+            truncated_result = result_text[:8000] if len(result_text) > 8000 else result_text
+            system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
+
+Tool (analyze_document) results:
+{truncated_result}"""
+            response2 = client.models.generate_content_stream(
+                model=model, contents=contents,
+                config=types.GenerateContentConfig(system_instruction=system_with_context),
+            )
+            for chunk in response2:
+                if chunk.text:
+                    yield ("token", chunk.text)
+        yield ("tool_done", json.dumps({"tool": "analyze_document", "detail": "Document analyzed"}))
     else:
         # No tool call — LLM responded directly
         has_text = False
