@@ -8,12 +8,23 @@ from app.services.record_manager import compute_file_hash, determine_action
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
-_ingestion_semaphore = threading.Semaphore(3)
+_ingestion_semaphore = threading.Semaphore(2)
 
 
 def _throttled_ingest(func, *args, **kwargs):
-    with _ingestion_semaphore:
+    acquired = _ingestion_semaphore.acquire(timeout=300)
+    try:
+        if not acquired:
+            import logging
+            logging.getLogger(__name__).error("Ingestion queue full — skipping")
+            return
         func(*args, **kwargs)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Ingestion crashed: {e}", exc_info=True)
+    finally:
+        if acquired:
+            _ingestion_semaphore.release()
 
 
 @router.post("/upload", response_model=DocumentResponse)

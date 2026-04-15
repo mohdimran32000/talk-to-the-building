@@ -260,31 +260,33 @@ export async function sendMessage(
       const jsonStr = trimmed.slice(5).trim()
       if (!jsonStr || jsonStr === '[DONE]') continue
 
+      let parsed: any
       try {
-        const event = JSON.parse(jsonStr)
-        if (event.type === 'token') {
-          onToken(event.content)
-        } else if (event.type === 'tool_thinking') {
-          onToolThinking?.(event as ToolThinkingEvent)
-        } else if (event.type === 'tool_start') {
-          onToolStart?.(event as ToolStartEvent)
-        } else if (event.type === 'tool_done') {
-          onToolDone?.(event as ToolDoneEvent)
-        } else if (event.type === 'error') {
-          const msg = event.content || 'An error occurred while generating the response'
-          onError?.(msg)
-          throw new Error(msg)
-        } else if (event.type === 'sub_agent_start') {
-          onSubAgentStart?.(event)
-        } else if (event.type === 'sub_agent_token') {
-          onSubAgentToken?.(event.content)
-        } else if (event.type === 'sub_agent_done') {
-          onSubAgentDone?.()
-        } else if (event.type === 'done') {
-          onDone(event.response_id)
-        }
+        parsed = JSON.parse(jsonStr)
       } catch {
-        // skip malformed events
+        continue // skip malformed JSON
+      }
+
+      if (parsed.type === 'token') {
+        onToken(parsed.content)
+      } else if (parsed.type === 'tool_thinking') {
+        onToolThinking?.(parsed as ToolThinkingEvent)
+      } else if (parsed.type === 'tool_start') {
+        onToolStart?.(parsed as ToolStartEvent)
+      } else if (parsed.type === 'tool_done') {
+        onToolDone?.(parsed as ToolDoneEvent)
+      } else if (parsed.type === 'error') {
+        const msg = parsed.content || 'An error occurred while generating the response'
+        onError?.(msg)
+        onToken(`\n\n**Error:** ${msg}`)
+      } else if (parsed.type === 'sub_agent_start') {
+        onSubAgentStart?.(parsed)
+      } else if (parsed.type === 'sub_agent_token') {
+        onSubAgentToken?.(parsed.content)
+      } else if (parsed.type === 'sub_agent_done') {
+        onSubAgentDone?.()
+      } else if (parsed.type === 'done') {
+        onDone(parsed.response_id)
       }
     }
 

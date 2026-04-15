@@ -18,9 +18,11 @@ _client_cache = {"key": None, "client": None}
 
 def _get_client() -> genai.Client:
     key = get_llm_api_key()
-    if _client_cache["key"] != key:
-        _client_cache["key"] = key
+    if not key:
+        raise ValueError("No Gemini API key configured. Set GEMINI_API_KEY in .env or configure it in Admin Settings.")
+    if _client_cache["key"] != key or _client_cache["client"] is None:
         _client_cache["client"] = genai.Client(api_key=key)
+        _client_cache["key"] = key
     return _client_cache["client"]
 
 
@@ -99,7 +101,7 @@ def _build_search_tool() -> types.Tool:
             properties={
                 "query": types.Schema(
                     type="STRING",
-                    description="The search query — a rephrased version of the user's question optimized for semantic similarity search",
+                    description="A SHORT, focused search query (under 50 words). Extract specific identifiers (codes, model numbers, names) and the core question. Do NOT include email headers, greetings, or background context.",
                 ),
                 **filter_properties,
             },
@@ -176,8 +178,9 @@ def _build_analyze_tool() -> types.FunctionDeclaration:
     )
 
 
-def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, metadata_filter: Optional[dict] = None) -> List[str]:
-    """Embed query and search via hybrid (vector + keyword RRF) or vector-only RPC."""
+def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, metadata_filter: Optional[dict] = None) -> List[dict]:
+    """Embed query and search via hybrid (vector + keyword RRF) or vector-only RPC.
+    Returns list of dicts with keys: content, document_id, file_name."""
     from app.services.ingestion import embed_text
     from app.services.settings import get_hybrid_search_enabled, get_reranking_enabled
 
@@ -202,13 +205,28 @@ def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, m
             "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
         }).execute()
 
-    chunks = [row["content"] for row in (result.data or [])]
+    rows = result.data or []
+
+    # Fetch document names for source attribution
+    doc_ids = list(set(row["document_id"] for row in rows))
+    doc_names = {}
+    if doc_ids:
+        docs = supabase_client.table("documents").select("id, file_name").in_("id", doc_ids).execute()
+        doc_names = {d["id"]: d["file_name"] for d in (docs.data or [])}
+
+    chunks = [
+        {"content": row["content"], "document_id": row["document_id"], "file_name": doc_names.get(row["document_id"], "Unknown")}
+        for row in rows
+    ]
 
     if hybrid and reranking and len(chunks) > top_k:
         from app.services.reranker import rerank_chunks
-        chunks = rerank_chunks(query, chunks, top_k)
+        content_strings = [c["content"] for c in chunks]
+        reranked_contents = rerank_chunks(query, content_strings, top_k)
+        content_to_chunk = {c["content"]: c for c in chunks}
+        chunks = [content_to_chunk[rc] for rc in reranked_contents if rc in content_to_chunk]
 
-    return chunks
+    return chunks[:top_k]
 
 
 @traceable(name="search_documents", run_type="tool")
@@ -217,7 +235,7 @@ def _execute_search_documents(
     metadata_filter: Optional[dict],
     user_id: Optional[str],
     supabase_client=None,
-) -> List[str]:
+) -> List[dict]:
     """Execute the search_documents tool call — traced as a tool in LangSmith."""
     if not supabase_client or not user_id:
         return []
@@ -226,7 +244,7 @@ def _execute_search_documents(
             query=search_query,
             user_id=user_id,
             supabase_client=supabase_client,
-            top_k=5,
+            top_k=10,
             metadata_filter=metadata_filter,
         )
     except Exception as e:
@@ -254,10 +272,12 @@ def stream_response(
         last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
         chunks = retrieve_chunks(
             query=last_user_msg, user_id=user_id,
-            supabase_client=supabase_client, top_k=5,
+            supabase_client=supabase_client, top_k=10,
             metadata_filter=manual_metadata_filter,
         )
-        context = "\n\n---\n\n".join(chunks) if chunks else "No relevant documents found."
+        context = "\n\n---\n\n".join(
+            f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+        ) if chunks else "No relevant documents found."
         system_text = f"""You are a helpful assistant with access to the user's uploaded documents.
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
@@ -372,7 +392,9 @@ Document excerpts:
             search_query=last_user_msg, metadata_filter=None,
             user_id=user_id, supabase_client=supabase_client,
         )
-        context = "\n\n---\n\n".join(chunks) if chunks else "No relevant documents found."
+        context = "\n\n---\n\n".join(
+            f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+        ) if chunks else "No relevant documents found."
         fallback_system = f"""You are a helpful assistant with access to the user's uploaded documents.
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
@@ -434,7 +456,17 @@ Document excerpts:
                 supabase_client=supabase_client,
             )
             if chunks:
-                result_text = "\n\n---\n\n".join(chunks)
+                from collections import Counter
+                doc_counts = Counter(c["file_name"] for c in chunks)
+                result_text = "\n\n---\n\n".join(
+                    f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                )
+                dominant_doc, dominant_count = doc_counts.most_common(1)[0]
+                if dominant_count / len(chunks) >= 0.6:
+                    result_text += (
+                        f"\n\nNote: {dominant_count}/{len(chunks)} results came from '{dominant_doc}'. "
+                        f"If these excerpts are insufficient, suggest the user ask to analyze that document in full."
+                    )
                 yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks)} relevant excerpts"}))
             elif web_search_enabled:
                 # Fallback: document search returned nothing, try web search
@@ -466,7 +498,9 @@ Document excerpts:
                     supabase_client=supabase_client,
                 )
                 if chunks:
-                    result_text = "\n\n---\n\n".join(chunks)
+                    result_text = "\n\n---\n\n".join(
+                        f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                    )
                     tool_name = "search_documents"
                 yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks) if chunks else 0} results"}))
             else:
@@ -509,11 +543,12 @@ Document excerpts:
 
         # Context injection for the final answer (skip the tool round-trip)
         # Truncate very large results to avoid empty Gemini responses
-        truncated_result = result_text[:8000] if len(result_text) > 8000 else result_text
+        truncated_result = result_text[:16000] if len(result_text) > 16000 else result_text
         system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
 If the tool encountered an error, explain the issue to the user in simple terms and suggest they rephrase their question.
-If the results do not contain enough information, say so and answer from general knowledge if applicable.
+If the results do not contain enough information, clearly state that the available documents do not contain the answer. Do NOT dump or echo the raw tool results back to the user. Instead, briefly explain what information was found (if any) and suggest the user try a different query or upload a document that might contain the answer. You may answer from general knowledge if applicable, but clearly label it as such.
 When citing web sources, include the URLs.
+IMPORTANT: Never reproduce large tables, raw data dumps, or lengthy document excerpts verbatim. Always synthesize and summarize.
 
 Tool ({tool_name}) results:
 {truncated_result}"""
@@ -584,7 +619,7 @@ Tool ({tool_name}) results:
             result_text = sub_agent_result
 
         if result_text:
-            truncated_result = result_text[:8000] if len(result_text) > 8000 else result_text
+            truncated_result = result_text[:16000] if len(result_text) > 16000 else result_text
             system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
 
 Tool (analyze_document) results:
@@ -610,3 +645,4 @@ Tool (analyze_document) results:
             yield ("token", "I'm sorry, I couldn't generate a response. Please try again.")
 
     yield ("done", "")
+

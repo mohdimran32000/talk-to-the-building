@@ -160,7 +160,7 @@ def extract_metadata(text: str, file_name: str = "", file_content: bytes = None)
     client = _get_client()
     model = get_llm_model()
 
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             response = client.models.generate_content(
                 model=model,
@@ -173,10 +173,14 @@ def extract_metadata(text: str, file_name: str = "", file_content: bytes = None)
             result = json.loads(response.text)
             return result
         except Exception as e:
-            if attempt == 2:
-                logger.error(f"Metadata extraction failed after 3 attempts: {e}")
+            if attempt == 4:
+                logger.error(f"Metadata extraction failed after 5 attempts: {e}")
                 return _get_fallback(schema)
-            wait = 2 ** attempt
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                wait = 5 * (2 ** attempt)  # 5, 10, 20, 40, 80s
+            else:
+                wait = 2 ** attempt
             logger.warning(f"Metadata extraction attempt {attempt + 1} failed: {e}. Retrying in {wait}s...")
             time.sleep(wait)
 

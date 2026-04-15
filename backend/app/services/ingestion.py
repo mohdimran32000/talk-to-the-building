@@ -158,7 +158,13 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     return chunks
 
 
-def _embed_with_retry(func, *args, max_retries: int = 3, **kwargs):
+def _is_rate_limit_error(e: Exception) -> bool:
+    """Check if an exception is a 429 rate limit error."""
+    err_str = str(e)
+    return "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+
+
+def _embed_with_retry(func, *args, max_retries: int = 5, **kwargs):
     """Call an embedding function with exponential backoff on failure."""
     for attempt in range(max_retries):
         try:
@@ -166,7 +172,10 @@ def _embed_with_retry(func, *args, max_retries: int = 3, **kwargs):
         except Exception as e:
             if attempt == max_retries - 1:
                 raise
-            wait = 2 ** attempt
+            if _is_rate_limit_error(e):
+                wait = 5 * (2 ** attempt)  # 5, 10, 20, 40, 80s for rate limits
+            else:
+                wait = 2 ** (attempt + 1)  # 2, 4, 8, 16, 32s for other errors
             logger.warning(f"Embedding attempt {attempt + 1} failed: {e}. Retrying in {wait}s...")
             time.sleep(wait)
 
@@ -180,12 +189,31 @@ def embed_text(text: str) -> List[float]:
     return response.embeddings[0].values
 
 
-def embed_batch(texts: List[str], batch_size: int = 100) -> List[List[float]]:
+def _split_by_token_budget(texts: List[str], max_tokens: int = 18000, max_items: int = 50) -> List[List[str]]:
+    """Split texts into batches that stay under the Gemini embedding token limit.
+    Uses ~4 chars per token as a conservative estimate."""
+    batches = []
+    current_batch = []
+    current_tokens = 0
+    for text in texts:
+        est_tokens = len(text) // 4 + 1
+        if current_batch and (current_tokens + est_tokens > max_tokens or len(current_batch) >= max_items):
+            batches.append(current_batch)
+            current_batch = []
+            current_tokens = 0
+        current_batch.append(text)
+        current_tokens += est_tokens
+    if current_batch:
+        batches.append(current_batch)
+    return batches
+
+
+def embed_batch(texts: List[str], batch_size: int = 50) -> List[List[float]]:
     if not texts:
         return []
     all_embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
+    batches = _split_by_token_budget(texts, max_tokens=18000, max_items=batch_size)
+    for idx, batch in enumerate(batches):
         try:
             response = _embed_with_retry(
                 _client.models.embed_content,
@@ -196,6 +224,9 @@ def embed_batch(texts: List[str], batch_size: int = 100) -> List[List[float]]:
         except Exception:
             # Fallback: embed one at a time for this batch
             all_embeddings.extend([embed_text(t) for t in batch])
+        # Rate-limit pause between batches to avoid 429 errors
+        if idx < len(batches) - 1:
+            time.sleep(1)
     return all_embeddings
 
 
