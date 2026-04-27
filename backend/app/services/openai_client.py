@@ -28,6 +28,13 @@ def _get_client() -> genai.Client:
 
 SYSTEM_PROMPT_NO_DOCS = "You are a helpful assistant. Answer the user's questions clearly and concisely."
 
+OUTPUT_FORMAT_RULES = """
+OUTPUT FORMAT RULES (strict):
+- Never output raw HTML in your answer. Tags like <table>, <tr>, <td>, <th>, <br>, <span>, <div> are forbidden. If the source excerpts contain HTML, extract the data into clean markdown.
+- For tabular source data, prefer a concise markdown bulleted list unless the user explicitly asked for a table. If a markdown table is warranted, keep it small and relevant to the question — do not include every row and column.
+- Never paste, echo, or reproduce source excerpts verbatim. Always synthesize the answer in your own words.
+- Keep answers focused on what was asked. If a source has extra detail, leave it out."""
+
 
 def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_search_enabled: bool) -> str:
     """Build system prompt dynamically based on which tools are available."""
@@ -178,6 +185,18 @@ def _build_analyze_tool() -> types.FunctionDeclaration:
     )
 
 
+def _sanitize_keyword_query(q: str) -> str:
+    """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
+    A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
+    in websearch syntax, which silently excludes the very chunks the user is searching for.
+    """
+    import re
+    q = q.replace("-", " ").replace('"', " ")
+    q = re.sub(r"\bor\b", " ", q, flags=re.IGNORECASE)
+    q = re.sub(r"\s+", " ", q).strip()
+    return q
+
+
 def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, metadata_filter: Optional[dict] = None) -> List[dict]:
     """Embed query and search via hybrid (vector + keyword RRF) or vector-only RPC.
     Returns list of dicts with keys: content, document_id, file_name."""
@@ -192,7 +211,7 @@ def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, m
         fetch_count = top_k * 4 if reranking else top_k
         result = supabase_client.rpc("match_document_chunks_hybrid", {
             "query_embedding": query_embedding,
-            "query_text": query,
+            "query_text": _sanitize_keyword_query(query),
             "match_user_id": user_id,
             "match_count": fetch_count,
             "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
@@ -281,6 +300,7 @@ def stream_response(
         system_text = f"""You are a helpful assistant with access to the user's uploaded documents.
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
+{OUTPUT_FORMAT_RULES}
 
 Document excerpts:
 {context}"""
@@ -398,6 +418,7 @@ Document excerpts:
         fallback_system = f"""You are a helpful assistant with access to the user's uploaded documents.
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
+{OUTPUT_FORMAT_RULES}
 
 Document excerpts:
 {context}"""
@@ -548,7 +569,7 @@ Document excerpts:
 If the tool encountered an error, explain the issue to the user in simple terms and suggest they rephrase their question.
 If the results do not contain enough information, clearly state that the available documents do not contain the answer. Do NOT dump or echo the raw tool results back to the user. Instead, briefly explain what information was found (if any) and suggest the user try a different query or upload a document that might contain the answer. You may answer from general knowledge if applicable, but clearly label it as such.
 When citing web sources, include the URLs.
-IMPORTANT: Never reproduce large tables, raw data dumps, or lengthy document excerpts verbatim. Always synthesize and summarize.
+{OUTPUT_FORMAT_RULES}
 
 Tool ({tool_name}) results:
 {truncated_result}"""
@@ -621,6 +642,7 @@ Tool ({tool_name}) results:
         if result_text:
             truncated_result = result_text[:16000] if len(result_text) > 16000 else result_text
             system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
+{OUTPUT_FORMAT_RULES}
 
 Tool (analyze_document) results:
 {truncated_result}"""

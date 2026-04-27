@@ -19,3 +19,11 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local debug artifacts
+latest.json
+recent.json
+trace_tool.json
+
+# Local reference materials
+Ref Screenshots/

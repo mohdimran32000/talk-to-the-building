@@ -26,7 +26,7 @@ def _rerank_gemini(query: str, chunks: List[str], top_k: int) -> List[str]:
     model = get_llm_model()
 
     chunk_list = "\n\n".join(
-        f"[Chunk {i}]: {chunk[:500]}"
+        f"[Chunk {i}]: {chunk}"
         for i, chunk in enumerate(chunks)
     )
 
@@ -36,8 +36,7 @@ Query: {query}
 
 {chunk_list}
 
-Return a JSON object with a "rankings" array. Each element should have "index" (chunk number) and "score" (0.0-1.0).
-Only include chunks that have some relevance (score > 0.1)."""
+Return a JSON object with a "rankings" array, one entry per chunk. Each element should have "index" (chunk number) and "score" (0.0-1.0). Include every chunk — do not filter."""
 
     response = client.models.generate_content(
         model=model,

@@ -670,3 +670,58 @@ Full plan saved at `.agent/plans/11.sub-agents.md`
 |------|--------|
 | `backend/app/services/ingestion.py` | Modified (smart header detection with `_score_header_row()`, column name sanitization, deduplication) |
 | `backend/app/services/sql_tool.py` | Modified (`_fix_table_names()` fuzzy matcher, DuckDB type inference, compact SQL prompt, explicit table name list, max_output_tokens=2048) |
+
+### Improvement: Search Retrieval Quality
+- [x] Fix 1: Source attribution — chunks now return `{content, document_id, file_name}` dicts instead of plain strings, formatted as `[Source: filename]` in context injection so the LLM can reference specific documents
+- [x] Fix 2: Increased top_k from 5 to 10 — candidate pool increased from 20 to 40 for better recall across large documents
+- [x] Fix 3: Better search query description — tool definition now instructs Gemini to extract specific identifiers (codes, model numbers) from long messages instead of restating entire emails as the query
+- [x] Fix 4: Dominant-document hint — when 60%+ of results come from one document, appends a note prompting the LLM to suggest full-document analysis to the user
+- [x] Fix 5: Keyword search fix — migration `011_improved_keyword_search.sql` replaces `plainto_tsquery` with `websearch_to_tsquery` in the hybrid search RPC, which handles hyphenated codes (e.g. MDB-C-G3) correctly
+- [x] Fix 6: Context truncation raised from 8K to 16K chars to fit more chunks in context injection
+- [x] Fix 7: `_get_client()` cache poisoning bug — added `_client_cache["client"] is None` check and fixed assignment order (was causing NoneType errors when API key changed)
+- [x] Fix 8: Frontend SSE error handling — separated JSON parse try/catch from event dispatch so real errors aren't silently swallowed
+- [x] Fix 9: Ingestion retry logic — exponential backoff for Gemini rate limits during embedding/metadata extraction
+- [x] Fix 10: Ingestion semaphore — concurrency limiter on file upload endpoint to prevent overwhelming Gemini API
+
+#### Impact
+- Queries about specific equipment codes (e.g. MDB-C-G3) now find the correct chunks from the right document
+- LLM responses cite source documents by name
+- Long email/message queries no longer confuse the search — Gemini extracts the core question
+
+#### Files Changed (Search Retrieval Quality)
+| File | Action |
+|------|--------|
+| `backend/app/services/openai_client.py` | Modified (source attribution in `retrieve_chunks()` and all callers, top_k=10, query description, dominant-doc hint, `_get_client()` fix, truncation 8K→16K) |
+| `backend/migrations/011_improved_keyword_search.sql` | Created (`websearch_to_tsquery` RPC replacement) |
+| `backend/app/services/ingestion.py` | Modified (retry logic, rate limit backoff) |
+| `backend/app/services/metadata.py` | Modified (retry logic for metadata extraction) |
+| `backend/app/routers/files.py` | Modified (concurrency semaphore on upload) |
+| `frontend/src/lib/api.ts` | Modified (SSE error event handling fix) |
+| `frontend/vite.config.ts` | Modified (proxy config) |
+
+### Improvement: Retrieval Debugging Session (2026-04-18)
+User reported hallucinated answers on queries referencing hyphenated electrical panel codes (MDB-C-G3). Diagnosed via LangSmith traces — discovered three compounding bugs in the retrieval pipeline. Quality improved but not fully fixed; two deeper fixes deferred.
+
+- [x] Fix 1: **Gemini reranker no longer truncates chunks to 500 chars** — now passes full chunk content. Previously the reranker saw only ~16% of each ~3000-char chunk, scoring dense HTML-table chunks near zero.
+- [x] Fix 2: **Gemini reranker no longer filters `score > 0.1`** — always returns top_k. Previously a confused Gemini scoring pass could drop to 1 chunk, bypassing `len(chunks) > top_k` guard and starving the LLM.
+- [x] Fix 3: **Keyword-search query sanitization** — `_sanitize_keyword_query()` in `openai_client.py` strips `-`, `"`, and `or` before passing to `websearch_to_tsquery`. Email-derived queries like `MDB -C-G3` (space before dash from copy-paste) were being parsed as NOT operators, silently excluding the very chunks the user wanted. Vector embedding still uses raw query.
+- [x] Fix 4: **Output format rules injected into all context-injection system prompts** — bans raw HTML output, requires markdown. Stops the "40 KB HTML `<table><tr>` dump" failure mode when chunks contain table markup.
+- [x] Fix 5: **Cohere reranker path verified working** — already passes full chunks, no score filter, `top_n=top_k`. User switched provider to `cohere` in admin settings + added API key.
+- [x] Fix 6: **Killed zombie uvicorn processes** — user had 5+ stale Python processes bound to port 8001 from past sessions; none had picked up recent commits. Restarted with `--reload` so code changes go live.
+
+#### Still not fully resolved (deferred to follow-up)
+- **Chunking loses table headers** — Docling exports HTML tables; 500-word chunker slices mid-table, so chunks like `<td>N/A</td> <td>12</td>...` have no identifying context (no "this belongs to MDB-C-G3"). Root cause of persistent "vague / wrong floor" answers.
+- **Chunks still contain raw HTML markup** — need ingestion-side normalization from HTML tables → markdown tables before chunking.
+- **Next step:** Header-aware table chunking + HTML-to-markdown at ingest. Both require re-ingesting documents.
+
+#### Files Changed (Retrieval Debugging)
+| File | Action |
+|------|--------|
+| `backend/app/services/reranker.py` | Modified (removed `chunk[:500]` truncation at L29, removed `score > 0.1` filter from prompt) |
+| `backend/app/services/openai_client.py` | Modified (added `_sanitize_keyword_query()` + `OUTPUT_FORMAT_RULES` constant, appended format rules to 4 context-injection system prompts) |
+
+#### Diagnostic Evidence (LangSmith traces)
+- `019d9c81-7a0a-77a1-80a7-3801b1cf8652` — pre-fix: "Found 1 relevant excerpts" (from CCTV doc, wrong)
+- `019da0ac-04ec-7673-acf2-a876caa027db` — pre-fix: 40,796-char HTML dump for SMDB-C-L2 query
+- `019da181-ba7b-7662-8665-f65d7427f219` — post-first-fix but stale backend: still "Found 5"
+- Session ended with post-restart query returning "somewhere better" responses per user
