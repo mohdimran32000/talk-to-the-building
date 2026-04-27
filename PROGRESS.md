@@ -725,3 +725,31 @@ User reported hallucinated answers on queries referencing hyphenated electrical 
 - `019da0ac-04ec-7673-acf2-a876caa027db` — pre-fix: 40,796-char HTML dump for SMDB-C-L2 query
 - `019da181-ba7b-7662-8665-f65d7427f219` — post-first-fix but stale backend: still "Found 5"
 - Session ended with post-restart query returning "somewhere better" responses per user
+
+---
+
+## Episode 1 — Snapshot (2026-04-27)
+
+Episode 1 work is complete. This repo is now frozen at the Episode 1 final state.
+
+### Repo state
+- **Tag:** `Episode-1-Complete` → commit `53ff28d`
+- **Release:** [Episode 1 Complete — Modules 1-8](https://github.com/mohdimran32000/claude-code-agentic-rag-masterclass/releases/tag/Episode-1-Complete)
+- **Branch:** only `master` on origin (frozen reference)
+
+### Final commit
+`53ff28d fix: complete retrieval debugging session — reranker truncation, score filter, keyword sanitization`
+
+### `.gitignore` additions
+- `latest.json`, `recent.json`, `trace_tool.json` (debug dumps)
+- `Ref Screenshots/` (local reference materials)
+
+### Episode 2
+Episode 2 work lives in a separate repo:
+**https://github.com/mohdimran32000/claude-code-agentic-rag-masterclass-ep2**
+
+Episode 2 was forked from this repo's Episode 1 final state and is being developed independently. It uses a separate Supabase project and a separate local working directory.
+
+### How to revisit Episode 1
+- `git checkout Episode-1-Complete` (detached HEAD, read-only)
+- Or browse the [Release page](https://github.com/mohdimran32000/claude-code-agentic-rag-masterclass/releases/tag/Episode-1-Complete) on GitHub
