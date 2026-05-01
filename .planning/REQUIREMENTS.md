@@ -140,25 +140,77 @@
 
 ## Traceability
 
-Phase mapping populated by the roadmapper.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SCHEMA-01..05 | TBD | Pending |
-| RLS-01..04 | TBD | Pending |
-| BACKFILL-01..04 | TBD | Pending |
-| FOLDER-01..07 | TBD | Pending |
-| TOOL-01..10 | TBD | Pending |
-| SEARCH-01..03 | TBD | Pending |
-| EXPLORER-01..06 | TBD | Pending |
-| UI-01..11 | TBD | Pending |
-| TEST-01..05 | TBD | Pending |
+| SCHEMA-01 | Phase 1 | Pending |
+| SCHEMA-02 | Phase 1 | Pending |
+| SCHEMA-03 | Phase 1 | Pending |
+| SCHEMA-04 | Phase 1 | Pending |
+| SCHEMA-05 | Phase 1 | Pending |
+| RLS-01 | Phase 1 | Pending |
+| RLS-02 | Phase 1 | Pending |
+| RLS-03 | Phase 1 | Pending |
+| RLS-04 | Phase 1 | Pending |
+| BACKFILL-01 | Phase 2 | Pending |
+| BACKFILL-02 | Phase 2 | Pending |
+| BACKFILL-03 | Phase 2 | Pending |
+| BACKFILL-04 | Phase 2 | Pending |
+| FOLDER-01 | Phase 1 | Pending |
+| FOLDER-02 | Phase 3 | Pending |
+| FOLDER-03 | Phase 3 | Pending |
+| FOLDER-04 | Phase 3 | Pending |
+| FOLDER-05 | Phase 3 | Pending |
+| FOLDER-06 | Phase 3 | Pending |
+| FOLDER-07 | Phase 3 | Pending |
+| TOOL-01 | Phase 4 | Pending |
+| TOOL-02 | Phase 4 | Pending |
+| TOOL-03 | Phase 4 | Pending |
+| TOOL-04 | Phase 4 | Pending |
+| TOOL-05 | Phase 4 | Pending |
+| TOOL-06 | Phase 4 | Pending |
+| TOOL-07 | Phase 4 | Pending |
+| TOOL-08 | Phase 4 | Pending |
+| TOOL-09 | Phase 4 | Pending |
+| TOOL-10 | Phase 4 | Pending |
+| SEARCH-01 | Phase 4 | Pending |
+| SEARCH-02 | Phase 4 | Pending |
+| SEARCH-03 | Phase 4 | Pending |
+| EXPLORER-01 | Phase 5 | Pending |
+| EXPLORER-02 | Phase 5 | Pending |
+| EXPLORER-03 | Phase 5 | Pending |
+| EXPLORER-04 | Phase 5 | Pending |
+| EXPLORER-05 | Phase 5 | Pending |
+| EXPLORER-06 | Phase 5 | Pending |
+| UI-01 | Phase 6 | Pending |
+| UI-02 | Phase 6 | Pending |
+| UI-03 | Phase 6 | Pending |
+| UI-04 | Phase 6 | Pending |
+| UI-05 | Phase 6 | Pending |
+| UI-06 | Phase 6 | Pending |
+| UI-07 | Phase 6 | Pending |
+| UI-08 | Phase 6 | Pending |
+| UI-09 | Phase 6 | Pending |
+| UI-10 | Phase 6 | Pending |
+| UI-11 | Phase 6 | Pending |
+| TEST-01 | Phase 3 | Pending |
+| TEST-02 | Phase 4 | Pending |
+| TEST-03 | Phase 5 | Pending |
+| TEST-04 | Phase 1 | Pending |
+| TEST-05 | Phase 6 | Pending |
 
 **Coverage:**
-- v1 requirements: 52 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 52 ⚠️ (will resolve when roadmap is created)
+- v1 requirements: 55 total
+- Mapped to phases: 55 ✓
+- Unmapped: 0 ✓
+
+**Requirements per phase:**
+- Phase 1 (Schema + RLS + Path Normalizer): 11 — SCHEMA-01..05, RLS-01..04, FOLDER-01, TEST-04
+- Phase 2 (Backfill): 4 — BACKFILL-01..04
+- Phase 3 (Folder Service + Routers): 7 — FOLDER-02..07, TEST-01
+- Phase 4 (Five Tools + search_documents): 14 — TOOL-01..10, SEARCH-01..03, TEST-02
+- Phase 5 (Explorer Sub-Agent + SSE): 7 — EXPLORER-01..06, TEST-03
+- Phase 6 (File Explorer UI): 12 — UI-01..11, TEST-05
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-01 after initial definition*
+*Last updated: 2026-05-01 — Traceability populated by roadmapper; 6 phases, 55/55 v1 requirements mapped*
