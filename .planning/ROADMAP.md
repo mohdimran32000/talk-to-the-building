@@ -36,7 +36,15 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. `pg_trgm` is enabled and `EXPLAIN ANALYZE` on a representative `grep`-shape query against `documents.content_markdown` shows `Bitmap Index Scan`, not `Seq Scan`; `text_pattern_ops` btree on `folder_path` accelerates `LIKE 'prefix%'` queries.
   4. Existing Episode 1 documents are queryable at `folder_path='/'`, `scope='user'` immediately after migrations land, with no manual data movement; the canonical-form CHECK constraint rejects `INSERT ... folder_path='projects/'` (trailing slash) and `INSERT ... folder_path='projects'` (no leading slash).
   5. A single Python `normalize_path()` helper exists in `app/services/folder_service.py` and is the only chokepoint for path canonicalization; round-trip tests confirm `'/'`, `'/a/b'`, and `'/a/b/c'` survive through every write path unchanged.
-**Plans**: TBD
+**Plans**: 8 plans
+- [ ] 01-PLAN.md — normalize_path() pure-function helper in folder_service.py (FOLDER-01)
+- [ ] 02-PLAN.md — Migration 012: folder_path + scope columns + CHECK coupling + scope-aware unique index + pg_trgm extension (SCHEMA-01, SCHEMA-02)
+- [ ] 03-PLAN.md — Migration 013: folders table + COALESCE-based unique expression index + RLS-enable (SCHEMA-04)
+- [ ] 04-PLAN.md — Migration 014: content_markdown column + status enum + backfill-scan partial index (SCHEMA-03)
+- [ ] 05-PLAN.md — Migration 015: two-scope RLS policies (19 total) + is_admin() helper + forbid_scope_mutation() trigger (RLS-01, RLS-02, RLS-03)
+- [ ] 06-PLAN.md — Migration 016: search-acceleration indexes (gin_trgm_ops + text_pattern_ops) (SCHEMA-05)
+- [ ] 07-PLAN.md — [BLOCKING] Apply migrations 012-016 via run_migrations.py + structural verify
+- [ ] 08-PLAN.md — test_two_scope_rls.py: cross-user × cross-scope RLS matrix (40 falsifiable assertions); register in test_all.py (RLS-04, TEST-04)
 **Threats / pitfalls**: Pitfall 1 (RLS scope-leak — RANK 1: separate INSERT/UPDATE per scope, `WITH CHECK (scope = OLD.scope)`, CHECK coupling scope/user_id, defense in depth via app-layer `.eq('scope',...)`); Pitfall 3 (grep perf — pg_trgm GIN + `text_pattern_ops` btree both land here); Pitfall 4 (path normalization drift — DB CHECK regex `^/$|^/[^/]+(/[^/]+)*$` + single Python helper); Pitfall 10 (concurrent upload race — unique constraint `(scope, COALESCE(user_id,'00..0'), path)` on `folders`).
 
 ### Phase 2: content_markdown Backfill (Gated)
@@ -110,7 +118,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 0/TBD | Not started | - |
+| 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 0/8 | Not started | - |
 | 2. content_markdown Backfill (Gated) | 0/TBD | Not started | - |
 | 3. Folder Service + Routers + Dedup Extension | 0/TBD | Not started | - |
 | 4. Five Exploration Tools + search_documents Extension | 0/TBD | Not started | - |

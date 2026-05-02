@@ -1066,44 +1066,56 @@ CREATE POLICY "folders_delete_global"
 
 ---
 
-## Open Questions for Planner
+## Open Questions for Planner (RESOLVED)
+
+All 9 questions below were resolved during planning (plans 01-08). No question is left open.
 
 1. **`normalize_path()` `..` and `.` semantics — accept-and-resolve or reject?**
    - Pitfalls doc says reject (path traversal security risk).
    - This research recommends **reject with `ValueError`**.
    - Planner: confirm this matches user intent or ask user. **Default: reject.**
+   - **RESOLVED:** REJECT — `normalize_path` raises `ValueError` on `..` or `.` segments. Decided in plan 01 (`backend/app/services/folder_service.py`); enforced by VALIDATION.md assertions 27-28 and exercised by plan 08 task 1-08-03 (`h.test("normalize_path('/a/../b') raises ValueError", ...)` and the equivalent for `/a/./b`).
 
 2. **`NULLS NOT DISTINCT` (PG15+) vs COALESCE sentinel for the folders unique index.**
    - Both work. `NULLS NOT DISTINCT` is cleaner; COALESCE is universally compatible.
    - Supabase runs PG15+ (verified — major version is 15+ across all current projects).
    - **Recommendation: COALESCE sentinel** (zero risk of cross-project portability issue, identical performance). Planner can decide.
+   - **RESOLVED:** COALESCE sentinel via expression index (NOT a table-level UNIQUE constraint, which can't take expressions). Decided in plans 02 and 03: `CREATE UNIQUE INDEX ... ON ... (scope, COALESCE(user_id, '00000000-0000-0000-0000-000000000000'::uuid), <path-or-filename>);`. Pitfall 3 in this document (line 1137-1140) documents the table-constraint trap that would fail if attempted.
 
 3. **Path-traversal inside Python `normalize_path()` — does it apply to scope='global' paths too?**
    - Yes. The function is scope-agnostic (it operates on a single string). Validation happens at write time regardless of scope.
+   - **RESOLVED:** YES — the function is scope-agnostic and is invoked at every write site regardless of scope. Plan 01 confirms a single chokepoint; the DB CHECK constraint (plan 02) is defense-in-depth for any SQL-direct write that bypasses the Python layer.
 
 4. **Should `scope='both'` ever appear in the database?**
    - **No.** `'both'` is a tool-arg value (LLM passes `scope='both'` to `tree`/`grep`/etc to mean "search both scopes"). The database CHECK constraint only allows `'user'` or `'global'`. The tool layer (Phase 4) translates `'both'` into "no `.eq('scope', ...)` filter."
+   - **RESOLVED:** NO — the column-level `scope` is `Literal["user", "global"]` ONLY. The Phase 1 CHECK constraint (plan 02) enforces this at the DB layer. The value `"both"` is a Phase 4 tool-arg default for `tree`/`grep`/etc. that the tool layer translates into "omit the `.eq('scope', ...)` filter." `"both"` is OUT OF SCOPE for Phase 1 schema.
 
 5. **`is_admin()` SQL function — `SECURITY DEFINER` and `search_path = public` — any RLS recursion risk?**
    - The function reads `public.profiles` which has its own RLS. With `SECURITY DEFINER`, it runs as the function owner (typically the migration role / postgres) — bypassing the RLS on profiles for that read. This is intentional (otherwise admin checks would deadlock with profile-read policies).
    - **Recommend planner verify the migration role has `SELECT` on `public.profiles`** (it does by default in Supabase) and document this in the function comment.
+   - **RESOLVED:** NO recursion risk. Plan 05 implements `public.is_admin()` as `LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public`. SECURITY DEFINER runs the read as the function owner (postgres role), bypassing the RLS on `profiles` that would otherwise depend on `is_admin` to grant the read (deadlock avoidance). Owner has `SELECT` on `public.profiles` by Supabase default. Function comment in migration 015 documents this rationale.
 
 6. **TEST_USER_ADMIN setup — manual SQL one-time step or automated in test setup?**
    - **Recommend manual one-time** documented in test docstring. Automating it requires service-role access from the test, which works but adds a dependency. The same person who runs migrations can run one `UPDATE profiles SET is_admin=true ...` statement.
+   - **RESOLVED:** MANUAL one-time. Plan 08 task 1-08-01 is a `checkpoint:human-action` documenting the exact SQL: `UPDATE public.profiles SET is_admin=true WHERE email='admin@test.com';`. Not automated because automating it would require service-role access from the test fixture, which is the exact anti-pattern (per CONCERNS.md) that the rest of plan 08 carefully avoids. The test setup function (`_verify_admin_setup`) bails with a clear error if the promotion was not done.
 
 7. **Composite scope-aware index on `documents (scope, user_id, folder_path)` — Phase 1 or Phase 4?**
    - **Recommend Phase 4.** Add only after `EXPLAIN ANALYZE` on real Phase 4 queries shows it's needed.
    - Risk if deferred: Phase 4 plans need a quick "add this index" task. Acceptable.
+   - **RESOLVED:** DEFERRED to Phase 4. Phase 1 (plan 06, migration 016) adds only the two minimum-viable indexes — GIN trigram on `content_markdown` and btree `text_pattern_ops` on `folder_path`. Composite index design needs the actual TOOL-01..10 query plans which only exist after Phase 4 builds them. Phase 4 plan must include a quick "EXPLAIN ANALYZE → add composite index if needed" task.
 
 8. **`document_chunks.folder_path` column — should chunks denormalize folder_path too?**
    - The research/architecture docs **don't add `folder_path` to chunks** — only `scope`. Joins back to `documents` give the path.
    - **Recommendation: do not add folder_path to chunks** unless Phase 4 query plans show join cost is unacceptable.
    - The roadmap text says "Five small migrations 012 (folder_path + scope columns + CHECK constraints)" — ambiguous whether this means chunks too. Default: chunks get `scope` only (matching ARCHITECTURE.md System Overview lines 96-97).
+   - **RESOLVED:** `document_chunks` gets `scope` ONLY (no `folder_path`). Decided in plan 02. Chunks always inherit a document's folder via the `document_id` FK; denormalizing `folder_path` onto chunks would create an update-anomaly when documents are moved between folders in Phase 3. The `scope` column on chunks IS required for RLS (cannot derive scope from a join inside an RLS policy without performance pain).
 
 9. **CLAUDE.md says "Save plans to `.agent/plans/`"; GSD framework writes to `.planning/phases/`. Which is canonical for Phase 1?**
    - This research goes to `.planning/phases/01-.../01-RESEARCH.md` per GSD convention.
    - Planner should clarify with user whether implementation plans live in `.agent/plans/` (CLAUDE.md) or `.planning/phases/` (GSD). **Recommend: GSD location for now**, since the rest of GSD framework is set up.
+   - **RESOLVED:** `.planning/phases/` (GSD convention). All 8 Phase-1 plans live at `.planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/`. Test files follow the project's existing convention: `backend/scripts/test_two_scope_rls.py` matching the sibling `backend/scripts/test_rls.py` pattern (not a `tests/` directory; CLAUDE.md uses `scripts/` as the test root).
 
+---
 ---
 
 ## Don't Hand-Roll
