@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 plan 04 complete — migration 014 (content_markdown column + status enum + backfill-scan partial index) written at backend/migrations/014_content_markdown_column.sql
-last_updated: "2026-05-03T16:22:22Z"
-last_activity: 2026-05-03 -- Plan 01-04 (migration 014 content_markdown column) complete
+stopped_at: Phase 1 plan 05 complete — migration 015 (two-scope RLS policies + is_admin() helper + forbid_scope_mutation() trigger) written at backend/migrations/015_two_scope_rls.sql
+last_updated: "2026-05-03T16:30:06Z"
+last_activity: 2026-05-03 -- Plan 01-05 (migration 015 two-scope RLS policies) complete
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 8
-  completed_plans: 4
-  percent: 50
+  completed_plans: 5
+  percent: 63
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 6 (Schema Foundation + Two-Scope RLS + Path Normalizer)
-Plan: 4 of 8 in current phase (Wave 2 in progress — migrations 012 + 013 + 014 written, 015-016 pending)
+Plan: 5 of 8 in current phase (Wave 3 in progress — migrations 012 + 013 + 014 + 015 written, 016 pending; plans 07-08 BLOCKING + test gate)
 Status: Executing
-Last activity: 2026-05-03 -- Plan 01-04 (migration 014 content_markdown column) complete
+Last activity: 2026-05-03 -- Plan 01-05 (migration 015 two-scope RLS policies) complete
 
-Progress: [█████░░░░░] 50%
+Progress: [██████░░░░] 63%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 4
-- Average duration: ~1.25 min
-- Total execution time: ~5 min
+- Total plans completed: 5
+- Average duration: ~1.6 min
+- Total execution time: ~8 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1 | 4 | ~5 min | ~1.25 min |
+| 1 | 5 | ~8 min | ~1.6 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (~1 min, 1 file, 1 task) → 01-02 (~2 min, 1 file, 1 task) → 01-03 (~1 min, 1 file, 1 task) → 01-04 (~1 min, 1 file, 1 task)
-- Trend: ✅ on-spec, no deviations, paste-from-RESEARCH succeeded first try across all four plans
+- Last 5 plans: 01-01 (~1 min, 1 file, 1 task) → 01-02 (~2 min, 1 file, 1 task) → 01-03 (~1 min, 1 file, 1 task) → 01-04 (~1 min, 1 file, 1 task) → 01-05 (~3 min, 1 file, 1 task — 1 minor Rule-1 auto-fix for plan-verifier substring collision in design-note comments)
+- Trend: ✅ on-spec, paste-from-RESEARCH succeeded; plan 05 took fractionally longer due to two comment-text rewordings to fix substring collisions in the plan's own automated verifier (semantically zero-impact)
 
 *Updated after each plan completion*
 
@@ -78,6 +78,12 @@ Recent decisions affecting current work:
 - Phase 1 / Plan 04: Canonical 4-element vocabulary `'pending'`, `'ready'`, `'failed'`, `'requires_user_reupload'` per REQUIREMENTS.md SCHEMA-03 — deliberately rejected `'ok'` (ROADMAP additional context error) and `'processing'` (belongs to documents.status)
 - Phase 1 / Plan 04: Partial index `WHERE content_markdown_status <> 'ready'` is a new convention for this codebase — makes Phase 2 backfill scan O(rows-needing-backfill); index stays small in steady state; called out in migration header
 - Phase 1 / Plan 04: `content_markdown` deliberately nullable with no DEFAULT — Phase 2's backfill_content_markdown.py owns population; making it NOT NULL would block migration on existing rows
+- Phase 1 / Plan 05: Migration 015 uses **snake_case policy naming** (`documents_select`, `documents_insert_user`, `documents_insert_global`, ...) — deliberate shift from Episode-1 sentence-case (`"Users can view own documents"`); makes the (table, op, scope) decomposition obvious in `pg_policy`; called out in migration header
+- Phase 1 / Plan 05: Migration 015 wraps every `auth.uid()` reference as `(SELECT auth.uid())` — Postgres caches the subquery result per query (10× faster than bare `auth.uid()` per row on hot tables); first use of this Pitfall 5 perf-wrap pattern in the codebase; explicitly called out in migration design notes
+- Phase 1 / Plan 05: RLS-03 enforcement uses a **BEFORE UPDATE trigger** (`forbid_scope_mutation` raising `check_violation` when `NEW.scope IS DISTINCT FROM OLD.scope`) — NOT `WITH CHECK (scope = OLD.scope)` (which is invalid Postgres; RLS WITH CHECK cannot reference OLD.col). Critical correction from the original phase brief
+- Phase 1 / Plan 05: `public.is_admin()` SQL helper (LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public) factors out the EXISTS-from-profiles admin check used in 8 policies — DRY; STABLE for per-statement caching; reads `is_admin` from profiles at query time (no JWT-cached claim, avoids "admin demotion mid-session stale-cache" risk)
+- Phase 1 / Plan 05: 5 chunks policies (no UPDATE) vs. 7 documents/folders policies — `document_chunks` is insert-and-delete only (re-ingestion is delete-then-insert per record_manager); the trigger is still attached to chunks defensively in case a future migration adds a chunks UPDATE policy
+- Phase 1 / Plan 05: Global-scope INSERT policies require `user_id IS NULL` alongside `scope='global' AND public.is_admin()` — defense in depth with the scope/user_id coupling CHECK from plan 02; even an admin cannot insert a malformed `(scope='global', user_id=<uuid>)` row
 - Phase 2: Backfill re-runs Docling against original Storage blobs (NOT chunk stitching); blobs that are GC'd → `requires_user_reupload`
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
@@ -108,5 +114,5 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-05-03
-Stopped at: Plan 01-04 complete — migration 014 (content_markdown column + status enum + backfill-scan partial index) at backend/migrations/014_content_markdown_column.sql (commit d744518); ready for plan 05 (migration 015 two-scope RLS policies)
-Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/05-PLAN.md
+Stopped at: Plan 01-05 complete — migration 015 (two-scope RLS policies + is_admin() helper + forbid_scope_mutation() trigger; 19 policies + 3 triggers + 2 helper functions) at backend/migrations/015_two_scope_rls.sql (commit 55077ad); ready for plan 06 (migration 016 search-acceleration indexes — gin_trgm_ops + text_pattern_ops)
+Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/06-PLAN.md

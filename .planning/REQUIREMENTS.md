@@ -15,9 +15,9 @@
 
 ### Row-Level Security (Two-scope)
 
-- [ ] **RLS-01**: SELECT policy on documents/document_chunks/folders matches `((scope='user' AND user_id=(SELECT auth.uid())) OR scope='global')`
-- [ ] **RLS-02**: Separate INSERT and UPDATE policies per scope; admin-only writes for `scope='global'` via existing `is_admin()` helper
-- [ ] **RLS-03**: UPDATE policy with `WITH CHECK (scope = OLD.scope)` forbids in-place scope mutation (promotion = delete + admin re-upload)
+- [x] **RLS-01**: SELECT policy on documents/document_chunks/folders matches `((scope='user' AND user_id=(SELECT auth.uid())) OR scope='global')` ✅ Phase 1 / Plan 05 (2026-05-03)
+- [x] **RLS-02**: Separate INSERT and UPDATE policies per scope; admin-only writes for `scope='global'` via existing `is_admin()` helper ✅ Phase 1 / Plan 05 (2026-05-03)
+- [x] **RLS-03**: UPDATE policy with `WITH CHECK (scope = OLD.scope)` forbids in-place scope mutation (promotion = delete + admin re-upload) — **implemented as `BEFORE UPDATE` trigger `forbid_scope_mutation()` (canonical Postgres workaround; RLS WITH CHECK cannot reference OLD)** ✅ Phase 1 / Plan 05 (2026-05-03)
 - [ ] **RLS-04**: `test_rls.py` extended with full cross-user × cross-scope SELECT/INSERT/UPDATE/DELETE matrix
 
 ### Backfill
@@ -147,9 +147,9 @@
 | SCHEMA-03 | Phase 1 | Complete |
 | SCHEMA-04 | Phase 1 | ✅ Complete (Plan 03, 37853b7) |
 | SCHEMA-05 | Phase 1 | Pending |
-| RLS-01 | Phase 1 | Pending |
-| RLS-02 | Phase 1 | Pending |
-| RLS-03 | Phase 1 | Pending |
+| RLS-01 | Phase 1 | ✅ Complete (Plan 05, 55077ad) |
+| RLS-02 | Phase 1 | ✅ Complete (Plan 05, 55077ad) |
+| RLS-03 | Phase 1 | ✅ Complete (Plan 05, 55077ad) — implemented via BEFORE UPDATE trigger (canonical Postgres workaround for OLD.col reference) |
 | RLS-04 | Phase 1 | Pending |
 | BACKFILL-01 | Phase 2 | Pending |
 | BACKFILL-02 | Phase 2 | Pending |
@@ -213,4 +213,4 @@
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-01 — Traceability populated by roadmapper; 6 phases, 55/55 v1 requirements mapped*
+*Last updated: 2026-05-03 — Phase 1 / Plan 05 complete: RLS-01, RLS-02, RLS-03 marked complete (migration 015 — 19 two-scope policies + is_admin() helper + forbid_scope_mutation() trigger; commit 55077ad)*
