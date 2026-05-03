@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 plan 02 complete — migration 012 (folder_path + scope columns + pg_trgm) written at backend/migrations/012_folder_path_and_scope.sql
-last_updated: "2026-05-03T16:11:48Z"
-last_activity: 2026-05-03 -- Plan 01-02 (migration 012 folder_path + scope) complete
+stopped_at: Phase 1 plan 03 complete — migration 013 (folders table + unique expression index + RLS-enable) written at backend/migrations/013_folders_table.sql
+last_updated: "2026-05-03T16:17:21Z"
+last_activity: 2026-05-03 -- Plan 01-03 (migration 013 folders table) complete
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 8
-  completed_plans: 2
-  percent: 25
+  completed_plans: 3
+  percent: 38
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 6 (Schema Foundation + Two-Scope RLS + Path Normalizer)
-Plan: 2 of 8 in current phase (Wave 2 in progress — migration 012 written, 013-016 pending)
+Plan: 3 of 8 in current phase (Wave 2 in progress — migrations 012 + 013 written, 014-016 pending)
 Status: Executing
-Last activity: 2026-05-03 -- Plan 01-02 (migration 012 folder_path + scope) complete
+Last activity: 2026-05-03 -- Plan 01-03 (migration 013 folders table) complete
 
-Progress: [██░░░░░░░░] 25%
+Progress: [███░░░░░░░] 38%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 2
-- Average duration: ~1.5 min
-- Total execution time: ~3 min
+- Total plans completed: 3
+- Average duration: ~1.3 min
+- Total execution time: ~4 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1 | 2 | ~3 min | ~1.5 min |
+| 1 | 3 | ~4 min | ~1.3 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (~1 min, 1 file, 1 task) → 01-02 (~2 min, 1 file, 1 task)
-- Trend: ✅ on-spec, no deviations, paste-from-RESEARCH succeeded first try across both plans
+- Last 5 plans: 01-01 (~1 min, 1 file, 1 task) → 01-02 (~2 min, 1 file, 1 task) → 01-03 (~1 min, 1 file, 1 task)
+- Trend: ✅ on-spec, no deviations, paste-from-RESEARCH succeeded first try across all three plans
 
 *Updated after each plan completion*
 
@@ -70,6 +70,10 @@ Recent decisions affecting current work:
 - Phase 1 / Plan 02: Scope-aware unique index uses `COALESCE(user_id, '00000000-0000-0000-0000-000000000000'::uuid)` sentinel — Postgres treats NULL as distinct in unique indexes by default; sentinel forces global rows to compete in the same uniqueness namespace (Pitfall 10 mitigation)
 - Phase 1 / Plan 02: `folder_path` is NOT denormalized onto `document_chunks` — chunks get `scope` only; defer path denormalization until Phase 4 query plans show join cost is unacceptable (RESEARCH.md Open Question §8)
 - Phase 1 / Plan 02: Idempotent migration shape: drop-then-add for CHECK constraints (Postgres has no `ADD CONSTRAINT IF NOT EXISTS`), `IF NOT EXISTS` everywhere else; established as Phase 1 migration convention
+- Phase 1 / Plan 03: `public.folders` is a sparse side table for first-class empty-folder tracking — no FK from `documents.folder_path` to `folders.path` (per ARCHITECTURE.md Pattern 2); most folders exist by inference from `documents.folder_path`, and rows in `folders` exist only for explicitly-empty folders
+- Phase 1 / Plan 03: RLS policies for `public.folders` deferred to migration 015 (lands the full Phase 1 RLS catalog — documents, document_chunks, folders — in one reviewable file); RLS-enabled-no-policies = fail-closed default for the authenticated role until 015 runs
+- Phase 1 / Plan 03: Inline `CONSTRAINT` clauses in `CREATE TABLE` for new tables (vs. drop-then-add for existing tables); the simpler form applies when the table itself is gated by `IF NOT EXISTS`
+- Phase 1 / Plan 03: Re-used the COALESCE sentinel (`'00000000-0000-0000-0000-000000000000'::uuid`) idiom from migration 012 — same Pitfall 10 mitigation pattern, this time on the folders side table; bedrock for Phase 3's `INSERT ... ON CONFLICT DO NOTHING` concurrent-upload safety
 - Phase 2: Backfill re-runs Docling against original Storage blobs (NOT chunk stitching); blobs that are GC'd → `requires_user_reupload`
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
@@ -100,5 +104,5 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-05-03
-Stopped at: Plan 01-02 complete — migration 012 (folder_path + scope columns + pg_trgm) at backend/migrations/012_folder_path_and_scope.sql (commit 29d387f); ready for plan 03 (migration 013 folders table)
-Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/03-PLAN.md
+Stopped at: Plan 01-03 complete — migration 013 (folders table + unique expression index + RLS-enable) at backend/migrations/013_folders_table.sql (commit 37853b7); ready for plan 04 (migration 014 content_markdown)
+Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/04-PLAN.md
