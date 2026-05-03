@@ -9,7 +9,7 @@
 
 - [x] **SCHEMA-01**: `documents.folder_path` TEXT NOT NULL DEFAULT `/` with CHECK constraint enforcing canonical form (`^/$|^/[^/]+(/[^/]+)*$`)
 - [x] **SCHEMA-02**: `documents.scope` TEXT NOT NULL DEFAULT `user` with CHECK constraint coupling scope/user_id consistency (user-scope requires user_id; global-scope requires user_id IS NULL)
-- [ ] **SCHEMA-03**: `documents.content_markdown` TEXT + `content_markdown_status` enum (`pending`/`ready`/`failed`/`requires_user_reupload`)
+- [x] **SCHEMA-03**: `documents.content_markdown` TEXT + `content_markdown_status` enum (`pending`/`ready`/`failed`/`requires_user_reupload`) ✅ Phase 1 / Plan 04 (2026-05-03)
 - [x] **SCHEMA-04**: Thin `folders` table with `(id, scope, user_id, path, created_at)` and unique constraint on `(scope, COALESCE(user_id, '00000000-0000-0000-0000-000000000000'), path)` for first-class empty-folder tracking
 - [ ] **SCHEMA-05**: `pg_trgm` extension enabled + GIN trigram indexes on `documents.content_markdown` and `documents.folder_path` + `text_pattern_ops` btree on `documents.folder_path`
 
@@ -144,7 +144,7 @@
 |-------------|-------|--------|
 | SCHEMA-01 | Phase 1 | ✅ Complete (Plan 02, 29d387f) |
 | SCHEMA-02 | Phase 1 | ✅ Complete (Plan 02, 29d387f) |
-| SCHEMA-03 | Phase 1 | Pending |
+| SCHEMA-03 | Phase 1 | Complete |
 | SCHEMA-04 | Phase 1 | ✅ Complete (Plan 03, 37853b7) |
 | SCHEMA-05 | Phase 1 | Pending |
 | RLS-01 | Phase 1 | Pending |
