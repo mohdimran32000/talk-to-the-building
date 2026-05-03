@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 plan 01 complete — normalize_path() helper shipped at backend/app/services/folder_service.py
-last_updated: "2026-05-03T16:07:05Z"
-last_activity: 2026-05-03 -- Plan 01-01 (normalize_path helper) complete
+stopped_at: Phase 1 plan 02 complete — migration 012 (folder_path + scope columns + pg_trgm) written at backend/migrations/012_folder_path_and_scope.sql
+last_updated: "2026-05-03T16:11:48Z"
+last_activity: 2026-05-03 -- Plan 01-02 (migration 012 folder_path + scope) complete
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 8
-  completed_plans: 1
-  percent: 13
+  completed_plans: 2
+  percent: 25
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 6 (Schema Foundation + Two-Scope RLS + Path Normalizer)
-Plan: 1 of 8 in current phase (Wave 1 complete — normalize_path helper)
+Plan: 2 of 8 in current phase (Wave 2 in progress — migration 012 written, 013-016 pending)
 Status: Executing
-Last activity: 2026-05-03 -- Plan 01-01 (normalize_path helper) complete
+Last activity: 2026-05-03 -- Plan 01-02 (migration 012 folder_path + scope) complete
 
-Progress: [█░░░░░░░░░] 13%
+Progress: [██░░░░░░░░] 25%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 1
-- Average duration: ~1 min
-- Total execution time: ~1 min
+- Total plans completed: 2
+- Average duration: ~1.5 min
+- Total execution time: ~3 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1 | 1 | ~1 min | ~1 min |
+| 1 | 2 | ~3 min | ~1.5 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (~1 min, 1 file, 1 task)
-- Trend: ✅ on-spec, no deviations, paste-from-RESEARCH succeeded first try
+- Last 5 plans: 01-01 (~1 min, 1 file, 1 task) → 01-02 (~2 min, 1 file, 1 task)
+- Trend: ✅ on-spec, no deviations, paste-from-RESEARCH succeeded first try across both plans
 
 *Updated after each plan completion*
 
@@ -66,6 +66,10 @@ Recent decisions affecting current work:
 - Phase 1: Five small migrations (012–016) over one mega-migration — individually reviewable + revertable
 - Phase 1 / Plan 01: `normalize_path()` uses stdlib only (`re`, `unicodedata`); raises `ValueError` (not custom exception) for invalid input; NFC Unicode normalization; case preserved (Postgres comparison is case-sensitive — `/Projects` ≠ `/projects` is intentional)
 - Phase 1 / Plan 01: Inline `__main__` self-tests (15 cases) — fast sanity check; full matrix lives in plan 08's `test_two_scope_rls.py`
+- Phase 1 / Plan 02: Migration 012 enables `pg_trgm` early (not in 016) — eliminates dependency-ordering surprises since `CREATE EXTENSION IF NOT EXISTS` is sub-second on Supabase
+- Phase 1 / Plan 02: Scope-aware unique index uses `COALESCE(user_id, '00000000-0000-0000-0000-000000000000'::uuid)` sentinel — Postgres treats NULL as distinct in unique indexes by default; sentinel forces global rows to compete in the same uniqueness namespace (Pitfall 10 mitigation)
+- Phase 1 / Plan 02: `folder_path` is NOT denormalized onto `document_chunks` — chunks get `scope` only; defer path denormalization until Phase 4 query plans show join cost is unacceptable (RESEARCH.md Open Question §8)
+- Phase 1 / Plan 02: Idempotent migration shape: drop-then-add for CHECK constraints (Postgres has no `ADD CONSTRAINT IF NOT EXISTS`), `IF NOT EXISTS` everywhere else; established as Phase 1 migration convention
 - Phase 2: Backfill re-runs Docling against original Storage blobs (NOT chunk stitching); blobs that are GC'd → `requires_user_reupload`
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
@@ -96,5 +100,5 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-05-03
-Stopped at: Plan 01-01 complete — normalize_path() helper at backend/app/services/folder_service.py (commit b608452); ready for plan 02 (migration 012)
-Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/02-PLAN.md
+Stopped at: Plan 01-02 complete — migration 012 (folder_path + scope columns + pg_trgm) at backend/migrations/012_folder_path_and_scope.sql (commit 29d387f); ready for plan 03 (migration 013 folders table)
+Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/03-PLAN.md
