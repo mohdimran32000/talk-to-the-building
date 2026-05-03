@@ -11,7 +11,7 @@
 - [x] **SCHEMA-02**: `documents.scope` TEXT NOT NULL DEFAULT `user` with CHECK constraint coupling scope/user_id consistency (user-scope requires user_id; global-scope requires user_id IS NULL)
 - [x] **SCHEMA-03**: `documents.content_markdown` TEXT + `content_markdown_status` enum (`pending`/`ready`/`failed`/`requires_user_reupload`) ✅ Phase 1 / Plan 04 (2026-05-03)
 - [x] **SCHEMA-04**: Thin `folders` table with `(id, scope, user_id, path, created_at)` and unique constraint on `(scope, COALESCE(user_id, '00000000-0000-0000-0000-000000000000'), path)` for first-class empty-folder tracking
-- [ ] **SCHEMA-05**: `pg_trgm` extension enabled + GIN trigram indexes on `documents.content_markdown` and `documents.folder_path` + `text_pattern_ops` btree on `documents.folder_path`
+- [x] **SCHEMA-05**: `pg_trgm` extension enabled + GIN trigram indexes on `documents.content_markdown` and `documents.folder_path` + `text_pattern_ops` btree on `documents.folder_path` ✅ Phase 1 / Plan 06 (2026-05-03) — pg_trgm enabled in migration 012; 5 indexes (3 GIN gin_trgm_ops + 2 btree text_pattern_ops) added in migration 016
 
 ### Row-Level Security (Two-scope)
 
@@ -146,7 +146,7 @@
 | SCHEMA-02 | Phase 1 | ✅ Complete (Plan 02, 29d387f) |
 | SCHEMA-03 | Phase 1 | Complete |
 | SCHEMA-04 | Phase 1 | ✅ Complete (Plan 03, 37853b7) |
-| SCHEMA-05 | Phase 1 | Pending |
+| SCHEMA-05 | Phase 1 | ✅ Complete (Plan 06, f36e1b7) |
 | RLS-01 | Phase 1 | ✅ Complete (Plan 05, 55077ad) |
 | RLS-02 | Phase 1 | ✅ Complete (Plan 05, 55077ad) |
 | RLS-03 | Phase 1 | ✅ Complete (Plan 05, 55077ad) — implemented via BEFORE UPDATE trigger (canonical Postgres workaround for OLD.col reference) |
@@ -213,4 +213,4 @@
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-03 — Phase 1 / Plan 05 complete: RLS-01, RLS-02, RLS-03 marked complete (migration 015 — 19 two-scope policies + is_admin() helper + forbid_scope_mutation() trigger; commit 55077ad)*
+*Last updated: 2026-05-03 — Phase 1 / Plan 06 complete: SCHEMA-05 marked complete (migration 016 — 5 search-acceleration indexes: 3 GIN gin_trgm_ops + 2 btree text_pattern_ops; commit f36e1b7)*

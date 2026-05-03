@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 plan 05 complete — migration 015 (two-scope RLS policies + is_admin() helper + forbid_scope_mutation() trigger) written at backend/migrations/015_two_scope_rls.sql
-last_updated: "2026-05-03T16:30:06Z"
-last_activity: 2026-05-03 -- Plan 01-05 (migration 015 two-scope RLS policies) complete
+stopped_at: Phase 1 plan 06 complete — migration 016 (search-acceleration indexes; 3 GIN trigram + 2 text_pattern_ops btree) written at backend/migrations/016_search_indexes.sql
+last_updated: "2026-05-03T16:38:13Z"
+last_activity: 2026-05-03 -- Plan 01-06 (migration 016 search-acceleration indexes) complete
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 8
-  completed_plans: 5
-  percent: 63
+  completed_plans: 6
+  percent: 75
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 6 (Schema Foundation + Two-Scope RLS + Path Normalizer)
-Plan: 5 of 8 in current phase (Wave 3 in progress — migrations 012 + 013 + 014 + 015 written, 016 pending; plans 07-08 BLOCKING + test gate)
+Plan: 6 of 8 in current phase (Wave 3 complete — migrations 012 + 013 + 014 + 015 + 016 all written; plans 07-08 next: BLOCKING schema push + test gate)
 Status: Executing
-Last activity: 2026-05-03 -- Plan 01-05 (migration 015 two-scope RLS policies) complete
+Last activity: 2026-05-03 -- Plan 01-06 (migration 016 search-acceleration indexes) complete
 
-Progress: [██████░░░░] 63%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 5
-- Average duration: ~1.6 min
-- Total execution time: ~8 min
+- Total plans completed: 6
+- Average duration: ~1.7 min
+- Total execution time: ~10 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1 | 5 | ~8 min | ~1.6 min |
+| 1 | 6 | ~10 min | ~1.7 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (~1 min, 1 file, 1 task) → 01-02 (~2 min, 1 file, 1 task) → 01-03 (~1 min, 1 file, 1 task) → 01-04 (~1 min, 1 file, 1 task) → 01-05 (~3 min, 1 file, 1 task — 1 minor Rule-1 auto-fix for plan-verifier substring collision in design-note comments)
-- Trend: ✅ on-spec, paste-from-RESEARCH succeeded; plan 05 took fractionally longer due to two comment-text rewordings to fix substring collisions in the plan's own automated verifier (semantically zero-impact)
+- Last 6 plans: 01-01 (~1 min, 1 file, 1 task) → 01-02 (~2 min, 1 file, 1 task) → 01-03 (~1 min, 1 file, 1 task) → 01-04 (~1 min, 1 file, 1 task) → 01-05 (~3 min, 1 file, 1 task — 1 minor Rule-1 auto-fix for plan-verifier substring collision in design-note comments) → 01-06 (~2 min, 1 file, 1 task — same Rule-1 substring-collision pattern, lowercase-keyword fix in header comments documenting concurrent-variant upgrade path)
+- Trend: ✅ on-spec, paste-from-RESEARCH succeeded; comment-keyword-case discipline now an established convention for migrations whose verifier asserts keyword absence via case-sensitive substring
 
 *Updated after each plan completion*
 
@@ -84,6 +84,10 @@ Recent decisions affecting current work:
 - Phase 1 / Plan 05: `public.is_admin()` SQL helper (LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public) factors out the EXISTS-from-profiles admin check used in 8 policies — DRY; STABLE for per-statement caching; reads `is_admin` from profiles at query time (no JWT-cached claim, avoids "admin demotion mid-session stale-cache" risk)
 - Phase 1 / Plan 05: 5 chunks policies (no UPDATE) vs. 7 documents/folders policies — `document_chunks` is insert-and-delete only (re-ingestion is delete-then-insert per record_manager); the trigger is still attached to chunks defensively in case a future migration adds a chunks UPDATE policy
 - Phase 1 / Plan 05: Global-scope INSERT policies require `user_id IS NULL` alongside `scope='global' AND public.is_admin()` — defense in depth with the scope/user_id coupling CHECK from plan 02; even an admin cannot insert a malformed `(scope='global', user_id=<uuid>)` row
+- Phase 1 / Plan 06: Migration 016 adds 5 search-acceleration indexes (3 GIN `gin_trgm_ops` + 2 btree `text_pattern_ops`) — both operator classes are net-new in this codebase; called out in migration header. `gin_trgm_ops` for ILIKE/regex acceleration on TEXT (Phase 4 grep + glob substring); `text_pattern_ops` REQUIRED for `LIKE 'prefix/%'` because Supabase runs en_US.UTF-8 and default-collation btree silently does NOT accelerate prefix LIKE in non-C locales (Pitfall 4 perf table foot-gun)
+- Phase 1 / Plan 06: All indexes use plain `CREATE INDEX` (non-concurrent) — runner wraps each migration in a transaction, concurrent variant forbidden inside transactions. Production-scale upgrade path (drop + recreate with concurrent variant during maintenance window) documented in migration header for operators at 10k+ docs per user
+- Phase 1 / Plan 06: pg_trgm extension boundary preserved — extension lives in 012, indexes live in 016; no re-enable in 016. Composite `(scope, COALESCE(user_id,'00..0'::uuid), folder_path)` index DEFERRED to Phase 4 per RESEARCH.md §4 / Open Question §7 — speculative addition risks index bloat and slows writes; add only when EXPLAIN ANALYZE on actual Phase 4 query shapes shows it's needed
+- Phase 1 / Plan 06: Comment-keyword-case discipline established as convention — when a migration's own verifier asserts a keyword's absence via case-sensitive substring match (e.g., `'CONCURRENTLY' not in sql`), use the lowercase form of the keyword in design-note comments. Postgres SQL is case-insensitive so the lowercase form is semantically identical valid SQL, AND it sidesteps the verifier collision. Same Rule-1 pattern as plan 05's fix
 - Phase 2: Backfill re-runs Docling against original Storage blobs (NOT chunk stitching); blobs that are GC'd → `requires_user_reupload`
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
@@ -114,5 +118,5 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-05-03
-Stopped at: Plan 01-05 complete — migration 015 (two-scope RLS policies + is_admin() helper + forbid_scope_mutation() trigger; 19 policies + 3 triggers + 2 helper functions) at backend/migrations/015_two_scope_rls.sql (commit 55077ad); ready for plan 06 (migration 016 search-acceleration indexes — gin_trgm_ops + text_pattern_ops)
-Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/06-PLAN.md
+Stopped at: Plan 01-06 complete — migration 016 (search-acceleration indexes; 5 total: 3 GIN `gin_trgm_ops` on documents.content_markdown / documents.folder_path / folders.path + 2 btree `text_pattern_ops` on documents.folder_path / folders.path) at backend/migrations/016_search_indexes.sql (commit f36e1b7); ready for plan 07 ([BLOCKING] apply migrations 012-016 via run_migrations.py + structural verify)
+Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/07-PLAN.md
