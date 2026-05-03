@@ -29,7 +29,7 @@
 
 ### Folder Service
 
-- [ ] **FOLDER-01**: Single canonical `normalize_path()` helper called by every write path (UI upload, drag-move, rename, backfill, tool arg parsing)
+- [x] **FOLDER-01**: Single canonical `normalize_path()` helper called by every write path (UI upload, drag-move, rename, backfill, tool arg parsing) ✅ Phase 1 / Plan 01 (2026-05-03)
 - [ ] **FOLDER-02**: `folder_service.py` provides `list_folder`, `create_folder`, `move_document`, `rename_folder`, `delete_folder`
 - [ ] **FOLDER-03**: Folder rename is transactional prefix update on both `documents.folder_path` AND `folders.path` via Supabase RPC
 - [ ] **FOLDER-04**: Folder delete rejects non-empty (returns structured `{error: "FOLDER_NOT_EMPTY", document_count, subfolder_count}`)
@@ -155,7 +155,7 @@
 | BACKFILL-02 | Phase 2 | Pending |
 | BACKFILL-03 | Phase 2 | Pending |
 | BACKFILL-04 | Phase 2 | Pending |
-| FOLDER-01 | Phase 1 | Pending |
+| FOLDER-01 | Phase 1 | ✅ Complete (Plan 01, b608452) |
 | FOLDER-02 | Phase 3 | Pending |
 | FOLDER-03 | Phase 3 | Pending |
 | FOLDER-04 | Phase 3 | Pending |

@@ -37,7 +37,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Existing Episode 1 documents are queryable at `folder_path='/'`, `scope='user'` immediately after migrations land, with no manual data movement; the canonical-form CHECK constraint rejects `INSERT ... folder_path='projects/'` (trailing slash) and `INSERT ... folder_path='projects'` (no leading slash).
   5. A single Python `normalize_path()` helper exists in `app/services/folder_service.py` and is the only chokepoint for path canonicalization; round-trip tests confirm `'/'`, `'/a/b'`, and `'/a/b/c'` survive through every write path unchanged.
 **Plans**: 8 plans
-- [ ] 01-PLAN.md — normalize_path() pure-function helper in folder_service.py (FOLDER-01)
+- [x] 01-PLAN.md — normalize_path() pure-function helper in folder_service.py (FOLDER-01) ✅ 2026-05-03
 - [ ] 02-PLAN.md — Migration 012: folder_path + scope columns + CHECK coupling + scope-aware unique index + pg_trgm extension (SCHEMA-01, SCHEMA-02)
 - [ ] 03-PLAN.md — Migration 013: folders table + COALESCE-based unique expression index + RLS-enable (SCHEMA-04)
 - [ ] 04-PLAN.md — Migration 014: content_markdown column + status enum + backfill-scan partial index (SCHEMA-03)
@@ -118,7 +118,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 0/8 | Not started | - |
+| 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 1/8 | In progress | - |
 | 2. content_markdown Backfill (Gated) | 0/TBD | Not started | - |
 | 3. Folder Service + Routers + Dedup Extension | 0/TBD | Not started | - |
 | 4. Five Exploration Tools + search_documents Extension | 0/TBD | Not started | - |

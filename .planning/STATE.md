@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Roadmap created — 6 phases, 55 v1 requirements mapped, critical path Schema → Backfill → Tools → Explorer
-last_updated: "2026-05-02T11:18:48.462Z"
-last_activity: 2026-05-02 -- Phase 1 planning complete
+stopped_at: Phase 1 plan 01 complete — normalize_path() helper shipped at backend/app/services/folder_service.py
+last_updated: "2026-05-03T16:07:05Z"
+last_activity: 2026-05-03 -- Plan 01-01 (normalize_path helper) complete
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 8
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 13
 ---
 
 # Project State
@@ -26,30 +26,30 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 6 (Schema Foundation + Two-Scope RLS + Path Normalizer)
-Plan: 0 of TBD in current phase
-Status: Ready to execute
-Last activity: 2026-05-02 -- Phase 1 planning complete
+Plan: 1 of 8 in current phase (Wave 1 complete — normalize_path helper)
+Status: Executing
+Last activity: 2026-05-03 -- Plan 01-01 (normalize_path helper) complete
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 13%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: —
+- Total plans completed: 1
+- Average duration: ~1 min
+- Total execution time: ~1 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 1 | 1 | ~1 min | ~1 min |
 
 **Recent Trend:**
 
-- Last 5 plans: —
-- Trend: — (no plans complete yet)
+- Last 5 plans: 01-01 (~1 min, 1 file, 1 task)
+- Trend: ✅ on-spec, no deviations, paste-from-RESEARCH succeeded first try
 
 *Updated after each plan completion*
 
@@ -64,6 +64,8 @@ Recent decisions affecting current work:
 - Phase 1: `documents.content_markdown` stored alongside chunks rather than reconstructed on demand — chunk overlap would corrupt grep line numbers
 - Phase 1: Two-scope model (`user` + `global`) with admin-only writes; tools default `scope='both'` with override arg
 - Phase 1: Five small migrations (012–016) over one mega-migration — individually reviewable + revertable
+- Phase 1 / Plan 01: `normalize_path()` uses stdlib only (`re`, `unicodedata`); raises `ValueError` (not custom exception) for invalid input; NFC Unicode normalization; case preserved (Postgres comparison is case-sensitive — `/Projects` ≠ `/projects` is intentional)
+- Phase 1 / Plan 01: Inline `__main__` self-tests (15 cases) — fast sanity check; full matrix lives in plan 08's `test_two_scope_rls.py`
 - Phase 2: Backfill re-runs Docling against original Storage blobs (NOT chunk stitching); blobs that are GC'd → `requires_user_reupload`
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
@@ -93,6 +95,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-01
-Stopped at: Roadmap created — 6 phases, 55 v1 requirements mapped, critical path Schema → Backfill → Tools → Explorer
-Resume file: None — ready for `/gsd-plan-phase 1`
+Last session: 2026-05-03
+Stopped at: Plan 01-01 complete — normalize_path() helper at backend/app/services/folder_service.py (commit b608452); ready for plan 02 (migration 012)
+Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/02-PLAN.md
