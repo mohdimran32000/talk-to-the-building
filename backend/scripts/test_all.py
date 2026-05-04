@@ -16,6 +16,7 @@ import test_messages
 import test_files
 import test_rag
 import test_rls
+import test_two_scope_rls
 import test_settings
 import test_metadata
 import test_hybrid
@@ -30,6 +31,7 @@ SUITES = [
     ("Files", test_files),
     ("RAG", test_rag),
     ("RLS", test_rls),
+    ("Two-Scope RLS", test_two_scope_rls),
     ("Settings", test_settings),
     ("Metadata", test_metadata),
     ("Hybrid", test_hybrid),
