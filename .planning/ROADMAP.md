@@ -17,7 +17,7 @@ Episode 2 transforms the existing flat per-user document store into a Claude-Cod
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Schema Foundation + Two-Scope RLS + Path Normalizer** — Five small migrations (012–016) introduce `folder_path`, `scope`, `content_markdown`, the thin `folders` table, two-scope RLS, `pg_trgm` indexes, and the canonical `normalize_path()` helper.
+- [x] **Phase 1: Schema Foundation + Two-Scope RLS + Path Normalizer** — Five small migrations (012–016) introduce `folder_path`, `scope`, `content_markdown`, the thin `folders` table, two-scope RLS, `pg_trgm` indexes, and the canonical `normalize_path()` helper. ✅ 2026-05-04
 - [ ] **Phase 2: content_markdown Backfill (Gated)** — Re-run Docling against existing Storage blobs to populate `documents.content_markdown`; surface re-index status; gate `grep`/`read_document` until operational.
 - [ ] **Phase 3: Folder Service + Routers + Dedup Extension** — Pure CRUD layer: `folder_service.py`, `folders` router, extended `files` router (upload-into-folder, rename, move), `record_manager` dedup key extended.
 - [ ] **Phase 4: Five Exploration Tools + search_documents Extension** — `tree`, `glob`, `grep`, `list_files`, `read_document` with Pydantic v2 arg validation, hard token-budget caps, scope-tagged result rows; `search_documents` extended with `folder_path`/`scope` filters.
@@ -44,7 +44,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 05-PLAN.md — Migration 015: two-scope RLS policies (19 total) + is_admin() helper + forbid_scope_mutation() trigger (RLS-01, RLS-02, RLS-03) ✅ 2026-05-03
 - [x] 06-PLAN.md — Migration 016: search-acceleration indexes (gin_trgm_ops + text_pattern_ops) (SCHEMA-05) ✅ 2026-05-03
 - [x] 07-PLAN.md — [BLOCKING] Apply migrations 012-016 via run_migrations.py + structural verify ✅ 2026-05-04
-- [ ] 08-PLAN.md — test_two_scope_rls.py: cross-user × cross-scope RLS matrix (40 falsifiable assertions); register in test_all.py (RLS-04, TEST-04)
+- [x] 08-PLAN.md — test_two_scope_rls.py: cross-user × cross-scope RLS matrix (49 assertions; passed 49/0); register in test_all.py (RLS-04, TEST-04) ✅ 2026-05-04
 **Threats / pitfalls**: Pitfall 1 (RLS scope-leak — RANK 1: separate INSERT/UPDATE per scope, `WITH CHECK (scope = OLD.scope)`, CHECK coupling scope/user_id, defense in depth via app-layer `.eq('scope',...)`); Pitfall 3 (grep perf — pg_trgm GIN + `text_pattern_ops` btree both land here); Pitfall 4 (path normalization drift — DB CHECK regex `^/$|^/[^/]+(/[^/]+)*$` + single Python helper); Pitfall 10 (concurrent upload race — unique constraint `(scope, COALESCE(user_id,'00..0'), path)` on `folders`).
 
 ### Phase 2: content_markdown Backfill (Gated)

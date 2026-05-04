@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 plan 07 complete — migrations 012-016 applied to live Supabase (project qgojopazceldfxfbbnhy) via MCP apply_migration; 18-check verifier at backend/scripts/verify_phase1_schema.py passes 18/18 live; plan 08 (test_two_scope_rls.py) unblocked
+stopped_at: Phase 1 COMPLETE — Two-Scope RLS matrix passes 49/0 (RLS-04 / Pitfall 1 / RANK 1 gate; Phase 2 unblocked). Migration 017 fixes pre-existing Episode-1 profiles RLS recursion via is_admin() helper. Carry-forward items in 08-SUMMARY (commit 017.sql; align test_settings admin assumption).
 last_updated: "2026-05-04T00:00:00Z"
-last_activity: 2026-05-04 -- Plan 01-07 (apply migrations 012-016 + structural verify) complete
+last_activity: 2026-05-04 -- Plan 01-08 (two-scope RLS test matrix) complete; Phase 1 closed
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 1 of 6 (Schema Foundation + Two-Scope RLS + Path Normalizer)
-Plan: 7 of 8 in current phase (Wave 4 complete — migrations 012-016 applied live + 18-check schema verifier; plan 08 next: two-scope RLS test matrix)
-Status: Executing
-Last activity: 2026-05-04 -- Plan 01-07 (apply migrations 012-016 + structural verify) complete
+Phase: 1 of 6 COMPLETE — Schema Foundation + Two-Scope RLS + Path Normalizer
+Plan: 8 of 8 in phase 1 done; Phase 2 (content_markdown backfill) is next
+Status: Phase 1 complete; awaiting Phase 2 discuss/plan/execute
+Last activity: 2026-05-04 -- Plan 01-08 (two-scope RLS test matrix passes 49/0) complete
 
-Progress: [█████████░] 88%
+Progress: [██████████] 100% (Phase 1 of 6); Project: 17%
 
 ## Performance Metrics
 
@@ -118,5 +118,5 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-05-04
-Stopped at: Plan 01-07 complete — migrations 012-016 applied to live Supabase (project qgojopazceldfxfbbnhy) via MCP apply_migration (deviation from runner-canonical path; user-approved); 18-check structural verifier authored at backend/scripts/verify_phase1_schema.py and passes 18/18 against the live DB (executed via MCP execute_sql); Episode 1 backfill vacuously satisfied (0 existing rows in documents/document_chunks). Plan 08 (test_two_scope_rls.py) unblocked.
-Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/08-PLAN.md
+Stopped at: Phase 1 COMPLETE — all 8 plans done. Two-Scope RLS test matrix passes 49/0 against the live DB (cross-user × cross-scope SELECT/INSERT/UPDATE/DELETE on documents, document_chunks, folders; scope-mutation triggers on all 3 tables; CHECK constraints; normalize_path round-trips). Migration 017 added (Episode-1 profiles RLS recursion fix). Carry-forward: commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption (not Phase 1 regressions). RLS-04 / Pitfall 1 / RANK 1 mitigation gate satisfied. Phase 2 (content_markdown backfill) unblocked.
+Resume file: next is /gsd-discuss-phase 2 or /gsd-plan-phase 2
