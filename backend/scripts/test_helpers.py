@@ -18,6 +18,16 @@ SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
 TEST_USER_A = {"email": "testuser@example.com", "password": "testpassword123"}
 TEST_USER_B = {"email": "test@test.com", "password": "supabase123"}
 
+# Admin fixture for two-scope RLS tests (added in Phase 1 plan 08).
+# REQUIRES one-time setup: after creating this user via Supabase Auth, run
+#   UPDATE public.profiles SET is_admin = true WHERE email = 'admin@test.com';
+# in the Supabase SQL editor. Password may be overridden via TEST_USER_ADMIN_PASSWORD
+# env var; defaults to the value below for local-dev convenience.
+TEST_USER_ADMIN = {
+    "email": "admin@test.com",
+    "password": os.environ.get("TEST_USER_ADMIN_PASSWORD", "adminpassword123"),
+}
+
 _token_cache = {}  # Cache tokens to avoid Supabase rate limits
 
 passed = 0
@@ -84,6 +94,41 @@ def get_auth_token(email=None, password=None):
     token = resp.json()["access_token"]
     _token_cache[cache_key] = token
     return token
+
+
+def get_admin_token() -> str:
+    """Return JWT for the admin test user (TEST_USER_ADMIN).
+
+    Wraps get_auth_token() so the admin token participates in the same _token_cache
+    as TEST_USER_A/B tokens. The admin user MUST have been promoted to is_admin=true
+    in public.profiles before this is called — see test_two_scope_rls.py docstring
+    for the one-time UPDATE SQL.
+    """
+    return get_auth_token(TEST_USER_ADMIN["email"], TEST_USER_ADMIN["password"])
+
+
+def get_user_supabase_client(jwt_token: str):
+    """Return a supabase-py Client authenticated as the JWT's user — RLS applies.
+
+    Critical: uses SUPABASE_ANON_KEY (NOT service-role). Service-role bypasses
+    RLS and silently passes broken tests. PostgREST honors the Authorization
+    header for RLS evaluation; we set it via client.postgrest.auth(jwt_token).
+
+    Used by test_two_scope_rls.py to talk directly to Supabase (bypassing the
+    FastAPI backend, which has no folders router until Phase 3). Every direct
+    DB write/read in that test goes through a client returned by this helper.
+
+    Args:
+        jwt_token: A valid Supabase JWT for the user the client should impersonate.
+                   Get one via get_auth_token() or get_admin_token().
+
+    Returns:
+        supabase.Client with postgrest.auth(jwt_token) called.
+    """
+    from supabase import create_client
+    client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    client.postgrest.auth(jwt_token)
+    return client
 
 
 def auth_headers(token):
