@@ -1,4 +1,26 @@
-"""Row-Level Security isolation tests — two users cannot see each other's data."""
+"""Row-Level Security isolation tests — two users cannot see each other's data.
+
+This suite exercises the FastAPI BACKEND's user-isolation enforcement via HTTP
+endpoints (/api/threads, /api/files, /api/messages). It is complementary to
+backend/scripts/test_two_scope_rls.py, which exercises DATABASE-level RLS
+directly via supabase-py with anon-key + JWT.
+
+## Audit Log (Phase 1)
+
+After Phase 1 migration 015 (two-scope RLS) replaced the Episode-1 single-axis
+policies, every assertion in this suite was audited against the new policy
+catalog. Counts:
+
+- Class A (still valid; user-branch of new policies preserves single-axis semantics): 13
+- Class B (payload update needed): 0
+- Class C (RETIRED — coverage moved to test_two_scope_rls.py): 0
+- Class D (rewritten for new snake_case policy names): 0
+
+Rationale for zero retirements: this suite hits HTTP endpoints (router-layer
+enforcement via Supabase service-role + auth deps), while test_two_scope_rls.py
+hits the database directly with anon-key + JWT. Different attack surfaces,
+non-overlapping coverage.
+"""
 import sys
 import os
 import requests
@@ -40,24 +62,30 @@ def run():
         h.section("RLS - Threads")
         r = requests.get(f"{h.BASE_URL}/api/threads", headers=headers_b)
         b_thread_ids = [t["id"] for t in r.json()] if r.status_code == 200 else []
+        # AUDIT: Class A — user-isolation; two-scope SELECT user-branch (scope='user' AND user_id=auth.uid()) preserves it
         h.test("B cannot see A's threads", a_thread_id not in b_thread_ids, str(b_thread_ids))
 
         if a_thread_id:
             r = requests.get(f"{h.BASE_URL}/api/threads/{a_thread_id}", headers=headers_b)
+            # AUDIT: Class A — endpoint relies on RLS USING (user_id=auth.uid()); user-branch unchanged by 015
             h.test("B cannot get A's thread", r.status_code in (404, 500), f"status={r.status_code}")
 
             r = requests.delete(f"{h.BASE_URL}/api/threads/{a_thread_id}", headers=headers_b)
             # Verify A's thread still exists
             r2 = requests.get(f"{h.BASE_URL}/api/threads/{a_thread_id}", headers=headers_a)
+            # AUDIT: Class A — DELETE policy user-branch unchanged
             h.test("B cannot delete A's thread", r2.status_code == 200, f"status after B's delete attempt={r2.status_code}")
         else:
+            # AUDIT: Class A — fallback assertion; same classification as the path above
             h.test("B cannot get A's thread", False, "no thread created")
+            # AUDIT: Class A — fallback assertion; same classification as the path above
             h.test("B cannot delete A's thread", False, "no thread created")
 
         # RLS: messages
         h.section("RLS - Messages")
         if a_thread_id:
             r = requests.get(f"{h.BASE_URL}/api/threads/{a_thread_id}/messages", headers=headers_b)
+            # AUDIT: Class A — messages RLS not modified by migration 015
             h.test("B cannot see A's messages", r.status_code in (404, 500), f"status={r.status_code}")
 
             r = requests.post(
@@ -65,21 +93,27 @@ def run():
                 headers=headers_b,
                 json={"content": "sneaky message"},
             )
+            # AUDIT: Class A — router-level guard; messages RLS unchanged
             h.test("B cannot post to A's thread", r.status_code in (404, 500), f"status={r.status_code}")
         else:
+            # AUDIT: Class A — fallback path
             h.test("B cannot see A's messages", False, "no thread")
+            # AUDIT: Class A — fallback path
             h.test("B cannot post to A's thread", False, "no thread")
 
         # RLS: files
         h.section("RLS - Files")
         r = requests.get(f"{h.BASE_URL}/api/files", headers=headers_b)
         b_file_ids = [f["id"] for f in r.json()] if r.status_code == 200 else []
+        # AUDIT: Class A — A's upload is scope='user', user_id=A; new SELECT policy hides from B
         h.test("B cannot see A's files", a_doc_id not in b_file_ids, str(b_file_ids))
 
         if a_doc_id:
             r = requests.delete(f"{h.BASE_URL}/api/files/{a_doc_id}", headers=headers_b)
+            # AUDIT: Class A — DELETE policy user-branch (scope='user' AND user_id=auth.uid()) preserves prior behavior
             h.test("B cannot delete A's file", r.status_code == 404, f"status={r.status_code}")
         else:
+            # AUDIT: Class A — fallback path
             h.test("B cannot delete A's file", False, "no file")
 
         # Verify A's data intact
@@ -89,6 +123,7 @@ def run():
         r_files = requests.get(f"{h.BASE_URL}/api/files", headers=headers_a)
         a_file_ids = [f["id"] for f in r_files.json()] if r_files.status_code == 200 else []
         intact = (a_thread_id in a_thread_ids if a_thread_id else True) and (a_doc_id in a_file_ids if a_doc_id else True)
+        # AUDIT: Class A — invariant: B's failed attempts left A's data untouched (no policy bypass)
         h.test("A's data intact after B's attempts", intact, f"threads={a_thread_ids}, files={a_file_ids}")
 
     finally:
