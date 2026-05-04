@@ -1,9 +1,11 @@
 ---
-status: partial
+status: approved-with-carry-forward
 phase: 01-schema-foundation-two-scope-rls-path-normalizer
 source: [01-VERIFICATION.md]
 started: 2026-05-04T00:00:00Z
 updated: 2026-05-04T00:00:00Z
+approved_at: 2026-05-04T00:00:00Z
+approval_note: "User-approved with all 4 items as carry-forward to Phase 2 prep / follow-up. Phase 1 marked complete; no items block Phase 2."
 ---
 
 ## Current Test
