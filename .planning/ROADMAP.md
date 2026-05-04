@@ -43,7 +43,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 04-PLAN.md — Migration 014: content_markdown column + status enum + backfill-scan partial index (SCHEMA-03) ✅ 2026-05-03
 - [x] 05-PLAN.md — Migration 015: two-scope RLS policies (19 total) + is_admin() helper + forbid_scope_mutation() trigger (RLS-01, RLS-02, RLS-03) ✅ 2026-05-03
 - [x] 06-PLAN.md — Migration 016: search-acceleration indexes (gin_trgm_ops + text_pattern_ops) (SCHEMA-05) ✅ 2026-05-03
-- [ ] 07-PLAN.md — [BLOCKING] Apply migrations 012-016 via run_migrations.py + structural verify
+- [x] 07-PLAN.md — [BLOCKING] Apply migrations 012-016 via run_migrations.py + structural verify ✅ 2026-05-04
 - [ ] 08-PLAN.md — test_two_scope_rls.py: cross-user × cross-scope RLS matrix (40 falsifiable assertions); register in test_all.py (RLS-04, TEST-04)
 **Threats / pitfalls**: Pitfall 1 (RLS scope-leak — RANK 1: separate INSERT/UPDATE per scope, `WITH CHECK (scope = OLD.scope)`, CHECK coupling scope/user_id, defense in depth via app-layer `.eq('scope',...)`); Pitfall 3 (grep perf — pg_trgm GIN + `text_pattern_ops` btree both land here); Pitfall 4 (path normalization drift — DB CHECK regex `^/$|^/[^/]+(/[^/]+)*$` + single Python helper); Pitfall 10 (concurrent upload race — unique constraint `(scope, COALESCE(user_id,'00..0'), path)` on `folders`).
 

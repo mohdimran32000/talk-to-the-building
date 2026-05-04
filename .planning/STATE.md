@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 plan 06 complete — migration 016 (search-acceleration indexes; 3 GIN trigram + 2 text_pattern_ops btree) written at backend/migrations/016_search_indexes.sql
-last_updated: "2026-05-03T16:38:13Z"
-last_activity: 2026-05-03 -- Plan 01-06 (migration 016 search-acceleration indexes) complete
+stopped_at: Phase 1 plan 07 complete — migrations 012-016 applied to live Supabase (project qgojopazceldfxfbbnhy) via MCP apply_migration; 18-check verifier at backend/scripts/verify_phase1_schema.py passes 18/18 live; plan 08 (test_two_scope_rls.py) unblocked
+last_updated: "2026-05-04T00:00:00Z"
+last_activity: 2026-05-04 -- Plan 01-07 (apply migrations 012-016 + structural verify) complete
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 8
-  completed_plans: 6
-  percent: 75
+  completed_plans: 7
+  percent: 88
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 1 of 6 (Schema Foundation + Two-Scope RLS + Path Normalizer)
-Plan: 6 of 8 in current phase (Wave 3 complete — migrations 012 + 013 + 014 + 015 + 016 all written; plans 07-08 next: BLOCKING schema push + test gate)
+Plan: 7 of 8 in current phase (Wave 4 complete — migrations 012-016 applied live + 18-check schema verifier; plan 08 next: two-scope RLS test matrix)
 Status: Executing
-Last activity: 2026-05-03 -- Plan 01-06 (migration 016 search-acceleration indexes) complete
+Last activity: 2026-05-04 -- Plan 01-07 (apply migrations 012-016 + structural verify) complete
 
-Progress: [████████░░] 75%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
@@ -117,6 +117,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-03
-Stopped at: Plan 01-06 complete — migration 016 (search-acceleration indexes; 5 total: 3 GIN `gin_trgm_ops` on documents.content_markdown / documents.folder_path / folders.path + 2 btree `text_pattern_ops` on documents.folder_path / folders.path) at backend/migrations/016_search_indexes.sql (commit f36e1b7); ready for plan 07 ([BLOCKING] apply migrations 012-016 via run_migrations.py + structural verify)
-Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/07-PLAN.md
+Last session: 2026-05-04
+Stopped at: Plan 01-07 complete — migrations 012-016 applied to live Supabase (project qgojopazceldfxfbbnhy) via MCP apply_migration (deviation from runner-canonical path; user-approved); 18-check structural verifier authored at backend/scripts/verify_phase1_schema.py and passes 18/18 against the live DB (executed via MCP execute_sql); Episode 1 backfill vacuously satisfied (0 existing rows in documents/document_chunks). Plan 08 (test_two_scope_rls.py) unblocked.
+Resume file: .planning/phases/01-schema-foundation-two-scope-rls-path-normalizer/08-PLAN.md
