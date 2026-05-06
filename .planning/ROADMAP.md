@@ -56,7 +56,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. `backend/scripts/backfill_content_markdown.py` re-runs Docling against the original Storage blob for every Episode 1 document with NULL `content_markdown`, populating it with canonical markdown (NOT stitched-from-chunks); the script is idempotent, throttled via the existing `_ingestion_semaphore`, and logs success/failure/missing-blob counts.
   3. Documents whose source blob is missing from Storage are explicitly marked `content_markdown_status = 'requires_user_reupload'` and surfaced in tool results (not silently skipped); `grep` and `read_document` return `status: 'pending_reindex'` rather than empty matches when they encounter such rows.
   4. Spot-checking 10 random backfilled documents shows their `content_markdown` is byte-equivalent (±20 chars) to a fresh Docling export of the same blob — no overlap duplication, no chunk stitching artifacts.
-**Plans**: TBD
+**Plans**: 4 plans
+- [x] 01-PLAN.md — Storage upload at upload-time + Migration 018 storage.objects RLS (Storage Gap closure) ✅ 2026-05-06
+- [ ] 02-PLAN.md — Synchronous content_markdown write inside ingest_document() + docling==2.91.0 pin (BACKFILL-01)
+- [ ] 03-PLAN.md — backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04, --dry-run / --limit / --document-id / --purge-orphans)
+- [ ] 04-PLAN.md — test_backfill.py integration suite + register in test_all.py (BACKFILL-03 verifier + Phase 2 SC4 byte-equivalence)
 **Threats / pitfalls**: Pitfall 6 (content_markdown backfill done wrong — RANK 2: re-run Docling, NEVER `string_agg` from chunks; the 50-word chunk overlap silently breaks grep line numbers); operational risk that Storage blobs may be GC'd → `requires_user_reupload` fallback is non-negotiable.
 
 ### Phase 3: Folder Service + Routers + Dedup Extension
@@ -118,8 +122,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 6/8 | In progress | - |
-| 2. content_markdown Backfill (Gated) | 0/TBD | Not started | - |
+| 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
+| 2. content_markdown Backfill (Gated) | 1/4 | In progress | - |
 | 3. Folder Service + Routers + Dedup Extension | 0/TBD | Not started | - |
 | 4. Five Exploration Tools + search_documents Extension | 0/TBD | Not started | - |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |

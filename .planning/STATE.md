@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 COMPLETE — Two-Scope RLS matrix passes 49/0 (RLS-04 / Pitfall 1 / RANK 1 gate; Phase 2 unblocked). Migration 017 fixes pre-existing Episode-1 profiles RLS recursion via is_admin() helper. Carry-forward items in 08-SUMMARY (commit 017.sql; align test_settings admin assumption).
-last_updated: "2026-05-04T00:00:00Z"
-last_activity: 2026-05-04 -- Plan 01-08 (two-scope RLS test matrix) complete; Phase 1 closed
+stopped_at: Phase 2 / Plan 01 EXECUTED — Storage Gap closed. Storage upload wired into both branches of files.py upload_file() before the Docling background task; Migration 018 ships idempotent SELECT + INSERT RLS policies on storage.objects scoped to bucket_id='documents' AND auth.uid() folder. Computed-from-id storage path locked. Operator pre-reqs (create 'documents' bucket via Studio + apply Migration 018) documented in 02-01-SUMMARY.md.
+last_updated: "2026-05-06T06:51:12Z"
+last_activity: 2026-05-06 -- Phase 2 / Plan 01 executed; 2 atomic commits (41e3eeb feat + e256c91 feat); next plan in Phase 2 is 02 (synchronous content_markdown write inside ingest_document)
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 8
-  completed_plans: 8
-  percent: 100
+  total_plans: 12
+  completed_plans: 9
+  percent: 75
 ---
 
 # Project State
@@ -21,35 +21,36 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-01)
 
 **Core value:** The agent can locate the *right* piece of information in a large, organized knowledge base — using semantic search when meaning matters and codebase-style traversal (tree/glob/grep/read) when precision matters — without hallucinating across unrelated material.
-**Current focus:** Phase 1 — Schema Foundation + Two-Scope RLS + Path Normalizer
+**Current focus:** Phase 2 — content_markdown Backfill (Gated)
 
 ## Current Position
 
-Phase: 1 of 6 COMPLETE — Schema Foundation + Two-Scope RLS + Path Normalizer
-Plan: 8 of 8 in phase 1 done; Phase 2 (content_markdown backfill) is next
-Status: Phase 1 complete; awaiting Phase 2 discuss/plan/execute
-Last activity: 2026-05-04 -- Plan 01-08 (two-scope RLS test matrix passes 49/0) complete
+Phase: 2 of 6 EXECUTING — content_markdown Backfill (Gated)
+Plan: 1 of 4 in phase 2 done; next is 02-PLAN.md (synchronous content_markdown write inside ingest_document)
+Status: Phase 2 / Plan 01 (Storage Gap closure) complete; Migration 018 written but NOT YET applied (operator runs run_migrations.py); 'documents' bucket pending one-time creation via Supabase Studio
+Last activity: 2026-05-06 -- Phase 2 / Plan 01 executed; 2 atomic commits + SUMMARY
 
-Progress: [██████████] 100% (Phase 1 of 6); Project: 17%
+Progress: [██░░░░░░░░] 25% (1/4 plans in Phase 2); Project: 17% (1/6 phases complete; Phase 2 in flight)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 6
-- Average duration: ~1.7 min
-- Total execution time: ~10 min
+- Total plans completed: 9 (Phase 1: 8, Phase 2: 1)
+- Average duration: ~2.0 min
+- Total execution time: ~17 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1 | 6 | ~10 min | ~1.7 min |
+| 1 | 8 | ~12 min | ~1.5 min |
+| 2 | 1 (in flight) | ~5 min | ~5 min |
 
 **Recent Trend:**
 
-- Last 6 plans: 01-01 (~1 min, 1 file, 1 task) → 01-02 (~2 min, 1 file, 1 task) → 01-03 (~1 min, 1 file, 1 task) → 01-04 (~1 min, 1 file, 1 task) → 01-05 (~3 min, 1 file, 1 task — 1 minor Rule-1 auto-fix for plan-verifier substring collision in design-note comments) → 01-06 (~2 min, 1 file, 1 task — same Rule-1 substring-collision pattern, lowercase-keyword fix in header comments documenting concurrent-variant upgrade path)
-- Trend: ✅ on-spec, paste-from-RESEARCH succeeded; comment-keyword-case discipline now an established convention for migrations whose verifier asserts keyword absence via case-sensitive substring
+- Last 7 plans: 01-02 (~2 min, 1 file, 1 task) → 01-03 (~1 min, 1 file, 1 task) → 01-04 (~1 min, 1 file, 1 task) → 01-05 (~3 min, 1 file, 1 task — 1 Rule-1 auto-fix) → 01-06 (~2 min, 1 file, 1 task — same Rule-1 pattern) → 01-07 (apply migrations) → 01-08 (RLS matrix tests passed 49/0) → **02-01 (~5 min, 2 files, 2 tasks — Storage Gap closure: files.py upload + Migration 018 RLS; zero deviations, paste-from-PATTERNS succeeded on first iteration)**
+- Trend: ✅ on-spec, paste-from-PATTERNS succeeded for Phase 2's first plan; the computed-from-id Storage path contract and storage.objects RLS naming convention are now established for downstream plans 03/04 to inherit
 
 *Updated after each plan completion*
 
@@ -89,6 +90,14 @@ Recent decisions affecting current work:
 - Phase 1 / Plan 06: pg_trgm extension boundary preserved — extension lives in 012, indexes live in 016; no re-enable in 016. Composite `(scope, COALESCE(user_id,'00..0'::uuid), folder_path)` index DEFERRED to Phase 4 per RESEARCH.md §4 / Open Question §7 — speculative addition risks index bloat and slows writes; add only when EXPLAIN ANALYZE on actual Phase 4 query shapes shows it's needed
 - Phase 1 / Plan 06: Comment-keyword-case discipline established as convention — when a migration's own verifier asserts a keyword's absence via case-sensitive substring match (e.g., `'CONCURRENTLY' not in sql`), use the lowercase form of the keyword in design-note comments. Postgres SQL is case-insensitive so the lowercase form is semantically identical valid SQL, AND it sidesteps the verifier collision. Same Rule-1 pattern as plan 05's fix
 - Phase 2: Backfill re-runs Docling against original Storage blobs (NOT chunk stitching); blobs that are GC'd → `requires_user_reupload`
+- Phase 2 / Plan 01-04 (planning): **Storage Gap discovered** — pre-Phase-2 codebase has zero Supabase Storage calls; "re-run Docling on original blobs" is impossible for Episode 1 docs. Resolved as Option A: add Storage upload now (Migration 018 + files.py edit). User explicitly permitted opt-in `--purge-orphans` cleanup of Episode 1 orphans via the backfill script (NOT a migration, per CLAUDE.md "no DELETE/TRUNCATE in migrations" rule). Cleanup is interactive (confirmation prompt), per-id (never blanket), and chunks-then-document two-step.
+- Phase 2 / Plan 01-04 (planning): Tool integration contract for Phase 4 LOCKED in 02-CONTEXT.md §LOCKED—Tool integration contract — when Phase 4 grep/read encounter `content_markdown_status != 'ready'` they return `{document_id, file_name, scope, folder_path, status: 'pending_reindex', content_markdown_status: <pending|failed|requires_user_reupload>}`. Phase 4 plan-checker will enforce this shape.
+- Phase 2 / Plan 02 (planning): Synchronous content_markdown write is a single atomic UPDATE extension at ingestion.py L437 (and L513 for the update path); reuses the `text` variable already in scope from `extract_text()` — zero re-extraction; status='ready' AND content_markdown=text written together so a half-state cannot exist
+- Phase 2 / Plan 03 (planning): backfill script reuses `extract_text()` directly (`from app.services.ingestion import extract_text`) instead of re-implementing Docling — guarantees byte-equivalence for SC4. `string_agg`/`array_agg` are forbidden by static grep gate (Pitfall 6 RANK 2 enforcement)
+- Phase 2 / Plan 01 (executed): Storage path is computed-from-id `f"{user_id}/{doc_id}{ext}"` with `ext = os.path.splitext(file_name)[1]` — NOT persisted as a `documents.storage_path` column (avoids a migration). Plan 03's backfill MUST mirror the identical formula on download. Files without an extension produce `{user_id}/{doc_id}` (no trailing dot)
+- Phase 2 / Plan 01 (executed): Storage upload helper `_upload_to_storage()` is a private module-level function in `files.py`, called BEFORE `background_tasks.add_task` in BOTH the action='create' and action='update' branches. Failure is non-fatal (try/except + `logger.warning`) — extends the existing `ingestion.py:407-408,444-450` non-fatal convention to a third site (Storage); ingest still reaches `status='ready'` even if Storage is unavailable
+- Phase 2 / Plan 01 (executed): Migration 018 follows the migration-015 RLS-policy convention — quoted snake_case names (`documents_storage_select_own`, `documents_storage_insert_own`), `TO authenticated`, perf-cached `(SELECT auth.uid())`, idempotent via `DROP POLICY IF EXISTS` before `CREATE POLICY`. New convention established: `<bucket>_storage_<operation>_<scope>` for storage.objects policies (extends the table-policy naming pattern to the storage schema)
+- Phase 2 / Plan 01 (executed): Bucket creation is documented in the migration header as a one-time Supabase Studio task — NOT performed by SQL. Bucket-level config (MIME allowlist, file-size limit) doesn't belong in DDL. Operator must (a) create the `documents` bucket via Studio AND (b) apply Migration 018 before Plan 04's integration tests can pass
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
 
@@ -117,6 +126,13 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-04
-Stopped at: Phase 1 COMPLETE — all 8 plans done. Two-Scope RLS test matrix passes 49/0 against the live DB (cross-user × cross-scope SELECT/INSERT/UPDATE/DELETE on documents, document_chunks, folders; scope-mutation triggers on all 3 tables; CHECK constraints; normalize_path round-trips). Migration 017 added (Episode-1 profiles RLS recursion fix). Carry-forward: commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption (not Phase 1 regressions). RLS-04 / Pitfall 1 / RANK 1 mitigation gate satisfied. Phase 2 (content_markdown backfill) unblocked.
-Resume file: next is /gsd-discuss-phase 2 or /gsd-plan-phase 2
+Last session: 2026-05-06
+Stopped at: Phase 2 / Plan 01 EXECUTED — Storage Gap closed.
+  - ✅ 01-PLAN.md: Storage upload at upload-time + Migration 018 storage.objects RLS (commits 41e3eeb, e256c91; SUMMARY at 02-01-SUMMARY.md)
+  - [ ] 02-PLAN.md: Synchronous content_markdown write inside ingest_document() + docling==2.91.0 pin (BACKFILL-01) — NEXT
+  - [ ] 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04 — --dry-run / --limit / --document-id / --purge-orphans)
+  - [ ] 04-PLAN.md: test_backfill.py integration suite + register in test_all.py (BACKFILL-03 verifier + SC4 byte-equivalence)
+Wave 1 (parallel): 01 (DONE) + 02. Wave 2: 03 then 04 (04 has human-verify checkpoint for operator pre-reqs).
+Operator pre-reqs before plan 04 checkpoint clears: (1) Create Supabase Storage bucket `documents` (private, 50MB limit) via Studio; (2) Apply Migration 018 via run_migrations.py; (3) Backend running on localhost:8001.
+Carry-forward from Phase 1: still pending — commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption.
+Resume file: next is plan 02 of Phase 2 (synchronous content_markdown write).
