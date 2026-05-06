@@ -434,18 +434,28 @@ def ingest_document(
             supabase_client.table("document_chunks").insert(rows[i : i + 100]).execute()
 
         file_hash = compute_file_hash(file_content)
-        supabase_client.table("documents").update(
-            {"status": "ready", "content_hash": file_hash, "updated_at": "now()"}
-        ).eq("id", document_id).execute()
-        logger.info(f"Ingested document {document_id}: {len(chunks)} chunks")
+        supabase_client.table("documents").update({
+            "status": "ready",
+            "content_hash": file_hash,
+            "content_markdown": text,                  # BACKFILL-01: synchronous markdown capture
+            "content_markdown_status": "ready",        # BACKFILL-01: same UPDATE = atomic
+            "updated_at": "now()",
+        }).eq("id", document_id).execute()
+        logger.info(
+            f"Ingested document {document_id}: {len(chunks)} chunks, "
+            f"{len(text)} markdown chars"
+        )
 
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Ingestion failed for document {document_id}: {error_msg}")
         try:
-            supabase_client.table("documents").update(
-                {"status": "failed", "error_message": error_msg, "updated_at": "now()"}
-            ).eq("id", document_id).execute()
+            supabase_client.table("documents").update({
+                "status": "failed",
+                "content_markdown_status": "failed",   # BACKFILL-04: surface to Phase 4 tools
+                "error_message": error_msg,
+                "updated_at": "now()",
+            }).eq("id", document_id).execute()
         except Exception as inner_e:
             logger.error(f"Could not update failed status: {inner_e}")
 
@@ -510,17 +520,27 @@ def ingest_document_update(
             supabase_client.table("document_chunks").insert(rows[i:i+100]).execute()
 
         file_hash = compute_file_hash(file_content)
-        supabase_client.table("documents").update(
-            {"status": "ready", "content_hash": file_hash, "updated_at": "now()"}
-        ).eq("id", document_id).execute()
+        supabase_client.table("documents").update({
+            "status": "ready",
+            "content_hash": file_hash,
+            "content_markdown": text,                  # BACKFILL-01: synchronous markdown capture (re-ingest path)
+            "content_markdown_status": "ready",        # BACKFILL-01: same UPDATE = atomic
+            "updated_at": "now()",
+        }).eq("id", document_id).execute()
 
-        logger.info(f"Re-ingested document {document_id}: {len(chunks)} chunks")
+        logger.info(
+            f"Re-ingested document {document_id}: {len(chunks)} chunks, "
+            f"{len(text)} markdown chars"
+        )
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Update ingestion failed for {document_id}: {error_msg}")
         try:
-            supabase_client.table("documents").update(
-                {"status": "failed", "error_message": error_msg, "updated_at": "now()"}
-            ).eq("id", document_id).execute()
+            supabase_client.table("documents").update({
+                "status": "failed",
+                "content_markdown_status": "failed",   # BACKFILL-04: surface to Phase 4 tools
+                "error_message": error_msg,
+                "updated_at": "now()",
+            }).eq("id", document_id).execute()
         except Exception as inner_e:
             logger.error(f"Could not update failed status: {inner_e}")
