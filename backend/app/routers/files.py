@@ -1,3 +1,5 @@
+import logging
+import os
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
@@ -5,6 +7,8 @@ from app.auth import get_current_user, get_supabase_client
 from app.models.schemas import DocumentResponse
 from app.services.ingestion import ingest_document, ingest_document_update
 from app.services.record_manager import compute_file_hash, determine_action
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -15,16 +19,42 @@ def _throttled_ingest(func, *args, **kwargs):
     acquired = _ingestion_semaphore.acquire(timeout=300)
     try:
         if not acquired:
-            import logging
-            logging.getLogger(__name__).error("Ingestion queue full — skipping")
+            logger.error("Ingestion queue full — skipping")
             return
         func(*args, **kwargs)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Ingestion crashed: {e}", exc_info=True)
+        logger.error(f"Ingestion crashed: {e}", exc_info=True)
     finally:
         if acquired:
             _ingestion_semaphore.release()
+
+
+def _upload_to_storage(supabase, user_id: str, document_id: str, file_name: str,
+                       contents: bytes, mime_type: str) -> None:
+    """Persist the original blob to Supabase Storage so future re-indexing
+    (Phase 2 backfill_content_markdown.py + any future re-Docling pass) can
+    recover it. Path: documents/{user_id}/{document_id}{ext}.
+
+    Failure is NON-FATAL — the ingest path still runs and the document still
+    reaches status='ready' even if Storage is unavailable. Plan 03's backfill
+    marks rows whose blobs are missing as 'requires_user_reupload' (per CONTEXT.md
+    §LOCKED—Backfill scope reframe).
+    """
+    ext = os.path.splitext(file_name)[1]   # includes leading dot, e.g. '.pdf' or ''
+    storage_path = f"{user_id}/{document_id}{ext}"
+    try:
+        supabase.storage.from_("documents").upload(
+            storage_path,
+            contents,
+            file_options={"content-type": mime_type, "upsert": "true"},
+        )
+        logger.info(
+            f"Storage upload OK: doc={document_id} path={storage_path} bytes={len(contents)}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"Storage upload failed (non-fatal) for {document_id} path={storage_path}: {e}"
+        )
 
 
 @router.post("/upload", response_model=DocumentResponse)
@@ -60,6 +90,15 @@ async def upload_file(
         doc = supabase.table("documents").select("*") \
             .eq("id", record_action.document_id).single().execute().data
 
+        _upload_to_storage(
+            supabase,
+            user_id=user_id,
+            document_id=doc["id"],
+            file_name=file_name,
+            contents=contents,
+            mime_type=mime_type,
+        )
+
         background_tasks.add_task(
             _throttled_ingest,
             ingest_document_update,
@@ -81,6 +120,15 @@ async def upload_file(
         "mime_type": mime_type,
         "status": "pending",
     }).execute().data[0]
+
+    _upload_to_storage(
+        supabase,
+        user_id=user_id,
+        document_id=doc["id"],
+        file_name=file_name,
+        contents=contents,
+        mime_type=mime_type,
+    )
 
     background_tasks.add_task(
         _throttled_ingest,
