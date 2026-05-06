@@ -14,6 +14,7 @@ import test_auth
 import test_threads
 import test_messages
 import test_files
+import test_backfill
 import test_rag
 import test_rls
 import test_two_scope_rls
@@ -29,6 +30,7 @@ SUITES = [
     ("Threads", test_threads),
     ("Messages", test_messages),
     ("Files", test_files),
+    ("Backfill", test_backfill),
     ("RAG", test_rag),
     ("RLS", test_rls),
     ("Two-Scope RLS", test_two_scope_rls),
