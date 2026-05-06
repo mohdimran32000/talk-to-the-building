@@ -22,7 +22,7 @@
 
 ### Backfill
 
-- [ ] **BACKFILL-01**: `ingestion.py` captures and persists Docling's markdown export to `documents.content_markdown` on every new upload
+- [x] **BACKFILL-01**: `ingestion.py` captures and persists Docling's markdown export to `documents.content_markdown` on every new upload
 - [ ] **BACKFILL-02**: `backend/scripts/backfill_content_markdown.py` re-runs Docling against original Storage blobs for existing Episode 1 docs (idempotent, throttled, status-tracked)
 - [ ] **BACKFILL-03**: Episode 1 documents migrate to `folder_path='/'`, `scope='user'` (automatic via column DEFAULT)
 - [ ] **BACKFILL-04**: Documents whose source blob is missing get marked `requires_user_reupload`; tools surface this status rather than silently skipping
@@ -151,7 +151,7 @@
 | RLS-02 | Phase 1 | ✅ Complete (Plan 05, 55077ad) |
 | RLS-03 | Phase 1 | ✅ Complete (Plan 05, 55077ad) — implemented via BEFORE UPDATE trigger (canonical Postgres workaround for OLD.col reference) |
 | RLS-04 | Phase 1 | Pending |
-| BACKFILL-01 | Phase 2 | Pending |
+| BACKFILL-01 | Phase 2 | ✅ Complete (Plan 02-02, 4dd7c4c + 91ad425) |
 | BACKFILL-02 | Phase 2 | Pending |
 | BACKFILL-03 | Phase 2 | Pending |
 | BACKFILL-04 | Phase 2 | Pending |

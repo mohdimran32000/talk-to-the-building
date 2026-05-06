@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 / Plan 01 EXECUTED — Storage Gap closed. Storage upload wired into both branches of files.py upload_file() before the Docling background task; Migration 018 ships idempotent SELECT + INSERT RLS policies on storage.objects scoped to bucket_id='documents' AND auth.uid() folder. Computed-from-id storage path locked. Operator pre-reqs (create 'documents' bucket via Studio + apply Migration 018) documented in 02-01-SUMMARY.md.
-last_updated: "2026-05-06T06:51:12Z"
-last_activity: 2026-05-06 -- Phase 2 / Plan 01 executed; 2 atomic commits (41e3eeb feat + e256c91 feat); next plan in Phase 2 is 02 (synchronous content_markdown write inside ingest_document)
+stopped_at: Phase 2 / Plan 02 EXECUTED — Synchronous content_markdown write delivered. Both ingest_document() and ingest_document_update() success UPDATEs atomically carry status='ready' + content_markdown=text + content_markdown_status='ready' (single PostgREST call — no half-state); both failure UPDATEs write content_markdown_status='failed' (BACKFILL-04 surfacing precondition for Phase 4 tools). docling==2.91.0 pinned in requirements.txt for byte-equivalence determinism (Phase 2 SC4 precondition). 2 atomic commits (4dd7c4c feat + 91ad425 chore).
+last_updated: "2026-05-06T06:58:47Z"
+last_activity: 2026-05-06 -- Phase 2 / Plan 02 executed; 2 atomic commits (4dd7c4c feat + 91ad425 chore); next plan in Phase 2 is 03 (backfill_content_markdown.py CLI)
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 12
-  completed_plans: 9
-  percent: 75
+  completed_plans: 10
+  percent: 83
 ---
 
 # Project State
@@ -26,31 +26,31 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 2 of 6 EXECUTING — content_markdown Backfill (Gated)
-Plan: 1 of 4 in phase 2 done; next is 02-PLAN.md (synchronous content_markdown write inside ingest_document)
-Status: Phase 2 / Plan 01 (Storage Gap closure) complete; Migration 018 written but NOT YET applied (operator runs run_migrations.py); 'documents' bucket pending one-time creation via Supabase Studio
-Last activity: 2026-05-06 -- Phase 2 / Plan 01 executed; 2 atomic commits + SUMMARY
+Plan: 2 of 4 in phase 2 done; next is 03-PLAN.md (backfill_content_markdown.py CLI — BACKFILL-02 + BACKFILL-04)
+Status: Phase 2 / Plan 02 (synchronous content_markdown write + docling pin) complete; new uploads now populate content_markdown atomically inside ingest_document() / ingest_document_update(); Migration 018 still PENDING operator apply; 'documents' bucket still PENDING one-time Supabase Studio creation
+Last activity: 2026-05-06 -- Phase 2 / Plan 02 executed; 2 atomic commits + SUMMARY
 
-Progress: [██░░░░░░░░] 25% (1/4 plans in Phase 2); Project: 17% (1/6 phases complete; Phase 2 in flight)
+Progress: [█████░░░░░] 50% (2/4 plans in Phase 2); Project: 17% (1/6 phases complete; Phase 2 in flight)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 9 (Phase 1: 8, Phase 2: 1)
-- Average duration: ~2.0 min
-- Total execution time: ~17 min
+- Total plans completed: 10 (Phase 1: 8, Phase 2: 2)
+- Average duration: ~2.2 min
+- Total execution time: ~22 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1 | 8 | ~12 min | ~1.5 min |
-| 2 | 1 (in flight) | ~5 min | ~5 min |
+| 2 | 2 (in flight) | ~10 min | ~5 min |
 
 **Recent Trend:**
 
-- Last 7 plans: 01-02 (~2 min, 1 file, 1 task) → 01-03 (~1 min, 1 file, 1 task) → 01-04 (~1 min, 1 file, 1 task) → 01-05 (~3 min, 1 file, 1 task — 1 Rule-1 auto-fix) → 01-06 (~2 min, 1 file, 1 task — same Rule-1 pattern) → 01-07 (apply migrations) → 01-08 (RLS matrix tests passed 49/0) → **02-01 (~5 min, 2 files, 2 tasks — Storage Gap closure: files.py upload + Migration 018 RLS; zero deviations, paste-from-PATTERNS succeeded on first iteration)**
-- Trend: ✅ on-spec, paste-from-PATTERNS succeeded for Phase 2's first plan; the computed-from-id Storage path contract and storage.objects RLS naming convention are now established for downstream plans 03/04 to inherit
+- Last 7 plans: 01-04 (~1 min, 1 file, 1 task) → 01-05 (~3 min, 1 file, 1 task — 1 Rule-1 auto-fix) → 01-06 (~2 min, 1 file, 1 task — same Rule-1 pattern) → 01-07 (apply migrations) → 01-08 (RLS matrix tests passed 49/0) → 02-01 (~5 min, 2 files, 2 tasks — Storage Gap closure: files.py upload + Migration 018 RLS; zero deviations, paste-from-PATTERNS succeeded on first iteration) → **02-02 (~5 min, 2 files, 2 tasks — synchronous content_markdown write in ingest_document() + ingest_document_update() success/failure UPDATEs atomic; docling==2.91.0 pin; zero deviations, paste-from-PATTERNS succeeded; only friction was a plan-verifier gate inconsistency on the extract_text count noted in SUMMARY)**
+- Trend: ✅ on-spec, paste-from-PATTERNS succeeded for both Phase 2 plans so far; the atomic-multi-field-UPDATE pattern (state-machine transitions packed into a single PostgREST call) is now established and inherited by Plan 03's backfill writes
 
 *Updated after each plan completion*
 
@@ -98,6 +98,10 @@ Recent decisions affecting current work:
 - Phase 2 / Plan 01 (executed): Storage upload helper `_upload_to_storage()` is a private module-level function in `files.py`, called BEFORE `background_tasks.add_task` in BOTH the action='create' and action='update' branches. Failure is non-fatal (try/except + `logger.warning`) — extends the existing `ingestion.py:407-408,444-450` non-fatal convention to a third site (Storage); ingest still reaches `status='ready'` even if Storage is unavailable
 - Phase 2 / Plan 01 (executed): Migration 018 follows the migration-015 RLS-policy convention — quoted snake_case names (`documents_storage_select_own`, `documents_storage_insert_own`), `TO authenticated`, perf-cached `(SELECT auth.uid())`, idempotent via `DROP POLICY IF EXISTS` before `CREATE POLICY`. New convention established: `<bucket>_storage_<operation>_<scope>` for storage.objects policies (extends the table-policy naming pattern to the storage schema)
 - Phase 2 / Plan 01 (executed): Bucket creation is documented in the migration header as a one-time Supabase Studio task — NOT performed by SQL. Bucket-level config (MIME allowlist, file-size limit) doesn't belong in DDL. Operator must (a) create the `documents` bucket via Studio AND (b) apply Migration 018 before Plan 04's integration tests can pass
+- Phase 2 / Plan 02 (executed): Atomic-multi-field UPDATE pattern is now the codebase convention for state-machine column transitions — when one column flips status (e.g., `documents.status='ready'`) and other columns must be coherent at the same moment (e.g., `content_markdown_status='ready'`), pack ALL of them into a SINGLE supabase-py `.update({...}).execute()` call so PostgREST issues one SQL UPDATE statement. NEVER split into two `.update()` calls (admits a half-state window). Mitigates Pitfall 2 ("Background-tasking the synchronous write breaks the atomicity guarantee") for content_markdown and any future derived columns
+- Phase 2 / Plan 02 (executed): Failure-path UPDATEs in BOTH `ingest_document()` and `ingest_document_update()` now write `content_markdown_status='failed'` alongside `status='failed'` so Phase 4 grep/read_document tools surface non-ready rows as `{status: 'pending_reindex', content_markdown_status: 'failed'}` per the LOCKED tool integration contract — never silently empty. The canonical 4-element status vocabulary `'pending'|'ready'|'failed'|'requires_user_reupload'` (from Migration 014) is partitioned across plans: 02 occupies 'ready' (success) + 'failed' (Docling exception); 03 will occupy 'ready' (re-Docling success) + 'failed' (re-Docling exception) + 'requires_user_reupload' (blob missing)
+- Phase 2 / Plan 02 (executed): First version pin in `backend/requirements.txt` — `docling==2.91.0` (was bare `docling`). Other 12 deps remain unpinned. Targeted-pin convention established: pin a dep ONLY when a downstream test asserts byte/byte determinism against its output (Phase 2 SC4 byte-equivalence between upload-time markdown from Plan 02 and backfill-time markdown from Plan 03 depends on identical Docling version). Plan 03 inherits the pin via the shared backend venv
+- Phase 2 / Plan 02 (executed): Multi-line UPDATE dict style adopted for `update({...})` calls with 5+ keys — one key per line for readability, matches Plan 01's `_upload_to_storage` helper style. Inline `# BACKFILL-01` and `# BACKFILL-04` comments reference REQUIREMENTS.md IDs on the lines they implement (project traceability convention)
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
 
@@ -127,12 +131,12 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-05-06
-Stopped at: Phase 2 / Plan 01 EXECUTED — Storage Gap closed.
+Stopped at: Phase 2 / Plan 02 EXECUTED — Synchronous content_markdown write delivered.
   - ✅ 01-PLAN.md: Storage upload at upload-time + Migration 018 storage.objects RLS (commits 41e3eeb, e256c91; SUMMARY at 02-01-SUMMARY.md)
-  - [ ] 02-PLAN.md: Synchronous content_markdown write inside ingest_document() + docling==2.91.0 pin (BACKFILL-01) — NEXT
-  - [ ] 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04 — --dry-run / --limit / --document-id / --purge-orphans)
+  - ✅ 02-PLAN.md: Synchronous content_markdown write in ingest_document() + ingest_document_update() (atomic single-UPDATE) + docling==2.91.0 pin (BACKFILL-01); commits 4dd7c4c, 91ad425; SUMMARY at 02-02-SUMMARY.md
+  - [ ] 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04 — --dry-run / --limit / --document-id / --purge-orphans) — NEXT
   - [ ] 04-PLAN.md: test_backfill.py integration suite + register in test_all.py (BACKFILL-03 verifier + SC4 byte-equivalence)
-Wave 1 (parallel): 01 (DONE) + 02. Wave 2: 03 then 04 (04 has human-verify checkpoint for operator pre-reqs).
+Wave 1 (parallel): 01 + 02 BOTH DONE. Wave 2: 03 then 04 (04 has human-verify checkpoint for operator pre-reqs).
 Operator pre-reqs before plan 04 checkpoint clears: (1) Create Supabase Storage bucket `documents` (private, 50MB limit) via Studio; (2) Apply Migration 018 via run_migrations.py; (3) Backend running on localhost:8001.
 Carry-forward from Phase 1: still pending — commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption.
-Resume file: next is plan 02 of Phase 2 (synchronous content_markdown write).
+Resume file: next is plan 03 of Phase 2 (backfill_content_markdown.py CLI).
