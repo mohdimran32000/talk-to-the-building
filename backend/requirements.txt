@@ -7,7 +7,7 @@ supabase
 langsmith
 sse-starlette
 python-multipart
-docling
+docling==2.91.0
 cohere
 duckdb
 tavily-python
