@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 / Plan 02 EXECUTED — Synchronous content_markdown write delivered. Both ingest_document() and ingest_document_update() success UPDATEs atomically carry status='ready' + content_markdown=text + content_markdown_status='ready' (single PostgREST call — no half-state); both failure UPDATEs write content_markdown_status='failed' (BACKFILL-04 surfacing precondition for Phase 4 tools). docling==2.91.0 pinned in requirements.txt for byte-equivalence determinism (Phase 2 SC4 precondition). 2 atomic commits (4dd7c4c feat + 91ad425 chore).
-last_updated: "2026-05-06T06:58:47Z"
-last_activity: 2026-05-06 -- Phase 2 / Plan 02 executed; 2 atomic commits (4dd7c4c feat + 91ad425 chore); next plan in Phase 2 is 03 (backfill_content_markdown.py CLI)
+stopped_at: Phase 2 / Plan 03 EXECUTED — backfill_content_markdown.py CLI delivered. argparse-driven script (--dry-run / --limit / --document-id / --purge-orphans) re-runs Docling against original Storage blobs to populate documents.content_markdown for every row with content_markdown_status != 'ready'; idempotent SELECT via .neq("content_markdown_status","ready"); per-row state-machine writer never raises out of the loop (success → 'ready', blob 404 → 'requires_user_reupload', Docling exception → 'failed'); throttled via threading.Semaphore(2) matching files.py:15; canary Storage check before iteration (Pitfall 5 abort path); --purge-orphans interactive ritual (SELECT → print table → input(y/yes) → per-id chunks-then-document DELETE; CLAUDE.md scoped-cleanup rule). 1 atomic commit (28e8fab feat). One Rule-3 deviation: load_dotenv() reordered BEFORE 'from app.services.ingestion import extract_text' because that module instantiates google-genai's Client at import time.
+last_updated: "2026-05-06T07:07:55Z"
+last_activity: 2026-05-06 -- Phase 2 / Plan 03 executed; 1 atomic commit (28e8fab feat); next plan in Phase 2 is 04 (test_backfill.py integration suite + register in test_all.py — BACKFILL-03 verifier + SC4 byte-equivalence; has human-verify checkpoint for operator pre-reqs)
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 12
-  completed_plans: 10
-  percent: 83
+  completed_plans: 11
+  percent: 92
 ---
 
 # Project State
@@ -26,31 +26,31 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 2 of 6 EXECUTING — content_markdown Backfill (Gated)
-Plan: 2 of 4 in phase 2 done; next is 03-PLAN.md (backfill_content_markdown.py CLI — BACKFILL-02 + BACKFILL-04)
-Status: Phase 2 / Plan 02 (synchronous content_markdown write + docling pin) complete; new uploads now populate content_markdown atomically inside ingest_document() / ingest_document_update(); Migration 018 still PENDING operator apply; 'documents' bucket still PENDING one-time Supabase Studio creation
-Last activity: 2026-05-06 -- Phase 2 / Plan 02 executed; 2 atomic commits + SUMMARY
+Plan: 3 of 4 in phase 2 done; next is 04-PLAN.md (test_backfill.py integration suite + register in test_all.py — BACKFILL-03 verifier + Phase 2 SC4 byte-equivalence; has human-verify checkpoint for operator pre-reqs)
+Status: Phase 2 / Plan 03 (backfill CLI) complete; backend/scripts/backfill_content_markdown.py is invokable as `cd backend && venv/Scripts/python scripts/backfill_content_markdown.py [--dry-run] [--limit N] [--document-id UUID] [--purge-orphans]`; idempotent re-run is no-op for ready rows; canary Storage check aborts cleanly with exit 1 if 'documents' bucket unreachable. Migration 018 still PENDING operator apply; 'documents' bucket still PENDING one-time Supabase Studio creation (operator pre-reqs gate Plan 04's checkpoint).
+Last activity: 2026-05-06 -- Phase 2 / Plan 03 executed; 1 atomic commit + SUMMARY
 
-Progress: [█████░░░░░] 50% (2/4 plans in Phase 2); Project: 17% (1/6 phases complete; Phase 2 in flight)
+Progress: [████████░░] 75% (3/4 plans in Phase 2); Project: 17% (1/6 phases complete; Phase 2 in flight)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 10 (Phase 1: 8, Phase 2: 2)
-- Average duration: ~2.2 min
-- Total execution time: ~22 min
+- Total plans completed: 11 (Phase 1: 8, Phase 2: 3)
+- Average duration: ~2.5 min
+- Total execution time: ~28 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1 | 8 | ~12 min | ~1.5 min |
-| 2 | 2 (in flight) | ~10 min | ~5 min |
+| 2 | 3 (in flight) | ~16 min | ~5.3 min |
 
 **Recent Trend:**
 
-- Last 7 plans: 01-04 (~1 min, 1 file, 1 task) → 01-05 (~3 min, 1 file, 1 task — 1 Rule-1 auto-fix) → 01-06 (~2 min, 1 file, 1 task — same Rule-1 pattern) → 01-07 (apply migrations) → 01-08 (RLS matrix tests passed 49/0) → 02-01 (~5 min, 2 files, 2 tasks — Storage Gap closure: files.py upload + Migration 018 RLS; zero deviations, paste-from-PATTERNS succeeded on first iteration) → **02-02 (~5 min, 2 files, 2 tasks — synchronous content_markdown write in ingest_document() + ingest_document_update() success/failure UPDATEs atomic; docling==2.91.0 pin; zero deviations, paste-from-PATTERNS succeeded; only friction was a plan-verifier gate inconsistency on the extract_text count noted in SUMMARY)**
-- Trend: ✅ on-spec, paste-from-PATTERNS succeeded for both Phase 2 plans so far; the atomic-multi-field-UPDATE pattern (state-machine transitions packed into a single PostgREST call) is now established and inherited by Plan 03's backfill writes
+- Last 7 plans: 01-05 (~3 min, 1 file, 1 task — 1 Rule-1 auto-fix) → 01-06 (~2 min, 1 file, 1 task — same Rule-1 pattern) → 01-07 (apply migrations) → 01-08 (RLS matrix tests passed 49/0) → 02-01 (~5 min, 2 files, 2 tasks — Storage Gap closure: files.py upload + Migration 018 RLS; zero deviations, paste-from-PATTERNS succeeded) → 02-02 (~5 min, 2 files, 2 tasks — synchronous content_markdown write + docling pin; zero deviations) → **02-03 (~6 min, 1 file, 1 task — backfill CLI; 1 Rule-3 deviation: load_dotenv() reordered before app.services.ingestion import because that module instantiates genai.Client at module-load time)**
+- Trend: ✅ on-spec; paste-from-PATTERNS succeeded for all three Phase 2 plans so far. New convention learned this plan: any script that imports from app.services.* must run load_dotenv() first because module-level google-genai client init reads GEMINI_API_KEY at import time. The atomic-multi-field-UPDATE pattern is now exercised in three sites (ingest_document success, ingest_document_update success, backfill success — all single supabase-py UPDATE calls)
 
 *Updated after each plan completion*
 
@@ -102,6 +102,13 @@ Recent decisions affecting current work:
 - Phase 2 / Plan 02 (executed): Failure-path UPDATEs in BOTH `ingest_document()` and `ingest_document_update()` now write `content_markdown_status='failed'` alongside `status='failed'` so Phase 4 grep/read_document tools surface non-ready rows as `{status: 'pending_reindex', content_markdown_status: 'failed'}` per the LOCKED tool integration contract — never silently empty. The canonical 4-element status vocabulary `'pending'|'ready'|'failed'|'requires_user_reupload'` (from Migration 014) is partitioned across plans: 02 occupies 'ready' (success) + 'failed' (Docling exception); 03 will occupy 'ready' (re-Docling success) + 'failed' (re-Docling exception) + 'requires_user_reupload' (blob missing)
 - Phase 2 / Plan 02 (executed): First version pin in `backend/requirements.txt` — `docling==2.91.0` (was bare `docling`). Other 12 deps remain unpinned. Targeted-pin convention established: pin a dep ONLY when a downstream test asserts byte/byte determinism against its output (Phase 2 SC4 byte-equivalence between upload-time markdown from Plan 02 and backfill-time markdown from Plan 03 depends on identical Docling version). Plan 03 inherits the pin via the shared backend venv
 - Phase 2 / Plan 02 (executed): Multi-line UPDATE dict style adopted for `update({...})` calls with 5+ keys — one key per line for readability, matches Plan 01's `_upload_to_storage` helper style. Inline `# BACKFILL-01` and `# BACKFILL-04` comments reference REQUIREMENTS.md IDs on the lines they implement (project traceability convention)
+- Phase 2 / Plan 03 (executed): `backend/scripts/backfill_content_markdown.py` reuses `extract_text()` from `app.services.ingestion` directly (one import, one call site) — no Docling re-implementation. This guarantees byte-equivalence with Plan 02's synchronous-on-upload markdown for any blob (Phase 2 SC4 precondition); Plan 04's integration test will assert this empirically on a fresh corpus
+- Phase 2 / Plan 03 (executed): **Module-load env-var ordering convention** for scripts that import from `app.services.*` — `load_dotenv()` MUST run BEFORE `from app.services.ingestion import extract_text` because `ingestion.py:22` instantiates `genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))` at module-import time. Without env loaded first, the import crashes (or silently produces a misconfigured client) in any subprocess that doesn't pre-export the env. Used `# noqa: E402` on the `from app.*` imports to document the intentional non-top-of-file ordering. This is now a project-wide convention for any future batch script that imports from `app.services.*`
+- Phase 2 / Plan 03 (executed): **Per-row state-machine writer pattern** — wrap ONLY the Docling extraction in try/except; success path writes `'ready'` + payload; download-None branch writes `'requires_user_reupload'`; Docling exception writes `'failed'`; nested try around the UPDATE itself catches DB errors without escaping the loop. The loop NEVER raises; only `KeyboardInterrupt` / `SystemExit` propagate. This is now the established pattern for any future per-row backfill / migration script
+- Phase 2 / Plan 03 (executed): **Canary check pattern** for batch scripts that depend on external services — probe reachability up front (cheapest service-role op, e.g. `storage.from_('documents').list(path='', options={'limit':1})`); abort with exit 1 + a clear remediation message pointing to the setup task that creates the resource. Defense in depth via end-of-run anomaly warning if every row ended in the same non-success state (likely indicates misconfiguration rather than real corpus state)
+- Phase 2 / Plan 03 (executed): **Interactive scoped-cleanup ritual** for production scripts (CLAUDE.md "Tests must NEVER delete all user data" rule extended to operator scripts): SELECT candidates → print human-readable table → `input()` requiring literal `y`/`yes` → for each id: per-id chunks-then-document DELETE. NEVER `DELETE WHERE` blanket queries. Two-step (chunks first, then document) is defensive against absent FK CASCADE. This is now the convention for any future production cleanup script
+- Phase 2 / Plan 03 (executed): **Static grep gate for Pitfall 6 (RANK 2 — chunk-stitching forbidden)** — backfill_content_markdown.py is asserted to contain ZERO occurrences of `string_agg` or `array_agg` (verified at task acceptance time). Plan-checker can grep-gate any future backfill / re-index script with the same rule
+- Phase 2 / Plan 03 (executed): Exit code semantics for backfill — `0` clean (every row terminal non-failed OR --dry-run completed OR no rows matched); `1` missing env vars OR canary failure; `2` if any row ended at `'failed'` (matches `run_migrations.py:57`'s "2 = runtime exception" precedent — operators can grep on exit code in CI/cron). No-rows-matching is intentionally exit 0 (steady state for a fully-ready corpus; differs from a strict reading of the plan's frontmatter which suggested exit 1 — documented in 02-03-SUMMARY.md decision #5)
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
 
@@ -131,12 +138,12 @@ Items acknowledged and carried forward from previous milestone close:
 ## Session Continuity
 
 Last session: 2026-05-06
-Stopped at: Phase 2 / Plan 02 EXECUTED — Synchronous content_markdown write delivered.
+Stopped at: Phase 2 / Plan 03 EXECUTED — backfill_content_markdown.py CLI delivered.
   - ✅ 01-PLAN.md: Storage upload at upload-time + Migration 018 storage.objects RLS (commits 41e3eeb, e256c91; SUMMARY at 02-01-SUMMARY.md)
   - ✅ 02-PLAN.md: Synchronous content_markdown write in ingest_document() + ingest_document_update() (atomic single-UPDATE) + docling==2.91.0 pin (BACKFILL-01); commits 4dd7c4c, 91ad425; SUMMARY at 02-02-SUMMARY.md
-  - [ ] 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04 — --dry-run / --limit / --document-id / --purge-orphans) — NEXT
-  - [ ] 04-PLAN.md: test_backfill.py integration suite + register in test_all.py (BACKFILL-03 verifier + SC4 byte-equivalence)
-Wave 1 (parallel): 01 + 02 BOTH DONE. Wave 2: 03 then 04 (04 has human-verify checkpoint for operator pre-reqs).
+  - ✅ 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04 — --dry-run / --limit / --document-id / --purge-orphans); reuses extract_text() from app.services.ingestion; canary Storage check; interactive --purge-orphans ritual; commit 28e8fab; SUMMARY at 02-03-SUMMARY.md
+  - [ ] 04-PLAN.md: test_backfill.py integration suite + register in test_all.py (BACKFILL-03 verifier + SC4 byte-equivalence) — NEXT (has human-verify checkpoint for operator pre-reqs)
+Wave 1 (parallel): 01 + 02 BOTH DONE. Wave 2: 03 DONE; 04 NEXT.
 Operator pre-reqs before plan 04 checkpoint clears: (1) Create Supabase Storage bucket `documents` (private, 50MB limit) via Studio; (2) Apply Migration 018 via run_migrations.py; (3) Backend running on localhost:8001.
 Carry-forward from Phase 1: still pending — commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption.
-Resume file: next is plan 03 of Phase 2 (backfill_content_markdown.py CLI).
+Resume file: next is plan 04 of Phase 2 (test_backfill.py integration suite — has human-verify checkpoint).
