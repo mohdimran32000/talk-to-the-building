@@ -23,9 +23,9 @@
 ### Backfill
 
 - [x] **BACKFILL-01**: `ingestion.py` captures and persists Docling's markdown export to `documents.content_markdown` on every new upload
-- [ ] **BACKFILL-02**: `backend/scripts/backfill_content_markdown.py` re-runs Docling against original Storage blobs for existing Episode 1 docs (idempotent, throttled, status-tracked)
-- [ ] **BACKFILL-03**: Episode 1 documents migrate to `folder_path='/'`, `scope='user'` (automatic via column DEFAULT)
-- [ ] **BACKFILL-04**: Documents whose source blob is missing get marked `requires_user_reupload`; tools surface this status rather than silently skipping
+- [x] **BACKFILL-02**: `backend/scripts/backfill_content_markdown.py` re-runs Docling against original Storage blobs for existing Episode 1 docs (idempotent, throttled, status-tracked) ✅ Phase 2 / Plan 03 + Plan 04 verifier (28e8fab + 2ad9b78)
+- [x] **BACKFILL-03**: Episode 1 documents migrate to `folder_path='/'`, `scope='user'` (automatic via column DEFAULT) ✅ Phase 2 / Plan 04 verifier (2ad9b78) — `SELECT COUNT(*) FROM documents WHERE folder_path != '/' OR scope != 'user'` returns 0; the no-op verifier confirms Migration 012 DEFAULT did its job for all pre-Phase-2 rows
+- [x] **BACKFILL-04**: Documents whose source blob is missing get marked `requires_user_reupload`; tools surface this status rather than silently skipping ✅ Phase 2 / Plan 03 (writer) + Plan 04 (verifier) — backfill subprocess against fixture row with no Storage blob produces `content_markdown_status='requires_user_reupload'`
 
 ### Folder Service
 
@@ -152,9 +152,9 @@
 | RLS-03 | Phase 1 | ✅ Complete (Plan 05, 55077ad) — implemented via BEFORE UPDATE trigger (canonical Postgres workaround for OLD.col reference) |
 | RLS-04 | Phase 1 | Pending |
 | BACKFILL-01 | Phase 2 | ✅ Complete (Plan 02-02, 4dd7c4c + 91ad425) |
-| BACKFILL-02 | Phase 2 | Pending |
-| BACKFILL-03 | Phase 2 | Pending |
-| BACKFILL-04 | Phase 2 | Pending |
+| BACKFILL-02 | Phase 2 | ✅ Complete (Plan 02-03 writer 28e8fab + Plan 02-04 verifier 2ad9b78) |
+| BACKFILL-03 | Phase 2 | ✅ Complete (Plan 02-04 verifier 2ad9b78) — no-op verifier confirms Migration 012 DEFAULT did its job |
+| BACKFILL-04 | Phase 2 | ✅ Complete (Plan 02-03 writer 28e8fab + Plan 02-04 verifier 2ad9b78) |
 | FOLDER-01 | Phase 1 | ✅ Complete (Plan 01, b608452) |
 | FOLDER-02 | Phase 3 | Pending |
 | FOLDER-03 | Phase 3 | Pending |
@@ -213,4 +213,4 @@
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-03 — Phase 1 / Plan 06 complete: SCHEMA-05 marked complete (migration 016 — 5 search-acceleration indexes: 3 GIN gin_trgm_ops + 2 btree text_pattern_ops; commit f36e1b7)*
+*Last updated: 2026-05-04 — Phase 2 / Plan 04 complete: BACKFILL-02 + BACKFILL-03 + BACKFILL-04 marked complete (test_backfill.py integration suite + register in test_all.py; suite-level run 15/15 PASS; commits 2ad9b78 + 01f2782). Phase 2 closes green: all four BACKFILL-* requirements ✅.*

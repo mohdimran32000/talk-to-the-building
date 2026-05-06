@@ -18,7 +18,7 @@ Episode 2 transforms the existing flat per-user document store into a Claude-Cod
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Schema Foundation + Two-Scope RLS + Path Normalizer** — Five small migrations (012–016) introduce `folder_path`, `scope`, `content_markdown`, the thin `folders` table, two-scope RLS, `pg_trgm` indexes, and the canonical `normalize_path()` helper. ✅ 2026-05-04
-- [ ] **Phase 2: content_markdown Backfill (Gated)** — Re-run Docling against existing Storage blobs to populate `documents.content_markdown`; surface re-index status; gate `grep`/`read_document` until operational.
+- [x] **Phase 2: content_markdown Backfill (Gated)** — Re-run Docling against existing Storage blobs to populate `documents.content_markdown`; surface re-index status; gate `grep`/`read_document` until operational. ✅ 2026-05-04
 - [ ] **Phase 3: Folder Service + Routers + Dedup Extension** — Pure CRUD layer: `folder_service.py`, `folders` router, extended `files` router (upload-into-folder, rename, move), `record_manager` dedup key extended.
 - [ ] **Phase 4: Five Exploration Tools + search_documents Extension** — `tree`, `glob`, `grep`, `list_files`, `read_document` with Pydantic v2 arg validation, hard token-budget caps, scope-tagged result rows; `search_documents` extended with `folder_path`/`scope` filters.
 - [ ] **Phase 5: Explorer Sub-Agent + SSE Protocol Generalization** — `run_explorer_sub_agent` with `MAX_TURNS=8`, wall-clock timeout, no-progress detector; SSE sub-agent event protocol generalized; `messages.tool_metadata` persistence.
@@ -60,7 +60,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 01-PLAN.md — Storage upload at upload-time + Migration 018 storage.objects RLS (Storage Gap closure) ✅ 2026-05-06
 - [x] 02-PLAN.md — Synchronous content_markdown write inside ingest_document() + docling==2.91.0 pin (BACKFILL-01) ✅ 2026-05-06
 - [x] 03-PLAN.md — backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04, --dry-run / --limit / --document-id / --purge-orphans) ✅ 2026-05-06
-- [ ] 04-PLAN.md — test_backfill.py integration suite + register in test_all.py (BACKFILL-03 verifier + Phase 2 SC4 byte-equivalence)
+- [x] 04-PLAN.md — test_backfill.py integration suite + register in test_all.py (BACKFILL-03 verifier + Phase 2 SC4 byte-equivalence) ✅ 2026-05-04 — suite-level run 15/15 PASS
 **Threats / pitfalls**: Pitfall 6 (content_markdown backfill done wrong — RANK 2: re-run Docling, NEVER `string_agg` from chunks; the 50-word chunk overlap silently breaks grep line numbers); operational risk that Storage blobs may be GC'd → `requires_user_reupload` fallback is non-negotiable.
 
 ### Phase 3: Folder Service + Routers + Dedup Extension
@@ -123,7 +123,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
-| 2. content_markdown Backfill (Gated) | 3/4 | In progress | - |
+| 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 0/TBD | Not started | - |
 | 4. Five Exploration Tools + search_documents Extension | 0/TBD | Not started | - |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
