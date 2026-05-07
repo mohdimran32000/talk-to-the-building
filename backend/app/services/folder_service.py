@@ -67,6 +67,264 @@ def normalize_path(p: str | None) -> str:
     return s
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Phase 3 — Folder service CRUD (FOLDER-02). All five functions below:
+#   - take supabase_client as positional-untyped (matches record_manager.py)
+#   - run normalize_path() on every path argument as the FIRST STATEMENT
+#     (Pitfall 4 chokepoint enforcement; belt+suspenders alongside routers)
+#   - have NO FastAPI imports — pure service layer, unit-testable in isolation
+#   - return plain dicts (not Pydantic models — that's the router's job)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def list_folder(
+    path: str,
+    scope: str,
+    user_id: str | None,
+    supabase_client,
+) -> dict:
+    """List one level of a folder: documents at this path + immediate subfolders.
+
+    Returns:
+        {
+          "path": str,                # normalized path
+          "documents": list[dict],    # rows where folder_path == path (filtered by scope)
+          "subfolders": list[str],    # UNION of explicit folders rows + inferred from documents
+        }
+
+    Subfolder discovery:
+    1. Explicit folders rows whose path is an immediate child of `path`
+       (path LIKE norm||'/%' AND path NOT LIKE norm||'/%/%' — exactly one level deeper).
+    2. Inferred subfolder names from documents.folder_path: take all docs where
+       folder_path LIKE norm||'/%', strip the norm||'/' prefix, take everything
+       up to the first '/'. Deduplicate.
+
+    Scope handling: 'both' returns union of user (matching user_id) + global; 'user' filters
+    to the calling user; 'global' filters to user_id IS NULL.
+    """
+    norm = normalize_path(path)
+
+    # ─ Documents at this exact folder ─
+    docs_q = supabase_client.table("documents").select("*").eq("folder_path", norm)
+    if scope == "user":
+        docs_q = docs_q.eq("scope", "user").eq("user_id", user_id)
+    elif scope == "global":
+        docs_q = docs_q.eq("scope", "global").is_("user_id", "null")
+    else:  # 'both' — union via or_(); see PostgREST or() syntax
+        docs_q = docs_q.or_(
+            f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
+        )
+    try:
+        docs_resp = docs_q.execute()
+        documents = docs_resp.data or []
+    except Exception:
+        documents = []
+
+    # ─ Explicit folders rows (immediate children) ─
+    # Predicate "immediate child of norm":
+    #   if norm == '/': path != '/' AND path NOT LIKE '/%/%'
+    #   else:           path LIKE norm||'/%' AND path NOT LIKE norm||'/%/%'
+    explicit_subfolders: list[str] = []
+    try:
+        f_q = supabase_client.table("folders").select("path")
+        if scope == "user":
+            f_q = f_q.eq("scope", "user").eq("user_id", user_id)
+        elif scope == "global":
+            f_q = f_q.eq("scope", "global").is_("user_id", "null")
+        else:
+            f_q = f_q.or_(
+                f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
+            )
+        if norm == "/":
+            f_q = f_q.neq("path", "/").not_.like("path", "/%/%")
+        else:
+            f_q = f_q.like("path", f"{norm}/%").not_.like("path", f"{norm}/%/%")
+        f_resp = f_q.execute()
+        explicit_subfolders = [row["path"] for row in (f_resp.data or [])]
+    except Exception:
+        explicit_subfolders = []
+
+    # ─ Inferred subfolders from documents.folder_path (descendants below norm) ─
+    # Strip the norm||'/' prefix and take first segment.
+    inferred_subfolders: set[str] = set()
+    try:
+        inf_q = supabase_client.table("documents").select("folder_path")
+        if scope == "user":
+            inf_q = inf_q.eq("scope", "user").eq("user_id", user_id)
+        elif scope == "global":
+            inf_q = inf_q.eq("scope", "global").is_("user_id", "null")
+        else:
+            inf_q = inf_q.or_(
+                f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
+            )
+        prefix = "/" if norm == "/" else f"{norm}/"
+        inf_q = inf_q.like("folder_path", f"{prefix}%")
+        inf_resp = inf_q.execute()
+        for row in (inf_resp.data or []):
+            fp = row.get("folder_path") or ""
+            if fp.startswith(prefix):
+                rest = fp[len(prefix):]
+                first_seg = rest.split("/", 1)[0]
+                if first_seg:
+                    # Reconstruct the canonical immediate-child path.
+                    inferred_subfolders.add(prefix + first_seg if norm == "/" else f"{norm}/{first_seg}")
+    except Exception:
+        pass
+
+    # Union explicit + inferred; deduplicate; sort for deterministic output.
+    all_subfolders = sorted(set(explicit_subfolders) | inferred_subfolders)
+
+    return {
+        "path": norm,
+        "documents": documents,
+        "subfolders": all_subfolders,
+    }
+
+
+def create_folder(
+    path: str,
+    scope: str,
+    user_id: str | None,
+    supabase_client,
+) -> dict:
+    """Create an explicit folders row via Migration 019's atomic upsert RPC.
+
+    Idempotent: if a row already exists at (scope, COALESCE(user_id,'00..0'), path),
+    returns the existing row with action='exists'. Otherwise inserts a new row and
+    returns it with action='created'.
+
+    For scope='global' the caller MUST pass user_id=None (the RPC raises a
+    check_violation otherwise via the coupling rule).
+    """
+    norm = normalize_path(path)
+
+    result = supabase_client.rpc("create_folder_if_not_exists", {
+        "p_scope": scope,
+        "p_user_id": user_id,   # None for scope='global'
+        "p_path": norm,
+    }).execute()
+
+    if not result.data:
+        # RPC returned no rows — should not happen for a well-formed call, but be defensive.
+        return {"id": None, "scope": scope, "user_id": user_id, "path": norm,
+                "created_at": None, "action": "exists"}
+
+    row = result.data[0]
+    # Hydrate the full folders row so the caller (router) gets created_at.
+    full_q = supabase_client.table("folders").select("*").eq("id", row["id"]).maybe_single().execute()
+    full = (full_q.data or {}) if full_q else {}
+
+    return {
+        "id": row["id"],
+        "scope": full.get("scope", scope),
+        "user_id": full.get("user_id", user_id),
+        "path": full.get("path", norm),
+        "created_at": full.get("created_at"),
+        "action": "created" if row.get("created") else "exists",
+    }
+
+
+def move_document(
+    document_id: str,
+    new_folder_path: str,
+    user_id: str,
+    supabase_client,
+) -> dict | None:
+    """Move a document to a new folder. Scope is immutable (Migration 015 trigger).
+
+    UPDATE filters .eq('id', document_id).eq('user_id', user_id) — defense in depth
+    against cross-user moves alongside RLS. Returns the updated document row, or
+    None if no row matched (e.g., wrong owner).
+    """
+    norm = normalize_path(new_folder_path)
+
+    result = (
+        supabase_client.table("documents")
+        .update({"folder_path": norm})
+        .eq("id", document_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not result.data:
+        return None
+    return result.data[0]
+
+
+def rename_folder(
+    old_path: str,
+    new_path: str,
+    scope: str,
+    user_id: str | None,
+    supabase_client,
+) -> dict:
+    """Rename a folder (transactional prefix update on documents + folders).
+
+    Calls Migration 019's rename_folder_prefix RPC — the only cross-table-atomic
+    unit available from supabase-py (PostgREST executes each .execute() in its own
+    transaction; only RPCs span multiple statements atomically). FOLDER-03.
+
+    Raises:
+        ValueError: if old_path or new_path normalize to '/' (root rename forbidden;
+                    defense in depth alongside the RPC's own root-rename check).
+    """
+    old_norm = normalize_path(old_path)
+    new_norm = normalize_path(new_path)
+    if old_norm == "/" or new_norm == "/":
+        raise ValueError("cannot rename root path")
+
+    result = supabase_client.rpc("rename_folder_prefix", {
+        "p_old_prefix": old_norm,
+        "p_new_prefix": new_norm,
+        "p_scope": scope,
+        "p_user_id": user_id,    # None for scope='global'
+    }).execute()
+
+    if not result.data:
+        return {"documents_updated": 0, "folders_updated": 0}
+    row = result.data[0]
+    return {
+        "documents_updated": row.get("documents_updated", 0),
+        "folders_updated": row.get("folders_updated", 0),
+    }
+
+
+def delete_folder(
+    folder_id: str,
+    supabase_client,
+) -> dict:
+    """Delete a folder iff empty (race-free single-transaction empty-check + delete).
+
+    Calls Migration 019's delete_folder_if_empty RPC, which uses SELECT ... FOR UPDATE
+    on the folders row to eliminate the TOCTOU race. FOLDER-04 + Pitfall 5.
+
+    Returns:
+        On success: {deleted: True, document_count: 0, subfolder_count: 0}
+        On non-empty: {deleted: False, error: 'FOLDER_NOT_EMPTY',
+                       document_count: int, subfolder_count: int}
+
+    The 'no_data_found' SQLSTATE from the RPC (folder missing) propagates as an
+    Exception — the router (Plan 04) catches it and returns 404. The service
+    layer does NOT catch the missing-folder case; the caller decides.
+    """
+    result = supabase_client.rpc("delete_folder_if_empty", {
+        "p_folder_id": folder_id,
+    }).execute()
+
+    if not result.data:
+        return {"deleted": False, "error": "FOLDER_NOT_EMPTY",
+                "document_count": 0, "subfolder_count": 0}
+
+    row = result.data[0]
+    if row.get("deleted"):
+        return {"deleted": True, "document_count": 0, "subfolder_count": 0}
+    return {
+        "deleted": False,
+        "error": "FOLDER_NOT_EMPTY",
+        "document_count": row.get("document_count", 0),
+        "subfolder_count": row.get("subfolder_count", 0),
+    }
+
+
 # Inline self-tests — runnable via `python -m app.services.folder_service` for fast sanity checks.
 # The full normalize_path test matrix lives in scripts/test_two_scope_rls.py (plan 08).
 if __name__ == "__main__":
