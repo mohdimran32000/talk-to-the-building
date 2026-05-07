@@ -45,8 +45,9 @@ LANGUAGE plpgsql
 SECURITY INVOKER
 AS $$
 DECLARE
-  v_doc_count    INT;
-  v_folder_count INT;
+  v_doc_count        INT;
+  v_folder_count     INT;
+  v_old_prefix_like  TEXT;  -- HI-03: LIKE-pattern-escaped form of p_old_prefix
 BEGIN
   -- Defense in depth: validate canonical form (matches CHECK from migrations 012/013).
   IF p_old_prefix !~ '^/$|^/[^/]+(/[^/]+)*$' THEN
@@ -62,12 +63,24 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
 
+  -- HI-03: Migration 012/013's canonical-form regex `^/[^/]+(/[^/]+)*$` allows
+  -- `_` and `%` in folder segments. Without escaping, `LIKE '/foo_bar/%'`
+  -- treats `_` as a single-char wildcard and would over-match `/fooXbar/...`.
+  -- Escape backslash FIRST (so we do not double-escape the backslashes we
+  -- insert next), then `%` and `_`. We pass `ESCAPE '\'` explicitly even
+  -- though `\` is the Postgres default — clearer intent and guards against
+  -- future standard_conforming_strings changes.
+  v_old_prefix_like := replace(replace(replace(p_old_prefix,
+                          '\', '\\'),
+                          '%', '\%'),
+                          '_', '\_');
+
   UPDATE public.documents
      SET folder_path = p_new_prefix || substring(folder_path FROM length(p_old_prefix) + 1)
    WHERE scope = p_scope
      AND (p_user_id IS NULL OR user_id = p_user_id)
      AND (folder_path = p_old_prefix
-          OR folder_path LIKE p_old_prefix || '/%');
+          OR folder_path LIKE v_old_prefix_like || '/%' ESCAPE '\');
   GET DIAGNOSTICS v_doc_count = ROW_COUNT;
 
   UPDATE public.folders
@@ -75,7 +88,7 @@ BEGIN
    WHERE scope = p_scope
      AND (p_user_id IS NULL OR user_id = p_user_id)
      AND (path = p_old_prefix
-          OR path LIKE p_old_prefix || '/%');
+          OR path LIKE v_old_prefix_like || '/%' ESCAPE '\');
   GET DIAGNOSTICS v_folder_count = ROW_COUNT;
 
   RETURN QUERY SELECT v_doc_count, v_folder_count;
@@ -103,6 +116,7 @@ DECLARE
   v_user_id         UUID;
   v_doc_count       INT;
   v_subfolder_count INT;
+  v_path_like       TEXT;  -- HI-03: LIKE-pattern-escaped form of v_path
 BEGIN
   -- Lock the folders row to block concurrent renames during this transaction.
   SELECT path, scope, user_id INTO v_path, v_scope, v_user_id
@@ -115,19 +129,29 @@ BEGIN
       USING ERRCODE = 'no_data_found';
   END IF;
 
+  -- HI-03: escape `\`, `%`, `_` in v_path so a folder name containing those
+  -- literals (allowed by Migration 012/013's canonical-form CHECK) does not
+  -- become wildcards in the LIKE predicate. Without this, /foo_bar would be
+  -- incorrectly classified as non-empty if /fooXbar/baz exists. Escape `\`
+  -- first so we do not double-escape the backslashes we insert next.
+  v_path_like := replace(replace(replace(v_path,
+                    '\', '\\'),
+                    '%', '\%'),
+                    '_', '\_');
+
   -- Count documents at-or-under this path (RLS applies via SECURITY INVOKER).
   SELECT COUNT(*) INTO v_doc_count
     FROM public.documents
    WHERE scope = v_scope
      AND (v_user_id IS NULL OR user_id = v_user_id)
-     AND (folder_path = v_path OR folder_path LIKE v_path || '/%');
+     AND (folder_path = v_path OR folder_path LIKE v_path_like || '/%' ESCAPE '\');
 
   -- Count strict-descendant folders rows.
   SELECT COUNT(*) INTO v_subfolder_count
     FROM public.folders
    WHERE scope = v_scope
      AND (v_user_id IS NULL OR user_id = v_user_id)
-     AND path LIKE v_path || '/%';
+     AND path LIKE v_path_like || '/%' ESCAPE '\';
 
   IF v_doc_count > 0 OR v_subfolder_count > 0 THEN
     -- Return without deleting; router maps to {error: 'FOLDER_NOT_EMPTY', ...}

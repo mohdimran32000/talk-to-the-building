@@ -78,6 +78,23 @@ def normalize_path(p: str | None) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 
 
+def _escape_like(s: str) -> str:
+    """Escape LIKE wildcard metacharacters in a literal string.
+
+    HI-03: Migration 012's canonical-form regex `^/[^/]+(/[^/]+)*$` ALLOWS `%`
+    and `_` in folder segments. When a folder name contains these characters
+    and we build a LIKE predicate `f"{prefix}/%"`, the literal `_` becomes a
+    single-char wildcard and the literal `%` becomes a multi-char wildcard,
+    causing over-matching (e.g. /foo_bar's predicate also matches /fooXbar/).
+
+    Postgres LIKE uses `\\` as the default escape character (no explicit
+    ESCAPE clause needed), so prefixing each `\\`, `%`, and `_` with `\\` is
+    sufficient. Order matters: escape `\\` FIRST so we do not double-escape
+    the backslashes we just inserted.
+    """
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _assert_uuid(value: str | None, field_name: str = "user_id") -> None:
     """Defense-in-depth UUID validator.
 
@@ -171,9 +188,13 @@ def list_folder(
                 f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
             )
         if norm == "/":
+            # Root: any path with two or more '/' is strictly deeper than /child.
             f_q = f_q.neq("path", "/").not_.like("path", "/%/%")
         else:
-            f_q = f_q.like("path", f"{norm}/%").not_.like("path", f"{norm}/%/%")
+            # HI-03: escape `%` and `_` in `norm` so a folder name containing
+            # those literals does not become a wildcard in the LIKE predicate.
+            esc = _escape_like(norm)
+            f_q = f_q.like("path", f"{esc}/%").not_.like("path", f"{esc}/%/%")
         f_resp = f_q.execute()
         explicit_subfolders = [row["path"] for row in (f_resp.data or [])]
     except Exception:
@@ -193,7 +214,12 @@ def list_folder(
                 f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
             )
         prefix = "/" if norm == "/" else f"{norm}/"
-        inf_q = inf_q.like("folder_path", f"{prefix}%")
+        # HI-03: escape `%` and `_` in the prefix so folder names containing
+        # those literals do not become wildcards in the LIKE predicate. The
+        # Python-side `if fp.startswith(prefix):` filter below provides a
+        # second-line cross-check using the original (unescaped) prefix.
+        like_prefix = "/" if norm == "/" else f"{_escape_like(norm)}/"
+        inf_q = inf_q.like("folder_path", f"{like_prefix}%")
         inf_resp = inf_q.execute()
         for row in (inf_resp.data or []):
             fp = row.get("folder_path") or ""
