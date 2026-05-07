@@ -353,10 +353,19 @@ def delete_folder(
     folder_id: str,
     supabase_client,
 ) -> dict:
-    """Delete a folder iff empty (race-free single-transaction empty-check + delete).
+    """Delete a folder iff empty (single-transaction empty-check + delete).
 
     Calls Migration 019's delete_folder_if_empty RPC, which uses SELECT ... FOR UPDATE
-    on the folders row to eliminate the TOCTOU race. FOLDER-04 + Pitfall 5.
+    on the folders row to serialize concurrent rename / delete attempts on that
+    row. FOLDER-04 + Pitfall 5.
+
+    HI-02 / LO-03 (Phase 3 review): the FOR UPDATE lock is row-scoped and does
+    NOT block concurrent INSERTs into documents at the same folder_path. Under
+    Strategy B (folders is a sparse, explicit-empty-only side table), the
+    interleaving "delete folder while concurrent upload" is race-free for data
+    integrity but user-visibly confusing: the folder appears to "come back" on
+    next list as an inferred folder. UIs MUST refresh after delete; callers
+    needing strict serialization with uploads should obtain an external lock.
 
     Returns:
         On success: {deleted: True, document_count: 0, subfolder_count: 0}

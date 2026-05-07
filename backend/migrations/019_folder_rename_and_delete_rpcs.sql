@@ -8,10 +8,20 @@
 --    PL/pgSQL block — implicitly transactional. PostgREST executes each
 --    .execute() in its own transaction; an RPC is the only cross-table-atomic
 --    unit available from supabase-py (FOLDER-03 + Pitfall 5 mid-rename rollback).
--- 2. delete_folder_if_empty uses FOR UPDATE on the folders row to eliminate
---    the TOCTOU race between count-check and delete (FOLDER-04 + Pitfall 5).
---    Standard MVCC: row-level write lock blocks concurrent UPDATE/DELETE but
---    not SELECT (see 03-RESEARCH.md §Folder Delete Implementation, A4).
+-- 2. delete_folder_if_empty uses FOR UPDATE on the folders row to serialize
+--    concurrent rename / delete attempts on the SAME folders row (FOLDER-04 +
+--    Pitfall 5). Standard MVCC: row-level write lock blocks concurrent
+--    UPDATE/DELETE on this row but not SELECT.
+--    HI-02 (Phase 3 review): the FOR UPDATE lock does NOT block concurrent
+--    INSERTs into `documents` at folder_path = v_path. The classic interleaving
+--    is: (T1) lock folders row, count documents (sees 0); (T2) upload INSERTs a
+--    doc at v_path, commits; (T1) DELETE folders row. Result: documents row
+--    persists at v_path with no folders row — under Strategy B this is a
+--    valid INFERRED folder, but the user perceives "delete didn't work" because
+--    /v_path reappears in the next list. We ACCEPT this behavior for now (a
+--    heavier `LOCK TABLE documents IN SHARE ROW EXCLUSIVE MODE` would serialize
+--    ALL uploads during a delete, which is too coarse for the production
+--    workload). Strategy-B-aware UIs MUST refresh after delete.
 -- 3. create_folder_if_not_exists wraps INSERT ... ON CONFLICT DO NOTHING with
 --    proper coupling validation (Pitfall 10 + STATE.md Strategy B). The
 --    expression list in ON CONFLICT MUST exactly match Migration 013's
