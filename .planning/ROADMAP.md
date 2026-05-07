@@ -83,7 +83,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 03-PLAN.md — record_manager.determine_action() extended with scope+folder_path kwargs and the corresponding SELECT-filter branching (FOLDER-05) ✅ 2026-05-07
 
 **Wave 3** *(parallel after Wave 2 — different router files)*
-- [ ] 04-PLAN.md — backend/app/routers/folders.py (NEW) + main.py registration: GET/POST/PATCH/DELETE with inline admin gate + structured 409 (FOLDER-06)
+- [x] 04-PLAN.md — backend/app/routers/folders.py (NEW) + main.py registration: GET/POST/PATCH/DELETE with inline admin gate + structured 409 (FOLDER-06) ✅ 2026-05-07
 - [ ] 05-PLAN.md — backend/app/routers/files.py extended: POST /upload accepts folder_path + scope query args + PATCH /{id} for rename and folder move (FOLDER-07)
 
 **Wave 4** *(blocked on Waves 1-3 — integration suite tests against shipped code)*
@@ -146,7 +146,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
-| 3. Folder Service + Routers + Dedup Extension | 1/6 | In progress | - |
+| 3. Folder Service + Routers + Dedup Extension | 4/6 | In progress | - |
 | 4. Five Exploration Tools + search_documents Extension | 0/TBD | Not started | - |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
