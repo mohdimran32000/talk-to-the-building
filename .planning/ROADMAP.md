@@ -76,7 +76,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 6 plans in 4 waves
 
 **Wave 1** *(blocking — Migration 019 RPCs needed by Wave 2+)*
-- [ ] 01-PLAN.md — Migration 019 (rename_folder_prefix + delete_folder_if_empty + create_folder_if_not_exists RPCs) + apply via run_migrations.py + Pydantic schemas (FolderResponse, FolderCreate, FolderPatch, FilePatch + DocumentResponse extensions) (FOLDER-03, FOLDER-04)
+- [x] 01-PLAN.md — Migration 019 (rename_folder_prefix + delete_folder_if_empty + create_folder_if_not_exists RPCs) + apply via Supabase MCP apply_migration (DATABASE_URL fallback) + Pydantic schemas (FolderResponse, FolderCreate, FolderPatch, FilePatch + DocumentResponse extensions) (FOLDER-03, FOLDER-04) ✅ 2026-05-07
 
 **Wave 2** *(parallel after Wave 1 — different files)*
 - [ ] 02-PLAN.md — folder_service.py extensions: list_folder, create_folder, move_document, rename_folder, delete_folder (FOLDER-02)
@@ -146,7 +146,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
-| 3. Folder Service + Routers + Dedup Extension | 0/6 | Planned (ready to execute) | - |
+| 3. Folder Service + Routers + Dedup Extension | 1/6 | In progress | - |
 | 4. Five Exploration Tools + search_documents Extension | 0/TBD | Not started | - |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |

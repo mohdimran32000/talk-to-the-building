@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 / Plan 04 EXECUTED — test_backfill.py integration suite delivered AND Phase 2 closes green. backend/scripts/test_backfill.py (414 lines, 21 h.test() assertions across 7 sections) verifies Plan 01 (Storage round-trip), Plan 02 (synchronous content_markdown write — BACKFILL-01), Plan 03 (backfill happy path — BACKFILL-02, missing-blob → requires_user_reupload — BACKFILL-04, idempotent re-run — Pitfall 4), BACKFILL-03 verifier (folder_path='/' AND scope='user' DEFAULT no-op), and Phase 2 SC4 byte-equivalence (sync write ≈ fresh extract_text within ±20 chars). Registered as the 14th suite in test_all.py (Backfill positioned immediately after Files; SUITES count 13 → 14). Suite-level run: 15/15 PASS, 0 FAIL. Operator-pre-req surprise during run: documents bucket did not exist on the Supabase project despite checkpoint approval; orchestrator created it programmatically via service-role (sb.storage.create_bucket('documents', options={'public':False,'file_size_limit':52428800})) — Migration 018 was already applied. Recommendation captured: future Phase 1/2 setup runbook should automate or canary the bucket pre-req. Cross-suite sweep result: 163 passed / 23 failed across 14 suites; Backfill 15/15; ALL 23 failures attributable to pre-existing Phase-1 carry-forward (admin-assumption + auth middleware regression in Threads/Messages/Hybrid/Tools/Sub-Agents) — NOT Phase-2 regression. 2 atomic commits prior to plan close (2ad9b78 test, 01f2782 test). Zero deviations.
-last_updated: "2026-05-07T00:00:00Z"
-last_activity: 2026-05-07 -- Phase 3 / PLANNED. 6 PLAN.md files created in 4 waves: Wave 1 (Plan 01, autonomous=false) Migration 019 (rename_folder_prefix + delete_folder_if_empty + create_folder_if_not_exists RPCs) + Pydantic v2 schemas; Wave 2 (Plans 02+03, parallel) folder_service.py CRUD extensions + record_manager.py dedup-key extension; Wave 3 (Plans 04+05, parallel) folders router + main.py registration / files router extensions (POST /upload?folder_path=&scope=, PATCH /{id}); Wave 4 (Plan 06, autonomous=false checkpoint) test_folders.py + test_all.py SUITES registration. All 7 phase requirements covered (FOLDER-02..07 + TEST-01); 5 ROADMAP success criteria mapped to plan must_haves; 3 named pitfalls (4/5/10) addressed. Strategy B locked: folders rows written ONLY by explicit POST /api/folders, never on file upload (per STATE.md line 74). Plan-checker: 1 revision iteration; passed after RESEARCH.md Open Questions formally marked RESOLVED. One non-blocking warning surfaced: Plans 04+05 inline-mirror admin-gate logic (FastAPI Depends evaluates before body parsing — body-conditional gate cannot use Depends; substantive 403 outcome preserved).
+stopped_at: Phase 3 / Plan 01 COMPLETE — Migration 019 (3 RPCs) authored + applied via Supabase MCP apply_migration (DATABASE_URL unavailable in this environment, MCP fallback used per Phase 1 / Plan 07 precedent); schemas.py extended with FolderResponse/FolderCreate/FolderPatch/FilePatch + DocumentResponse user_id-nullable + folder_path/scope defaults. pg_proc verified all 3 RPCs present, all SECURITY INVOKER, all granted to authenticated. Wave 2 (Plans 02 + 03) unblocked.
+last_updated: "2026-05-07T10:00:27.845Z"
+last_activity: 2026-05-07 -- Phase 03 / Plan 01 complete (Migration 019 applied + schemas.py extended)
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 12
-  completed_plans: 12
-  percent: 100
+  total_plans: 18
+  completed_plans: 13
+  percent: 72
 ---
 
 # Project State
@@ -21,24 +21,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-01)
 
 **Core value:** The agent can locate the *right* piece of information in a large, organized knowledge base — using semantic search when meaning matters and codebase-style traversal (tree/glob/grep/read) when precision matters — without hallucinating across unrelated material.
-**Current focus:** Phase 2 — content_markdown Backfill (Gated)
+**Current focus:** Phase 03 — folder-service-routers-dedup-extension
 
 ## Current Position
 
-Phase: 3 of 6 — Folder Service + Routers + Dedup Extension. STATUS: Ready to execute (planning complete; 6 PLAN.md files; 4 waves).
-Plan: 0 of 6 in Phase 3 done. Wave 1: Plan 01 (Migration 019 + schemas). Wave 2: Plans 02+03 (folder_service + record_manager dedup). Wave 3: Plans 04+05 (folders router + files router extensions). Wave 4: Plan 06 (test_folders.py + test_all.py register).
-Status: Phase 3 plans verified (1 revision iteration; passed after RESEARCH.md Open Questions formally RESOLVED). 7/7 requirements covered (FOLDER-02..07 + TEST-01). Plan 01 [BLOCKING] schema-push task applies Migration 019 RPCs before downstream plans execute. Strategy B locked from Phase 1 STATE line 74: uploads NEVER touch folders table; only POST /api/folders writes folders rows. Non-blocking warning: Plans 04+05 inline admin-gate logic (FastAPI Depends-before-body-parse constraint; SC1 outcome preserved). Phase 2 prior context: closed green at 12/12 plans across phases 1+2; 14-suite test_all.py harness ready for test_folders.py registration as 15th suite.
-Last activity: 2026-05-07 -- Phase 3 PLANNED; 6 plans / 4 waves; ready for /gsd-execute-phase
+Phase: 03 (folder-service-routers-dedup-extension) — EXECUTING
+Plan: 2 of 6 (Plan 01 complete; Wave 2 Plans 02+03 ready to start in parallel)
+Status: Executing Phase 03
+Last activity: 2026-05-07 -- Phase 03 / Plan 01 complete (Migration 019 RPCs + Phase 3 Pydantic schemas)
 
-Progress: [██████████] 100% (12/12 plans across phases 1+2 complete; Phase 3 planned 0/6); Project: 33% (2/6 phases complete; Phase 3 next, ready to execute)
+Progress: [█████████░] 72% (13/18 plans complete: Phase 1 = 8/8, Phase 2 = 4/4, Phase 3 = 1/6); Project: 33% (2/6 phases complete; Phase 3 in progress 1/6)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 12 (Phase 1: 8, Phase 2: 4)
-- Average duration: ~2.9 min
-- Total execution time: ~35 min
+- Total plans completed: 13 (Phase 1: 8, Phase 2: 4, Phase 3: 1)
+- Average duration: ~3.6 min
+- Total execution time: ~47 min
 
 **By Phase:**
 
@@ -46,11 +46,12 @@ Progress: [██████████] 100% (12/12 plans across phases 1+2 c
 |-------|-------|-------|----------|
 | 1 | 8 | ~12 min | ~1.5 min |
 | 2 | 4 (complete) | ~23 min | ~5.8 min |
+| 3 | 1 (in progress, 1/6) | ~12 min | ~12 min |
 
 **Recent Trend:**
 
-- Last 7 plans: 01-06 (~2 min) → 01-07 (apply migrations) → 01-08 (RLS matrix tests passed 49/0) → 02-01 (~5 min, 2 files, 2 tasks — Storage Gap closure: files.py upload + Migration 018 RLS; zero deviations) → 02-02 (~5 min, 2 files, 2 tasks — synchronous content_markdown write + docling pin; zero deviations) → 02-03 (~6 min, 1 file, 1 task — backfill CLI; 1 Rule-3 deviation: load_dotenv() reorder) → **02-04 (~7 min, 2 files, 2 tasks + 1 checkpoint — test_backfill.py integration suite + test_all.py registration; suite-level run 15/15 PASS; zero code deviations; one operator-pre-req runbook gap surfaced and resolved programmatically — bucket missing despite checkpoint approval, orchestrator created via service-role sb.storage.create_bucket call)**
-- Trend: ✅ on-spec; Phase 2 closes green; paste-from-PATTERNS succeeded for all four Phase 2 plans. New convention learned this plan: integration-test canary pattern (probe critical external resource BEFORE any test runs; fail with single actionable [FATAL] message vs. cascading failures). Operator-pre-req runbook gap captured for future phases: bucket creation should be either automated (one-shot script) or canary-verified before suite invocation. Phase 2's 4 plans averaged ~5.8 min/plan vs. Phase 1's 1.5 min/plan — Phase 2's planners produced more comprehensive PATTERNS.md paste-ready snippets, and execution was largely paste-from-PATTERNS
+- Last 7 plans: 01-08 (RLS matrix 49/0) → 02-01 (~5 min, Storage Gap closure) → 02-02 (~5 min, synchronous content_markdown write) → 02-03 (~6 min, backfill CLI; 1 Rule-3 deviation) → 02-04 (~7 min, test_backfill.py 15/15 PASS) → **03-01 (~12 min, 2 files, 3 tasks + 1 human-action checkpoint — Migration 019 with 3 cross-table-atomic PL/pgSQL RPCs + Pydantic v2 schemas extension; zero code deviations; orchestrator handled DATABASE_URL absence by falling back to Supabase MCP `apply_migration` + verifying via MCP `execute_sql` against pg_proc — this is now the documented apply-path fallback for any future migration)**
+- Trend: ✅ on-spec; Phase 3 starts green; paste-from-PATTERNS succeeded again. New convention learned this plan: cross-table-atomic RPC pattern (when one logical operation spans >1 table, write it as a PL/pgSQL function — only cross-table atomicity unit available from supabase-py because each `.execute()` is its own PostgREST txn). New idioms first-used-in-codebase: FOR UPDATE row-lock for TOCTOU mitigation; GET DIAGNOSTICS ROW_COUNT for return-value capture; ON CONFLICT (expression-list) DO NOTHING + RETURNING + null-check fallback SELECT for atomic upsert with created/existed differentiation. New defense pattern: Pydantic v2 immutability via field omission (FilePatch deliberately omits `scope` so smuggled bodies are silently dropped at parse time). Apply-path fallback chain documented: try DATABASE_URL + run_migrations.py first; if env missing, fall back to Supabase MCP `apply_migration` + verify via pg_proc query
 
 *Updated after each plan completion*
 
@@ -115,6 +116,13 @@ Recent decisions affecting current work:
 - Phase 2 / Plan 04 (executed): **Scoped-cleanup discipline for fixture-inserting tests** — module-level `_tracked_*` lists populated at create-time; per-id DELETE in finally; defense-in-depth two-path cleanup (API delete + service-role delete) for resources that may live outside the test user's RLS scope. CLAUDE.md "Tests must NEVER delete all user data" rule honored verbatim — verified by static `grep -iE "DELETE FROM|TRUNCATE"` returning no matches
 - Phase 2 / Plan 04 (executed): **Operator-pre-req runbook gap discovered** — the documents bucket did NOT exist on the Supabase project at suite-run time despite operator approving the Plan 01/04 checkpoint. Migration 018's RLS policies were already applied. Resolution: orchestrator created the bucket programmatically via service-role `sb.storage.create_bucket('documents', options={'public': False, 'file_size_limit': 52428800})`. Recommendation captured: future Phase 1/2 setup runbook should either (a) automate bucket creation as a one-shot script alongside `run_migrations.py` OR (b) explicitly verify before suite invocation via the canary `sb.storage.from_('documents').list(path='', options={'limit':1})`. This is a UAT carry-forward observation, NOT a code defect — the pre-req is correctly documented in Plan 01 SUMMARY §"User Setup Required" and the canary did its job by surfacing the gap
 - Phase 2 / Plan 04 (executed): **Cross-suite sweep result** — 163 passed / 23 failed across 14 suites; Backfill 15/15 PASS; ALL 23 FAILs are pre-existing Phase-1 carry-forward (admin-assumption + auth middleware regression in Threads/Messages/Hybrid/Tools/Sub-Agents). NONE are attributable to Phase 2 deliverables. Phase 2 closes green; the 23 FAILs continue to be tracked as the Phase-1 carry-forward and remain out of scope for Phase 2/3+
+- Phase 3 / Plan 01 (executed): **Cross-table-atomic RPC pattern is now codebase convention** — when one logical operation spans >1 table (rename touches documents AND folders), pack into a single PL/pgSQL function. supabase-py runs every `.execute()` in its own PostgREST transaction, so an RPC is the only cross-table atomicity unit available. rename_folder_prefix wraps two UPDATEs (documents + folders) in a single PL/pgSQL block — implicitly transactional; mid-rename crash leaves no partial state (FOLDER-03 + Pitfall 5 mid-rename rollback)
+- Phase 3 / Plan 01 (executed): **FOR UPDATE row-lock TOCTOU pattern first-used in codebase** — delete_folder_if_empty does `SELECT ... INTO ... FROM folders WHERE id = ... FOR UPDATE;` first, then count-check + DELETE in the same PL/pgSQL block. Standard MVCC: lock blocks concurrent UPDATE/DELETE of same row, doesn't block SELECT. Eliminates the TOCTOU race an app-side SELECT-then-DELETE would have (FOLDER-04 + Pitfall 5 race-free-delete)
+- Phase 3 / Plan 01 (executed): **ON CONFLICT (expression-list) DO NOTHING + RETURNING + null-check fallback SELECT idiom** — atomic upsert pattern that returns `(id, created_bool)` for both winners (created=TRUE) and losers (created=FALSE) of a concurrent INSERT race. The expression list MUST mirror Migration 013's unique expression index VERBATIM: `(scope, COALESCE(user_id, '00000000-0000-0000-0000-000000000000'::uuid), path)` — Postgres requires expression-list match or it raises 'there is no unique or exclusion constraint matching the ON CONFLICT specification' at execution time (Pitfall 10 + STATE.md Strategy B)
+- Phase 3 / Plan 01 (executed): **All Phase 3 RPCs are SECURITY INVOKER (NOT SECURITY DEFINER)** — RLS policies from Migration 015 apply when the RPC executes; admin gate at the router layer (Plan 04 + Plan 05) is the first line of defense for global-scope writes, RLS is the second. SECURITY DEFINER would bypass RLS entirely — explicitly forbidden in the migration's own verifier (`assert 'SECURITY DEFINER' not in body`). Convention extends to any future Phase 3+ RPC
+- Phase 3 / Plan 01 (executed): **FilePatch deliberately omits scope field — Pydantic v2 silently-drop-unknown is the FIRST defense layer** — Pydantic v2's default `extra='ignore'` makes a smuggled `{"scope": "global"}` request body get dropped at parse time before the router code ever sees it. Three-layer defense: Pydantic drop -> router empty-update-rejection (Plan 05) -> Migration 015 `forbid_scope_mutation` trigger (the bedrock). One-line in-class comment documents the immutability contract for future maintainers (Pitfall B mitigation; pattern extends to any future Patch model that touches a Migration-015-immutable column)
+- Phase 3 / Plan 01 (executed): **DocumentResponse.user_id changed from str to Optional[str] = None** — global-scope rows have NULL user_id per Migration 012 coupling CHECK; without nullability the FastAPI response serializer raises ValidationError on any global doc the response endpoint touches. Same plan added folder_path: str = '/' and scope: str = 'user' defaults (FOLDER-07) — defaults preserve existing-row response shape so no Phase 1/2 test assertion needs updating
+- Phase 3 / Plan 01 (executed): **Migration apply-path fallback chain documented** — try DATABASE_URL + run_migrations.py first; if env missing, fall back to Supabase MCP `apply_migration` (the canonical fallback Phase 1 / Plan 07 used). Both paths run the EXACT same SQL file content. Verify via Supabase MCP `execute_sql` against pg_proc (`SELECT proname, prosecdef, proacl FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='public' AND p.proname IN (...)`). Future phase plans should accept either apply path equivalently
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
 
@@ -143,13 +151,23 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-06 (resumed)
-Stopped at: Phase 2 COMPLETE — all 4 plans done; suite-level run 15/15 PASS; cross-suite sweep 163/186 (23 FAILs are Phase-1 carry-forward). Resumed and proceeding to Phase 3 (Folder Service + Routers + Dedup Extension) — no CONTEXT.md yet, no PLAN files; phase has TBD plans in ROADMAP.
+Last session: 2026-05-07 (Phase 3 / Plan 01 executed)
+Stopped at: Phase 3 / Plan 01 COMPLETE — Migration 019 (3 cross-table-atomic PL/pgSQL RPCs: rename_folder_prefix, delete_folder_if_empty, create_folder_if_not_exists) authored + applied via Supabase MCP `apply_migration` (DATABASE_URL unavailable in this environment, MCP fallback used per Phase 1 / Plan 07 precedent); pg_proc verified all 3 functions present, all SECURITY INVOKER (`prosecdef = false`), all granted to authenticated. schemas.py extended with 4 new Pydantic v2 models (FolderResponse, FolderCreate, FolderPatch, FilePatch) + DocumentResponse changes (user_id -> Optional[str]; + folder_path: str = '/'; + scope: str = 'user'). FilePatch deliberately omits scope field with one-line comment documenting the Pydantic-v2-ignore-unknown defense alongside Migration 015 forbid_scope_mutation trigger.
+
+Phase 2 (complete) recap:
   - ✅ 01-PLAN.md: Storage upload at upload-time + Migration 018 storage.objects RLS (commits 41e3eeb, e256c91; SUMMARY at 02-01-SUMMARY.md)
   - ✅ 02-PLAN.md: Synchronous content_markdown write in ingest_document() + ingest_document_update() (atomic single-UPDATE) + docling==2.91.0 pin (BACKFILL-01); commits 4dd7c4c, 91ad425; SUMMARY at 02-02-SUMMARY.md
-  - ✅ 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04 — --dry-run / --limit / --document-id / --purge-orphans); reuses extract_text() from app.services.ingestion; canary Storage check; interactive --purge-orphans ritual; commit 28e8fab; SUMMARY at 02-03-SUMMARY.md
-  - ✅ 04-PLAN.md: test_backfill.py integration suite (414 lines, 21 h.test() across 7 sections; BACKFILL-03 verifier + Phase 2 SC4 byte-equivalence) + registered as 14th suite in test_all.py; commits 2ad9b78, 01f2782; suite-level run 15/15 PASS; SUMMARY at 02-04-SUMMARY.md
-Wave 1 (parallel): 01 + 02 BOTH DONE. Wave 2: 03 + 04 BOTH DONE. Phase 2 fully complete (4/4).
-Operator-pre-req runbook gap surfaced AND resolved during Plan 04 execution: bucket created programmatically via service-role (sb.storage.create_bucket('documents', options={'public':False,'file_size_limit':52428800})); Migration 018 was already applied. Future Phase 1/2 setup runbook should automate or canary the bucket pre-req.
-Carry-forward from Phase 1: still pending — commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption (these are the 23 FAILs in the cross-suite sweep result; tracked but out of scope for Phase 2). Note: Phase 1 currently shows 8/8 plans complete in the progress table; the 017.sql carry-forward is a documentation/migration-naming follow-up, not a missing plan.
-Resume file: Phase 3 (Folder Service + Routers + Dedup Extension) — TBD plans; depends on Phase 1 (already complete); parallel-safe with Phase 2 deliverables (already complete).
+  - ✅ 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04); commit 28e8fab; SUMMARY at 02-03-SUMMARY.md
+  - ✅ 04-PLAN.md: test_backfill.py integration suite (414 lines, 21 h.test()); commits 2ad9b78, 01f2782; suite-level run 15/15 PASS; SUMMARY at 02-04-SUMMARY.md
+
+Phase 3 progress (1/6 complete):
+  - ✅ 01-PLAN.md: Migration 019 (3 RPCs) + Pydantic v2 schemas extension (FOLDER-03, FOLDER-04); commits ca017e7 (Task 1) + 5728f6f (Task 3) — Task 2 was a checkpoint:human-action that the orchestrator handled by falling back to Supabase MCP apply_migration; SUMMARY at 03-01-SUMMARY.md
+  - ⏳ Wave 2 ready (parallel): 02-PLAN.md (folder_service.py extensions: list_folder/create_folder/move_document/rename_folder/delete_folder — DIRECT consumer of all 3 RPCs by name) + 03-PLAN.md (record_manager.determine_action() extended with scope+folder_path)
+  - ⏳ Wave 3 ready (parallel after Wave 2): 04-PLAN.md (folders router) + 05-PLAN.md (files router PATCH)
+  - ⏳ Wave 4: 06-PLAN.md (test_folders.py integration suite)
+
+Apply-path note: Migration 019 was applied via Supabase MCP `apply_migration` instead of `run_migrations.py` because DATABASE_URL was not exported in this environment. Verification via MCP `execute_sql` against pg_proc confirmed all 3 functions present with prosecdef=false and authenticated grants. This is now the documented apply-path fallback for any future migration.
+
+Carry-forward from Phase 1: still pending — commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption (the 23 FAILs in the cross-suite sweep result; tracked but out of scope for Phases 2/3+). The 017.sql carry-forward is a documentation/migration-naming follow-up, not a missing plan.
+
+Resume file: Phase 3 / Plan 02 (folder_service.py extensions) AND Plan 03 (record_manager extension) — Wave 2, parallel-safe with each other; both directly unblocked by this plan's RPCs + schemas.
