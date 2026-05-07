@@ -237,7 +237,21 @@ async def patch_file(
     # building (only file_name and folder_path get passed through).
     update_data: dict = {}
     if body.file_name is not None:
-        update_data["file_name"] = body.file_name
+        # MD-01: basic file_name hygiene. The dedup unique index already rejects
+        # collisions (with a leaky 23505 — proper 409 mapping is deferred to
+        # Phase 6 per RESEARCH §Open Questions Q2), but `/`, `\`, NUL, and
+        # absurd lengths break downstream consumers (storage path computation
+        # via os.path.splitext, UI rendering). Reject early at the boundary.
+        fn = body.file_name
+        if (
+            "/" in fn
+            or "\\" in fn
+            or "\x00" in fn
+            or len(fn) > 255
+            or len(fn) == 0
+        ):
+            raise HTTPException(status_code=400, detail="invalid file_name")
+        update_data["file_name"] = fn
     if body.folder_path is not None:
         try:
             update_data["folder_path"] = normalize_path(body.folder_path)
