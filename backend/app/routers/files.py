@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Query
 from app.auth import get_current_user, get_supabase_client, get_user_profile
@@ -107,12 +108,17 @@ async def upload_file(
         return doc
 
     if record_action.action == "update":
+        # HI-04: previously sent "now()" as a JSON string literal — PostgREST passes
+        # this through as text and Postgres does not recognize the 'now()' literal
+        # for timestamptz cast (only the special string 'now' without parens). Use
+        # an ISO-formatted UTC timestamp so the field is set correctly regardless
+        # of whether a column-level trigger exists.
         supabase.table("documents").update({
             "file_size": len(contents),
             "mime_type": mime_type,
             "status": "pending",
             "error_message": None,
-            "updated_at": "now()",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", record_action.document_id).execute()
 
         doc = supabase.table("documents").select("*") \
