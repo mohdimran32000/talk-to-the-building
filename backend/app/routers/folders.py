@@ -85,6 +85,14 @@ async def rename_folder_endpoint(
         raise HTTPException(status_code=404, detail="Folder not found")
     folder = existing_resp.data
 
+    # CR-02: Ownership guard for user-scope rows. The supabase client used here is
+    # service-role (bypasses RLS), so the application layer MUST enforce ownership
+    # explicitly — otherwise rename_folder() would happily pass the VICTIM's
+    # user_id to the RPC and rewrite their folder + child documents. Place BEFORE
+    # the admin gate so 404 is identical for "not yours" and "doesn't exist".
+    if folder["scope"] == "user" and folder.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
     # Admin gate AFTER lookup — gate decision depends on existing.scope.
     if folder["scope"] == "global":
         _require_admin(user_id, "global folder rename")
