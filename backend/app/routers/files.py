@@ -193,3 +193,46 @@ async def delete_file(file_id: str, user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Document not found")
     supabase.table("documents").delete().eq("id", file_id).execute()
     return {"status": "deleted"}
+
+
+@router.patch("/{file_id}", response_model=DocumentResponse)
+async def patch_file(
+    file_id: str,
+    body: FilePatch,
+    user_id: str = Depends(get_current_user),
+):
+    sb = get_supabase_client()
+
+    # Lookup for admin-gate decision; 404 cleanly if missing.
+    try:
+        doc_resp = sb.table("documents").select("*").eq("id", file_id).maybe_single().execute()
+    except Exception:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not doc_resp or not doc_resp.data:
+        raise HTTPException(status_code=404, detail="Document not found")
+    existing = doc_resp.data
+
+    # Admin gate AFTER lookup — gate decision depends on existing.scope.
+    if existing["scope"] == "global":
+        profile = get_user_profile(user_id)
+        if not profile or not profile.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Admin required for global document")
+
+    # CRITICAL: scope is IMMUTABLE — Migration 015's forbid_scope_mutation trigger
+    # is the bedrock. FilePatch model deliberately omits scope (Pydantic v2 ignores
+    # unknown fields on body parsing); explicit safety net via update_data dict
+    # building (only file_name and folder_path get passed through).
+    update_data: dict = {}
+    if body.file_name is not None:
+        update_data["file_name"] = body.file_name
+    if body.folder_path is not None:
+        try:
+            update_data["folder_path"] = normalize_path(body.folder_path)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    sb.table("documents").update(update_data).eq("id", file_id).execute()
+    return sb.table("documents").select("*").eq("id", file_id).single().execute().data
