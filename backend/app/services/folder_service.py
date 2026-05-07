@@ -13,6 +13,7 @@ Phase 1 ships only `normalize_path`. Phase 3 extends this file with folder CRUD
 """
 import re
 import unicodedata
+import uuid as _uuid
 
 # Canonical path regex (mirrors the DB CHECK constraint added in migration 012/013).
 # Matches: '/' OR '/segment' OR '/segment/segment/...'  where segment = [^/]+
@@ -77,6 +78,31 @@ def normalize_path(p: str | None) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 
 
+def _assert_uuid(value: str | None, field_name: str = "user_id") -> None:
+    """Defense-in-depth UUID validator.
+
+    HI-01: list_folder() builds PostgREST `.or_()` filters via f-string
+    interpolation of `user_id`. Today JWT-derived user_id values are UUIDs, but
+    interpolating untrusted-shape strings into a query DSL is a defense-in-depth
+    violation. If user_id ever picked up `,` `)` `(` `.` etc., the OR-clause
+    structure could be subverted to drop the per-user filter. Validate at the
+    service-layer entry point so the contract is enforced regardless of what
+    the router passes.
+
+    Allows None — callers that legitimately pass None (e.g. scope='global'
+    paths in other helpers) are unaffected.
+
+    Raises:
+        ValueError: if `value` is neither None nor a syntactically valid UUID.
+    """
+    if value is None:
+        return
+    try:
+        _uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError(f"invalid {field_name}: not a UUID")
+
+
 def list_folder(
     path: str,
     scope: str,
@@ -101,8 +127,17 @@ def list_folder(
 
     Scope handling: 'both' returns union of user (matching user_id) + global; 'user' filters
     to the calling user; 'global' filters to user_id IS NULL.
+
+    HI-01 contract: when scope is 'user' or 'both', user_id is interpolated into a
+    PostgREST `.or_()` DSL string. We validate it as a UUID at the boundary so a
+    malformed value cannot subvert the OR clause structure. Callers that legitimately
+    pass user_id=None must use scope='global' (which never interpolates user_id).
     """
     norm = normalize_path(path)
+
+    # HI-01: defense in depth against PostgREST DSL injection via user_id f-strings.
+    if scope in ("user", "both"):
+        _assert_uuid(user_id, field_name="user_id")
 
     # ─ Documents at this exact folder ─
     docs_q = supabase_client.table("documents").select("*").eq("folder_path", norm)

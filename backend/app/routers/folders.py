@@ -45,7 +45,12 @@ async def list_folders(
         norm = normalize_path(path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return list_folder(norm, scope, user_id, sb)
+    try:
+        return list_folder(norm, scope, user_id, sb)
+    except ValueError as e:
+        # HI-01: list_folder validates user_id is UUID-shaped before f-string
+        # interpolating into PostgREST `.or_()` DSL. Surface as 400.
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("", response_model=FolderResponse)
