@@ -87,7 +87,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 05-PLAN.md — backend/app/routers/files.py extended: POST /upload accepts folder_path + scope query args + PATCH /{id} for rename and folder move (FOLDER-07) ✅ 2026-05-07
 
 **Wave 4** *(blocked on Waves 1-3 — integration suite tests against shipped code)*
-- [ ] 06-PLAN.md — backend/scripts/test_folders.py + register in test_all.py (TEST-01; covers FOLDER-02..07 + Pitfalls 4/5/10 + SC1..SC5)
+- [x] 06-PLAN.md — backend/scripts/test_folders.py (591 lines / 10 sections / 36 h.test() assertions) + register in test_all.py (TEST-01; covers FOLDER-02..07 + Pitfalls 4/5/10 + SC1..SC5 + cross-user isolation) 🟢 2026-05-07 CODE-COMPLETE — focused-suite green run gated on operator backend restart (canary correctly caught stale-backend pre-req)
 
 **Cross-cutting constraints** *(must_haves shared across multiple plans)*
 - `normalize_path()` is the SOLE chokepoint for every folder_path write — Plan 02 (service-layer entry), Plan 04 (router entry), Plan 05 (router entry); Pitfall 4 mitigation
