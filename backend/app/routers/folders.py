@@ -131,6 +131,13 @@ async def delete_folder_endpoint(
         raise HTTPException(status_code=404, detail="Folder not found")
     folder = existing_resp.data
 
+    # CR-01: Ownership guard for user-scope rows. The supabase client used here is
+    # service-role (bypasses RLS), so the application layer MUST enforce ownership
+    # explicitly. Mirrors the pattern in routers/files.py:delete_file. Returning 404
+    # (not 403) avoids leaking whether the UUID exists for another user.
+    if folder["scope"] == "user" and folder.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
     if folder["scope"] == "global":
         _require_admin(user_id, "global folder delete")
 
