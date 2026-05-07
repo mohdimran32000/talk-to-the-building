@@ -212,6 +212,13 @@ async def patch_file(
         raise HTTPException(status_code=404, detail="Document not found")
     existing = doc_resp.data
 
+    # CR-03: Ownership guard for user-scope rows. The supabase client used here is
+    # service-role (bypasses RLS), so the application layer MUST enforce ownership
+    # explicitly — mirrors the pattern already in delete_file (line 187). Returning
+    # 404 (not 403) avoids leaking whether the UUID exists for another user.
+    if existing["scope"] == "user" and existing.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Document not found")
+
     # Admin gate AFTER lookup — gate decision depends on existing.scope.
     if existing["scope"] == "global":
         profile = get_user_profile(user_id)
@@ -234,5 +241,12 @@ async def patch_file(
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    sb.table("documents").update(update_data).eq("id", file_id).execute()
+    # CR-03 defense in depth: scope the UPDATE so a TOCTOU between lookup and
+    # mutation cannot let a user write to another user's row even if a future
+    # bug weakens the ownership guard above. For scope='user' rows, also filter
+    # by user_id; for scope='global' the admin gate is sufficient (user_id IS NULL).
+    update_q = sb.table("documents").update(update_data).eq("id", file_id)
+    if existing["scope"] == "user":
+        update_q = update_q.eq("user_id", user_id)
+    update_q.execute()
     return sb.table("documents").select("*").eq("id", file_id).single().execute().data
