@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 3 / Plan 01 COMPLETE — Migration 019 (3 RPCs) authored + applied via Supabase MCP apply_migration (DATABASE_URL unavailable in this environment, MCP fallback used per Phase 1 / Plan 07 precedent); schemas.py extended with FolderResponse/FolderCreate/FolderPatch/FilePatch + DocumentResponse user_id-nullable + folder_path/scope defaults. pg_proc verified all 3 RPCs present, all SECURITY INVOKER, all granted to authenticated. Wave 2 (Plans 02 + 03) unblocked.
-last_updated: "2026-05-07T10:00:27.845Z"
-last_activity: 2026-05-07 -- Phase 03 / Plan 01 complete (Migration 019 applied + schemas.py extended)
+stopped_at: Phase 3 / Plan 02 COMPLETE — folder_service.py extended with 5 new public functions (list_folder, create_folder, move_document, rename_folder, delete_folder); 3 are thin Python wrappers around Plan 01's Migration 019 RPCs (rename_folder_prefix, delete_folder_if_empty, create_folder_if_not_exists), 2 are direct supabase-py table queries. Every path-accepting function runs normalize_path() as its FIRST STATEMENT (Pitfall 4 chokepoint enforcement). File grew from 96 → 354 lines (+258 LOC, 0 deletions); zero FastAPI imports added (pure service module preserved); inline __main__ self-tests still pass 15/15. rename_folder root-rename guard validated 4/4 boundary cases. Wave 3 (Plans 04 + 05) unblocked.
+last_updated: "2026-05-07T10:06:00.000Z"
+last_activity: 2026-05-07 -- Phase 03 / Plan 02 complete (folder_service.py CRUD extensions; FOLDER-02)
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 18
-  completed_plans: 13
-  percent: 72
+  completed_plans: 14
+  percent: 78
 ---
 
 # Project State
@@ -26,19 +26,19 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 03 (folder-service-routers-dedup-extension) — EXECUTING
-Plan: 2 of 6 (Plan 01 complete; Wave 2 Plans 02+03 ready to start in parallel)
+Plan: 3 of 6 (Plans 01 + 02 complete; Wave 2 Plan 03 still pending; Wave 3 Plans 04+05 unblocked by Plan 02)
 Status: Executing Phase 03
-Last activity: 2026-05-07 -- Phase 03 / Plan 01 complete (Migration 019 RPCs + Phase 3 Pydantic schemas)
+Last activity: 2026-05-07 -- Phase 03 / Plan 02 complete (folder_service.py CRUD extensions: list_folder/create_folder/move_document/rename_folder/delete_folder)
 
-Progress: [█████████░] 72% (13/18 plans complete: Phase 1 = 8/8, Phase 2 = 4/4, Phase 3 = 1/6); Project: 33% (2/6 phases complete; Phase 3 in progress 1/6)
+Progress: [██████████] 78% (14/18 plans complete: Phase 1 = 8/8, Phase 2 = 4/4, Phase 3 = 2/6); Project: 33% (2/6 phases complete; Phase 3 in progress 2/6)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 13 (Phase 1: 8, Phase 2: 4, Phase 3: 1)
-- Average duration: ~3.6 min
-- Total execution time: ~47 min
+- Total plans completed: 14 (Phase 1: 8, Phase 2: 4, Phase 3: 2)
+- Average duration: ~3.7 min
+- Total execution time: ~52 min
 
 **By Phase:**
 
@@ -46,12 +46,12 @@ Progress: [█████████░] 72% (13/18 plans complete: Phase 1 = 
 |-------|-------|-------|----------|
 | 1 | 8 | ~12 min | ~1.5 min |
 | 2 | 4 (complete) | ~23 min | ~5.8 min |
-| 3 | 1 (in progress, 1/6) | ~12 min | ~12 min |
+| 3 | 2 (in progress, 2/6) | ~17 min | ~8.5 min |
 
 **Recent Trend:**
 
-- Last 7 plans: 01-08 (RLS matrix 49/0) → 02-01 (~5 min, Storage Gap closure) → 02-02 (~5 min, synchronous content_markdown write) → 02-03 (~6 min, backfill CLI; 1 Rule-3 deviation) → 02-04 (~7 min, test_backfill.py 15/15 PASS) → **03-01 (~12 min, 2 files, 3 tasks + 1 human-action checkpoint — Migration 019 with 3 cross-table-atomic PL/pgSQL RPCs + Pydantic v2 schemas extension; zero code deviations; orchestrator handled DATABASE_URL absence by falling back to Supabase MCP `apply_migration` + verifying via MCP `execute_sql` against pg_proc — this is now the documented apply-path fallback for any future migration)**
-- Trend: ✅ on-spec; Phase 3 starts green; paste-from-PATTERNS succeeded again. New convention learned this plan: cross-table-atomic RPC pattern (when one logical operation spans >1 table, write it as a PL/pgSQL function — only cross-table atomicity unit available from supabase-py because each `.execute()` is its own PostgREST txn). New idioms first-used-in-codebase: FOR UPDATE row-lock for TOCTOU mitigation; GET DIAGNOSTICS ROW_COUNT for return-value capture; ON CONFLICT (expression-list) DO NOTHING + RETURNING + null-check fallback SELECT for atomic upsert with created/existed differentiation. New defense pattern: Pydantic v2 immutability via field omission (FilePatch deliberately omits `scope` so smuggled bodies are silently dropped at parse time). Apply-path fallback chain documented: try DATABASE_URL + run_migrations.py first; if env missing, fall back to Supabase MCP `apply_migration` + verify via pg_proc query
+- Last 7 plans: 02-01 (~5 min, Storage Gap closure) → 02-02 (~5 min, synchronous content_markdown write) → 02-03 (~6 min, backfill CLI; 1 Rule-3 deviation) → 02-04 (~7 min, test_backfill.py 15/15 PASS) → 03-01 (~12 min, Migration 019 + Pydantic schemas; MCP apply fallback) → **03-02 (~5 min, 1 file, 1 task — folder_service.py +258 LOC; 5 new public functions: list_folder/create_folder/move_document/rename_folder/delete_folder; 3 are RPC wrappers, 2 are direct queries; every path arg runs normalize_path() FIRST STATEMENT (Pitfall 4 chokepoint); zero deviations; paste-from-PATTERNS succeeded on first attempt; AST gate + smoke import + inline self-tests + rename root-guard 4/4 all green on first run)**
+- Trend: ✅ on-spec; Phase 3 progressing fast post-Wave-1 (Plan 02 was a single-task, paste-ready plan — fastest Phase-3 plan so far). New patterns documented this plan: RPC-wrapper service pattern (thin Python wrapper for each Migration 019 RPC; normalize→translate kwargs→extract result.data[0]→return plain dict; router never sees PostgREST shapes); inferred-vs-explicit folder UNION pattern (sparse Strategy-B folders side table + DISTINCT one-level subfolder names from documents.folder_path); service-layer total-function rule (catch transient PostgREST 204/500 in read paths via try/except → empty fallback; only no_data_found is allowed to propagate, because the router needs to decide 404 vs other). PostgREST or() filter idiom first-used-in-codebase: `.or_("and(scope.eq.user,user_id.eq.{u}),and(scope.eq.global,user_id.is.null)")` for scope='both' UNION queries; supabase-py .not_.like() chained operator for "NOT LIKE 'prefix/%/%'" immediate-child predicate. Wave 3 (Plans 04+05 — folders router + files router PATCH) now fully unblocked.
 
 *Updated after each plan completion*
 
@@ -123,6 +123,14 @@ Recent decisions affecting current work:
 - Phase 3 / Plan 01 (executed): **FilePatch deliberately omits scope field — Pydantic v2 silently-drop-unknown is the FIRST defense layer** — Pydantic v2's default `extra='ignore'` makes a smuggled `{"scope": "global"}` request body get dropped at parse time before the router code ever sees it. Three-layer defense: Pydantic drop -> router empty-update-rejection (Plan 05) -> Migration 015 `forbid_scope_mutation` trigger (the bedrock). One-line in-class comment documents the immutability contract for future maintainers (Pitfall B mitigation; pattern extends to any future Patch model that touches a Migration-015-immutable column)
 - Phase 3 / Plan 01 (executed): **DocumentResponse.user_id changed from str to Optional[str] = None** — global-scope rows have NULL user_id per Migration 012 coupling CHECK; without nullability the FastAPI response serializer raises ValidationError on any global doc the response endpoint touches. Same plan added folder_path: str = '/' and scope: str = 'user' defaults (FOLDER-07) — defaults preserve existing-row response shape so no Phase 1/2 test assertion needs updating
 - Phase 3 / Plan 01 (executed): **Migration apply-path fallback chain documented** — try DATABASE_URL + run_migrations.py first; if env missing, fall back to Supabase MCP `apply_migration` (the canonical fallback Phase 1 / Plan 07 used). Both paths run the EXACT same SQL file content. Verify via Supabase MCP `execute_sql` against pg_proc (`SELECT proname, prosecdef, proacl FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid WHERE n.nspname='public' AND p.proname IN (...)`). Future phase plans should accept either apply path equivalently
+- Phase 3 / Plan 02 (executed): **RPC-wrapper service pattern is now codebase convention** — when a service function exists primarily to call an RPC (e.g., rename_folder/delete_folder/create_folder wrap Migration 019 RPCs), its job is to (a) normalize input via Pitfall-4 chokepoint, (b) translate Python kwargs to RPC parameter names (p_<name>), (c) extract `result.data[0]` defensively (fall back to a structured zero-count dict if `.data` is empty), (d) return a plain dict with stable field names. The router layer never sees PostgREST response shapes; the wrapper hides PostgREST plumbing AND gives the router a stable contract that survives RPC body changes
+- Phase 3 / Plan 02 (executed): **Inferred-vs-explicit folder UNION pattern** — list_folder unions the sparse public.folders side table (Strategy B: rows only present for explicitly-empty folders) with implicit folders inferred from documents.folder_path (DISTINCT one-level subfolder names extracted via `LIKE prefix||'/%'` then strip-prefix + first-segment). Required because without the inferred-from-documents source, a folder containing files but no folders row would not appear in listings. One-level filtering uses `.like(prefix||'%').not_.like(prefix||'%/%')` — the second filter excludes nested descendants. Plan 04's GET /api/folders endpoint and Phase 4's tree tool will reuse this UNION shape
+- Phase 3 / Plan 02 (executed): **Service-layer total-function rule** — service functions should be total (always return a value) unless the missing data is genuinely a programming error. Plan 02 catches transient PostgREST 204/500 noise via per-block try/except → empty-list fallback for read paths (list_folder); only the no_data_found case (folder missing in delete_folder) is allowed to propagate, because the router needs to decide 404 vs 410 vs other. Keeps the service surface easy to reason about and gives the router unambiguous HTTP-status-mapping authority
+- Phase 3 / Plan 02 (executed): **PostgREST or() filter idiom first-used-in-codebase** — `.or_("and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)")` for scope='both' UNION queries in list_folder. Only way to express "union of two AND-clauses" in a single supabase-py query without two round-trips. user_id is interpolated into the f-string deliberately; supabase-py does NOT parameterize or_() arguments (PostgREST design), and user_id is already a UUID-shaped str from the JWT (router validates before calling). Pattern extends to any future read endpoint that needs to UNION user-scope rows with global-scope rows
+- Phase 3 / Plan 02 (executed): **supabase-py .not_.like() and .is_('user_id', 'null') idioms first-used-in-codebase** — `.not_.like("path", f"{norm}/%/%")` for "NOT LIKE prefix/%/%" immediate-child folder predicate; `.is_("user_id", "null")` for explicit IS NULL filter on global-scope rows (literal 'null' string for PostgREST is.null operator). Both are required to express the immediate-child predicate without a raw SQL fallback. Pattern extends to any future query that needs negative LIKE matching or IS NULL filtering through supabase-py
+- Phase 3 / Plan 02 (executed): **rename_folder fail-fast guard before RPC** — raises ValueError("cannot rename root path") if old_path or new_path normalize to '/' BEFORE invoking the RPC. Defense in depth alongside Migration 019's own root-rename check at L60-63 (the RPC raises check_violation). The Python guard fails fast (saves a network round-trip) AND gives a more informative error message than the Postgres check_violation surfacing as a generic exception. Same fail-fast-before-RPC pattern can apply to any future service function whose RPC has cheap-to-check preconditions
+- Phase 3 / Plan 02 (executed): **create_folder hydrates the full row via a second query** — Migration 019's create_folder_if_not_exists RPC returns minimum (id, created_bool); the wrapper does a second `.table('folders').select('*').eq('id', row['id']).maybe_single()` to give the router a complete FolderResponse-shaped dict (id, scope, user_id, path, created_at, action). The RPC could be extended to RETURN the full row, but the current contract returns only the minimum needed for action-differentiation; the hydrate-step keeps the wrapper compatible with that minimal contract. Pattern: when a wrapper needs richer shape than the RPC provides, hydrate via a follow-up query rather than redesigning the RPC
+- Phase 3 / Plan 02 (executed): **move_document defense-in-depth via .eq('user_id', user_id)** — UPDATE filters .eq('id', document_id).eq('user_id', user_id). Even though Migration 015's UPDATE policy on documents enforces user_id = (SELECT auth.uid()) for scope='user', the explicit .eq('user_id', user_id) at the app layer means a service-role client (which bypasses RLS) still cannot accidentally move another user's document. Pattern matches CONCERNS.md anti-pattern documentation. Establishes the convention: any service-layer UPDATE on user-scoped data SHOULD include .eq('user_id', user_id) even when RLS would also enforce it, because future service-role code paths could otherwise accidentally violate user isolation
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
 
@@ -151,8 +159,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-07 (Phase 3 / Plan 01 executed)
-Stopped at: Phase 3 / Plan 01 COMPLETE — Migration 019 (3 cross-table-atomic PL/pgSQL RPCs: rename_folder_prefix, delete_folder_if_empty, create_folder_if_not_exists) authored + applied via Supabase MCP `apply_migration` (DATABASE_URL unavailable in this environment, MCP fallback used per Phase 1 / Plan 07 precedent); pg_proc verified all 3 functions present, all SECURITY INVOKER (`prosecdef = false`), all granted to authenticated. schemas.py extended with 4 new Pydantic v2 models (FolderResponse, FolderCreate, FolderPatch, FilePatch) + DocumentResponse changes (user_id -> Optional[str]; + folder_path: str = '/'; + scope: str = 'user'). FilePatch deliberately omits scope field with one-line comment documenting the Pydantic-v2-ignore-unknown defense alongside Migration 015 forbid_scope_mutation trigger.
+Last session: 2026-05-07 (Phase 3 / Plan 02 executed)
+Stopped at: Phase 3 / Plan 02 COMPLETE — backend/app/services/folder_service.py extended with 5 new public functions (list_folder, create_folder, move_document, rename_folder, delete_folder); 3 are thin Python wrappers around Plan 01's Migration 019 RPCs (create_folder→create_folder_if_not_exists, rename_folder→rename_folder_prefix, delete_folder→delete_folder_if_empty), 2 are direct supabase-py table queries (list_folder, move_document). Every path-accepting function runs normalize_path() as its FIRST STATEMENT (Pitfall 4 chokepoint enforcement; suspenders alongside Plan 04/05 router-layer belt). File grew from 96 → 354 lines (+258 LOC, 0 deletions); zero FastAPI imports added (pure service module preserved); inline __main__ self-tests still pass 15/15. Single-task atomic commit 4802edd.
 
 Phase 2 (complete) recap:
   - ✅ 01-PLAN.md: Storage upload at upload-time + Migration 018 storage.objects RLS (commits 41e3eeb, e256c91; SUMMARY at 02-01-SUMMARY.md)
@@ -160,14 +168,15 @@ Phase 2 (complete) recap:
   - ✅ 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04); commit 28e8fab; SUMMARY at 02-03-SUMMARY.md
   - ✅ 04-PLAN.md: test_backfill.py integration suite (414 lines, 21 h.test()); commits 2ad9b78, 01f2782; suite-level run 15/15 PASS; SUMMARY at 02-04-SUMMARY.md
 
-Phase 3 progress (1/6 complete):
+Phase 3 progress (2/6 complete):
   - ✅ 01-PLAN.md: Migration 019 (3 RPCs) + Pydantic v2 schemas extension (FOLDER-03, FOLDER-04); commits ca017e7 (Task 1) + 5728f6f (Task 3) — Task 2 was a checkpoint:human-action that the orchestrator handled by falling back to Supabase MCP apply_migration; SUMMARY at 03-01-SUMMARY.md
-  - ⏳ Wave 2 ready (parallel): 02-PLAN.md (folder_service.py extensions: list_folder/create_folder/move_document/rename_folder/delete_folder — DIRECT consumer of all 3 RPCs by name) + 03-PLAN.md (record_manager.determine_action() extended with scope+folder_path)
-  - ⏳ Wave 3 ready (parallel after Wave 2): 04-PLAN.md (folders router) + 05-PLAN.md (files router PATCH)
+  - ✅ 02-PLAN.md: folder_service.py CRUD extensions (FOLDER-02; 5 new public functions: list_folder/create_folder/move_document/rename_folder/delete_folder); commit 4802edd; SUMMARY at 03-02-SUMMARY.md
+  - ⏳ Wave 2 remaining: 03-PLAN.md (record_manager.determine_action() extended with scope+folder_path)
+  - ⏳ Wave 3 ready (parallel after Wave 2): 04-PLAN.md (folders router — DIRECT consumer of list_folder/create_folder/rename_folder/delete_folder) + 05-PLAN.md (files router PATCH — DIRECT consumer of move_document)
   - ⏳ Wave 4: 06-PLAN.md (test_folders.py integration suite)
 
 Apply-path note: Migration 019 was applied via Supabase MCP `apply_migration` instead of `run_migrations.py` because DATABASE_URL was not exported in this environment. Verification via MCP `execute_sql` against pg_proc confirmed all 3 functions present with prosecdef=false and authenticated grants. This is now the documented apply-path fallback for any future migration.
 
 Carry-forward from Phase 1: still pending — commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption (the 23 FAILs in the cross-suite sweep result; tracked but out of scope for Phases 2/3+). The 017.sql carry-forward is a documentation/migration-naming follow-up, not a missing plan.
 
-Resume file: Phase 3 / Plan 02 (folder_service.py extensions) AND Plan 03 (record_manager extension) — Wave 2, parallel-safe with each other; both directly unblocked by this plan's RPCs + schemas.
+Resume file: Phase 3 / Plan 03 (record_manager.determine_action extension — last Wave 2 plan; not blocking on Plan 02) OR Plans 04+05 (Wave 3, parallel-safe; both directly unblocked by Plan 02's folder_service exports).

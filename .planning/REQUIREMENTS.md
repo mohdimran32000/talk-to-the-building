@@ -30,7 +30,7 @@
 ### Folder Service
 
 - [x] **FOLDER-01**: Single canonical `normalize_path()` helper called by every write path (UI upload, drag-move, rename, backfill, tool arg parsing) ✅ Phase 1 / Plan 01 (2026-05-03)
-- [ ] **FOLDER-02**: `folder_service.py` provides `list_folder`, `create_folder`, `move_document`, `rename_folder`, `delete_folder`
+- [x] **FOLDER-02**: `folder_service.py` provides `list_folder`, `create_folder`, `move_document`, `rename_folder`, `delete_folder` ✅ Phase 3 / Plan 02 (2026-05-07) — 5 new public functions added to backend/app/services/folder_service.py at L80/184/227/253/291; 3 are thin Python wrappers around Migration 019 RPCs (create_folder→create_folder_if_not_exists, rename_folder→rename_folder_prefix, delete_folder→delete_folder_if_empty), 2 are direct supabase-py table queries (list_folder, move_document). Every path-accepting function runs normalize_path() as its FIRST STATEMENT (Pitfall 4 chokepoint). Commit 4802edd; SUMMARY at .planning/phases/03-folder-service-routers-dedup-extension/03-02-SUMMARY.md
 - [x] **FOLDER-03**: Folder rename is transactional prefix update on both `documents.folder_path` AND `folders.path` via Supabase RPC ✅ Phase 3 / Plan 01 (2026-05-07) — `rename_folder_prefix(p_old_prefix, p_new_prefix, p_scope, p_user_id)` RPC in Migration 019 (commit ca017e7); applied to live DB; SUMMARY at .planning/phases/03-folder-service-routers-dedup-extension/03-01-SUMMARY.md
 - [x] **FOLDER-04**: Folder delete rejects non-empty (returns structured `{error: "FOLDER_NOT_EMPTY", document_count, subfolder_count}`) ✅ Phase 3 / Plan 01 (2026-05-07) — `delete_folder_if_empty(p_folder_id)` RPC returns (deleted BOOLEAN, document_count INT, subfolder_count INT); router (Plan 04) maps deleted=FALSE to 409 with structured body. Migration 019 commit ca017e7
 - [ ] **FOLDER-05**: `record_manager.py` dedup key extended to `(scope, user_id, folder_path, file_name, hash)` so the same file in two folders is allowed
@@ -156,7 +156,7 @@
 | BACKFILL-03 | Phase 2 | ✅ Complete (Plan 02-04 verifier 2ad9b78) — no-op verifier confirms Migration 012 DEFAULT did its job |
 | BACKFILL-04 | Phase 2 | ✅ Complete (Plan 02-03 writer 28e8fab + Plan 02-04 verifier 2ad9b78) |
 | FOLDER-01 | Phase 1 | ✅ Complete (Plan 01, b608452) |
-| FOLDER-02 | Phase 3 | Pending |
+| FOLDER-02 | Phase 3 | ✅ Complete (Plan 03-02, folder_service.py +258 LOC commit 4802edd) |
 | FOLDER-03 | Phase 3 | ✅ Complete (Plan 03-01, Migration 019 commit ca017e7) |
 | FOLDER-04 | Phase 3 | ✅ Complete (Plan 03-01, Migration 019 commit ca017e7) |
 | FOLDER-05 | Phase 3 | Pending |

@@ -79,7 +79,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 01-PLAN.md — Migration 019 (rename_folder_prefix + delete_folder_if_empty + create_folder_if_not_exists RPCs) + apply via Supabase MCP apply_migration (DATABASE_URL fallback) + Pydantic schemas (FolderResponse, FolderCreate, FolderPatch, FilePatch + DocumentResponse extensions) (FOLDER-03, FOLDER-04) ✅ 2026-05-07
 
 **Wave 2** *(parallel after Wave 1 — different files)*
-- [ ] 02-PLAN.md — folder_service.py extensions: list_folder, create_folder, move_document, rename_folder, delete_folder (FOLDER-02)
+- [x] 02-PLAN.md — folder_service.py extensions: list_folder, create_folder, move_document, rename_folder, delete_folder (FOLDER-02) ✅ 2026-05-07
 - [ ] 03-PLAN.md — record_manager.determine_action() extended with scope+folder_path kwargs and the corresponding SELECT-filter branching (FOLDER-05)
 
 **Wave 3** *(parallel after Wave 2 — different router files)*
