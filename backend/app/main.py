@@ -5,7 +5,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import threads, messages, files, settings
+from app.routers import threads, messages, files, folders, settings
 
 app = FastAPI(title="RAG Masterclass API")
 
@@ -20,6 +20,7 @@ app.add_middleware(
 app.include_router(threads.router)
 app.include_router(messages.router)
 app.include_router(files.router)
+app.include_router(folders.router)
 app.include_router(settings.router)
 
 
