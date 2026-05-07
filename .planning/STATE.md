@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 3 / Plan 02 COMPLETE — folder_service.py extended with 5 new public functions (list_folder, create_folder, move_document, rename_folder, delete_folder); 3 are thin Python wrappers around Plan 01's Migration 019 RPCs (rename_folder_prefix, delete_folder_if_empty, create_folder_if_not_exists), 2 are direct supabase-py table queries. Every path-accepting function runs normalize_path() as its FIRST STATEMENT (Pitfall 4 chokepoint enforcement). File grew from 96 → 354 lines (+258 LOC, 0 deletions); zero FastAPI imports added (pure service module preserved); inline __main__ self-tests still pass 15/15. rename_folder root-rename guard validated 4/4 boundary cases. Wave 3 (Plans 04 + 05) unblocked.
-last_updated: "2026-05-07T10:06:00.000Z"
-last_activity: 2026-05-07 -- Phase 03 / Plan 02 complete (folder_service.py CRUD extensions; FOLDER-02)
+stopped_at: Phase 3 / Plan 03 COMPLETE — backend/app/services/record_manager.py::determine_action() extended with two new keyword arguments: scope: str = 'user' and folder_path: str = '/' (defaults preserve Phase 1/2 callers). SELECT extended with .eq('scope', scope).eq('folder_path', folder_path) AND a scope-branched user_id filter (.eq for 'user', .is_('user_id','null') for 'global' — Pitfall A mitigation: supabase-py SELECT filters do NOT auto-translate Migration 012's COALESCE-based unique-index NULL-equivalence). Uses existing documents_scope_user_path_filename_unique index from Migration 012:51-57 (filter columns match index columns in same order). RecordAction dataclass + compute_file_hash + compute_chunk_hash UNCHANGED. Try/except shape preserved. File 70 → 93 lines (+23 LOC; +37 / -14). All 5 smoke-test paths PASS (back-compat 4-arg, user-scope kwargs, global-scope branch, skip path, update path). Existing positional caller at backend/app/routers/files.py:73 unaffected. Plan 05 unblocked to upgrade the call site. FOLDER-05 satisfied at the service layer. Single-task atomic commit c86711a.
+last_updated: "2026-05-07T10:18:00.000Z"
+last_activity: 2026-05-07 -- Phase 03 / Plan 03 complete (record_manager.determine_action extended with scope+folder_path; FOLDER-05)
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 18
-  completed_plans: 14
-  percent: 78
+  completed_plans: 15
+  percent: 83
 ---
 
 # Project State
@@ -26,19 +26,19 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 03 (folder-service-routers-dedup-extension) — EXECUTING
-Plan: 3 of 6 (Plans 01 + 02 complete; Wave 2 Plan 03 still pending; Wave 3 Plans 04+05 unblocked by Plan 02)
+Plan: 4 of 6 (Plans 01 + 02 + 03 complete — Wave 2 fully done; Wave 3 Plans 04 + 05 unblocked, parallel-safe)
 Status: Executing Phase 03
-Last activity: 2026-05-07 -- Phase 03 / Plan 02 complete (folder_service.py CRUD extensions: list_folder/create_folder/move_document/rename_folder/delete_folder)
+Last activity: 2026-05-07 -- Phase 03 / Plan 03 complete (record_manager.determine_action extended with scope+folder_path kwargs; FOLDER-05)
 
-Progress: [██████████] 78% (14/18 plans complete: Phase 1 = 8/8, Phase 2 = 4/4, Phase 3 = 2/6); Project: 33% (2/6 phases complete; Phase 3 in progress 2/6)
+Progress: [██████████] 83% (15/18 plans complete: Phase 1 = 8/8, Phase 2 = 4/4, Phase 3 = 3/6); Project: 33% (2/6 phases complete; Phase 3 in progress 3/6)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 14 (Phase 1: 8, Phase 2: 4, Phase 3: 2)
-- Average duration: ~3.7 min
-- Total execution time: ~52 min
+- Total plans completed: 15 (Phase 1: 8, Phase 2: 4, Phase 3: 3)
+- Average duration: ~3.6 min
+- Total execution time: ~55 min
 
 **By Phase:**
 
@@ -46,12 +46,12 @@ Progress: [██████████] 78% (14/18 plans complete: Phase 1 = 
 |-------|-------|-------|----------|
 | 1 | 8 | ~12 min | ~1.5 min |
 | 2 | 4 (complete) | ~23 min | ~5.8 min |
-| 3 | 2 (in progress, 2/6) | ~17 min | ~8.5 min |
+| 3 | 3 (in progress, 3/6) | ~20 min | ~6.7 min |
 
 **Recent Trend:**
 
-- Last 7 plans: 02-01 (~5 min, Storage Gap closure) → 02-02 (~5 min, synchronous content_markdown write) → 02-03 (~6 min, backfill CLI; 1 Rule-3 deviation) → 02-04 (~7 min, test_backfill.py 15/15 PASS) → 03-01 (~12 min, Migration 019 + Pydantic schemas; MCP apply fallback) → **03-02 (~5 min, 1 file, 1 task — folder_service.py +258 LOC; 5 new public functions: list_folder/create_folder/move_document/rename_folder/delete_folder; 3 are RPC wrappers, 2 are direct queries; every path arg runs normalize_path() FIRST STATEMENT (Pitfall 4 chokepoint); zero deviations; paste-from-PATTERNS succeeded on first attempt; AST gate + smoke import + inline self-tests + rename root-guard 4/4 all green on first run)**
-- Trend: ✅ on-spec; Phase 3 progressing fast post-Wave-1 (Plan 02 was a single-task, paste-ready plan — fastest Phase-3 plan so far). New patterns documented this plan: RPC-wrapper service pattern (thin Python wrapper for each Migration 019 RPC; normalize→translate kwargs→extract result.data[0]→return plain dict; router never sees PostgREST shapes); inferred-vs-explicit folder UNION pattern (sparse Strategy-B folders side table + DISTINCT one-level subfolder names from documents.folder_path); service-layer total-function rule (catch transient PostgREST 204/500 in read paths via try/except → empty fallback; only no_data_found is allowed to propagate, because the router needs to decide 404 vs other). PostgREST or() filter idiom first-used-in-codebase: `.or_("and(scope.eq.user,user_id.eq.{u}),and(scope.eq.global,user_id.is.null)")` for scope='both' UNION queries; supabase-py .not_.like() chained operator for "NOT LIKE 'prefix/%/%'" immediate-child predicate. Wave 3 (Plans 04+05 — folders router + files router PATCH) now fully unblocked.
+- Last 8 plans: 02-01 (~5 min, Storage Gap closure) → 02-02 (~5 min, synchronous content_markdown write) → 02-03 (~6 min, backfill CLI; 1 Rule-3 deviation) → 02-04 (~7 min, test_backfill.py 15/15 PASS) → 03-01 (~12 min, Migration 019 + Pydantic schemas; MCP apply fallback) → 03-02 (~5 min, folder_service.py +258 LOC; 5 new public functions; zero deviations) → **03-03 (~3 min, 1 file, 1 task — record_manager.determine_action extended with scope+folder_path kwargs; +37 / -14 LOC; defaults preserve Phase 1/2 callers; SELECT extended with .eq scope + folder_path filters and a scope-branched user_id filter (.eq for 'user', .is_('user_id','null') for 'global' — Pitfall A mitigation); zero deviations; AST gate + import smoke + 5-path runtime smoke (back-compat / user-scope / global-scope / skip / update) all green on first run; FOLDER-05 satisfied at the service layer — Plan 05 owns the router upgrade)**
+- Trend: ✅ on-spec; Phase 3 Wave 2 complete; Plan 03 was the smallest Phase-3 plan so far (1 file, 1 task, paste-from-PATTERNS verbatim). New patterns documented this plan: default-kwarg back-compat extension (append new args at end with defaults that exactly match pre-extension behavior — verified by inspect.signature() in the verification gate); explicit IS-NULL filter branch on supabase-py SELECT (when nullable column is in filter and unique index uses COALESCE-equivalence for write-time dedup, the SELECT side MUST explicitly branch — `.eq('col', val)` for non-NULL; `.is_('col', 'null')` for NULL — supabase-py / PostgREST does NOT auto-translate the COALESCE trick into SELECT semantics; this is Pitfall A from 03-RESEARCH.md); SELECT-filter-column-order-matches-unique-index pattern (list .eq() filters in the same column order as the matching unique expression index for free index usage). Wave 3 (Plans 04 — folders router + 05 — files router PATCH/upload-handler kwargs) now the natural next step.
 
 *Updated after each plan completion*
 
@@ -131,6 +131,10 @@ Recent decisions affecting current work:
 - Phase 3 / Plan 02 (executed): **rename_folder fail-fast guard before RPC** — raises ValueError("cannot rename root path") if old_path or new_path normalize to '/' BEFORE invoking the RPC. Defense in depth alongside Migration 019's own root-rename check at L60-63 (the RPC raises check_violation). The Python guard fails fast (saves a network round-trip) AND gives a more informative error message than the Postgres check_violation surfacing as a generic exception. Same fail-fast-before-RPC pattern can apply to any future service function whose RPC has cheap-to-check preconditions
 - Phase 3 / Plan 02 (executed): **create_folder hydrates the full row via a second query** — Migration 019's create_folder_if_not_exists RPC returns minimum (id, created_bool); the wrapper does a second `.table('folders').select('*').eq('id', row['id']).maybe_single()` to give the router a complete FolderResponse-shaped dict (id, scope, user_id, path, created_at, action). The RPC could be extended to RETURN the full row, but the current contract returns only the minimum needed for action-differentiation; the hydrate-step keeps the wrapper compatible with that minimal contract. Pattern: when a wrapper needs richer shape than the RPC provides, hydrate via a follow-up query rather than redesigning the RPC
 - Phase 3 / Plan 02 (executed): **move_document defense-in-depth via .eq('user_id', user_id)** — UPDATE filters .eq('id', document_id).eq('user_id', user_id). Even though Migration 015's UPDATE policy on documents enforces user_id = (SELECT auth.uid()) for scope='user', the explicit .eq('user_id', user_id) at the app layer means a service-role client (which bypasses RLS) still cannot accidentally move another user's document. Pattern matches CONCERNS.md anti-pattern documentation. Establishes the convention: any service-layer UPDATE on user-scoped data SHOULD include .eq('user_id', user_id) even when RLS would also enforce it, because future service-role code paths could otherwise accidentally violate user isolation
+- Phase 3 / Plan 03 (executed): **Default-kwarg back-compat extension pattern is now codebase convention** — when a service function gains new arguments mid-project, append them at the END of the signature with defaults that EXACTLY match pre-extension behavior. Existing positional callers keep working untouched; new callers opt in via kwargs. determine_action gained `scope: str = 'user'` and `folder_path: str = '/'` (matching Phase 1/2 root-folder upload semantics); backend/app/routers/files.py:73's existing 4-positional-arg call continues to work without modification. Verified empirically via inspect.signature() in the AST/grep verification gate. Pattern extends to any future service-function evolution where back-compat is mandatory
+- Phase 3 / Plan 03 (executed): **Explicit IS-NULL filter branch on supabase-py SELECT (Pitfall A mitigation)** — when a nullable column is in the filter AND the underlying unique index uses COALESCE-equivalence for write-time dedup (e.g., Migration 012's `COALESCE(user_id, '00..0'::uuid)` in `documents_scope_user_path_filename_unique`), the SELECT side MUST explicitly branch — `.eq('col', val)` for non-NULL values; `.is_('col', 'null')` (literal string `'null'` mapped by supabase-py/PostgREST to SQL `IS NULL`) for NULL values. supabase-py / PostgREST does NOT auto-translate the COALESCE trick into SELECT filter semantics. Without the branch, `.eq('user_id', user_id)` would NEVER match a global row's NULL user_id, falsely returning `action='create'`, and the subsequent INSERT would then fail on the unique index. determine_action implements this as `if scope == 'user': query.eq('user_id', user_id) else: query.is_('user_id', 'null')`. Pattern extends to any future query that filters on a nullable column with a COALESCE-based unique index
+- Phase 3 / Plan 03 (executed): **SELECT-filter column-order-matches-unique-index pattern** — list `.eq()` filters in the SAME column order as the matching unique expression index (here: scope, user_id, folder_path, file_name — matching Migration 012:51-57's `documents_scope_user_path_filename_unique` index). Postgres can then use the index for the lookup without any planner hint. Convention extends to any future read path that filters by a multi-column unique index's exact column list. New index NOT needed for FOLDER-05 — Migration 012's existing index suffices
+- Phase 3 / Plan 03 (executed): **No normalize_path() inside record_manager** — caller-owned chokepoint principle preserved (Pitfall 4 enforcement). The router (Plan 05) normalizes once before calling determine_action; record_manager accepts canonical form as-is. Adding normalization here would duplicate work and violate the single-canonical-place principle. Same reasoning forbids `from app.services.folder_service import normalize_path` in record_manager (avoids future circular-import risk and keeps record_manager dependency-free as a pure data-layer helper)
 - Phase 5: SSE sub-agent event protocol generalized at the second sub-agent (Explorer), not bolted on
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
 
@@ -159,8 +163,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-07 (Phase 3 / Plan 02 executed)
-Stopped at: Phase 3 / Plan 02 COMPLETE — backend/app/services/folder_service.py extended with 5 new public functions (list_folder, create_folder, move_document, rename_folder, delete_folder); 3 are thin Python wrappers around Plan 01's Migration 019 RPCs (create_folder→create_folder_if_not_exists, rename_folder→rename_folder_prefix, delete_folder→delete_folder_if_empty), 2 are direct supabase-py table queries (list_folder, move_document). Every path-accepting function runs normalize_path() as its FIRST STATEMENT (Pitfall 4 chokepoint enforcement; suspenders alongside Plan 04/05 router-layer belt). File grew from 96 → 354 lines (+258 LOC, 0 deletions); zero FastAPI imports added (pure service module preserved); inline __main__ self-tests still pass 15/15. Single-task atomic commit 4802edd.
+Last session: 2026-05-07 (Phase 3 / Plan 03 executed)
+Stopped at: Phase 3 / Plan 03 COMPLETE — backend/app/services/record_manager.py::determine_action() extended with two new keyword arguments: scope: str = 'user' and folder_path: str = '/' (defaults preserve Phase 1/2 callers exactly — backend/app/routers/files.py:73's 4-positional-arg call still works untouched). Dedup SELECT extended with .eq('scope', scope).eq('folder_path', folder_path) AND a scope-branched user_id filter — `.eq('user_id', user_id)` for scope='user'; `.is_('user_id', 'null')` for scope='global' (Pitfall A mitigation: supabase-py SELECT filters do NOT auto-translate Migration 012's COALESCE-based unique-index NULL-equivalence; the explicit branch is required). The 4-column .eq filter list matches Migration 012:51-57's `documents_scope_user_path_filename_unique` index column list in the same order — Postgres uses the index for the lookup without a planner hint; no new index needed. RecordAction dataclass + compute_file_hash + compute_chunk_hash UNCHANGED (Phase 1 contract). Try/except wrapper preserved so .maybe_single() 204 (no row) still routes to action='create'. File 70 → 93 lines (+37 / -14 = +23 net LOC). All 5 smoke-test paths PASS on first run: (1) back-compat 4-arg call → action='create' on no-data; (2) user-scope explicit kwargs → action='create'; (3) global-scope branch → action='create'; (4) existing-row same-hash → action='skip' with document_id; (5) existing-row different-hash → action='update' with document_id. Zero deviations. Single-task atomic commit c86711a. FOLDER-05 satisfied at the service layer (Plan 05 owns the router upgrade that passes the new kwargs).
 
 Phase 2 (complete) recap:
   - ✅ 01-PLAN.md: Storage upload at upload-time + Migration 018 storage.objects RLS (commits 41e3eeb, e256c91; SUMMARY at 02-01-SUMMARY.md)
@@ -168,15 +172,15 @@ Phase 2 (complete) recap:
   - ✅ 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04); commit 28e8fab; SUMMARY at 02-03-SUMMARY.md
   - ✅ 04-PLAN.md: test_backfill.py integration suite (414 lines, 21 h.test()); commits 2ad9b78, 01f2782; suite-level run 15/15 PASS; SUMMARY at 02-04-SUMMARY.md
 
-Phase 3 progress (2/6 complete):
+Phase 3 progress (3/6 complete — Wave 2 fully done):
   - ✅ 01-PLAN.md: Migration 019 (3 RPCs) + Pydantic v2 schemas extension (FOLDER-03, FOLDER-04); commits ca017e7 (Task 1) + 5728f6f (Task 3) — Task 2 was a checkpoint:human-action that the orchestrator handled by falling back to Supabase MCP apply_migration; SUMMARY at 03-01-SUMMARY.md
   - ✅ 02-PLAN.md: folder_service.py CRUD extensions (FOLDER-02; 5 new public functions: list_folder/create_folder/move_document/rename_folder/delete_folder); commit 4802edd; SUMMARY at 03-02-SUMMARY.md
-  - ⏳ Wave 2 remaining: 03-PLAN.md (record_manager.determine_action() extended with scope+folder_path)
-  - ⏳ Wave 3 ready (parallel after Wave 2): 04-PLAN.md (folders router — DIRECT consumer of list_folder/create_folder/rename_folder/delete_folder) + 05-PLAN.md (files router PATCH — DIRECT consumer of move_document)
-  - ⏳ Wave 4: 06-PLAN.md (test_folders.py integration suite)
+  - ✅ 03-PLAN.md: record_manager.determine_action() extended with scope+folder_path kwargs + scope-branched user_id filter (FOLDER-05); commit c86711a; SUMMARY at 03-03-SUMMARY.md
+  - ⏳ Wave 3 ready (parallel-safe; both directly unblocked by Plans 02 and 03): 04-PLAN.md (folders router — DIRECT consumer of list_folder/create_folder/rename_folder/delete_folder) + 05-PLAN.md (files router PATCH + upload-handler kwargs — DIRECT consumer of move_document AND of the new determine_action(scope=, folder_path=) kwargs)
+  - ⏳ Wave 4: 06-PLAN.md (test_folders.py integration suite — asserts FOLDER-05 dedup behavior end-to-end including the same-file-two-folders → 2-rows acceptance)
 
 Apply-path note: Migration 019 was applied via Supabase MCP `apply_migration` instead of `run_migrations.py` because DATABASE_URL was not exported in this environment. Verification via MCP `execute_sql` against pg_proc confirmed all 3 functions present with prosecdef=false and authenticated grants. This is now the documented apply-path fallback for any future migration.
 
 Carry-forward from Phase 1: still pending — commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption (the 23 FAILs in the cross-suite sweep result; tracked but out of scope for Phases 2/3+). The 017.sql carry-forward is a documentation/migration-naming follow-up, not a missing plan.
 
-Resume file: Phase 3 / Plan 03 (record_manager.determine_action extension — last Wave 2 plan; not blocking on Plan 02) OR Plans 04+05 (Wave 3, parallel-safe; both directly unblocked by Plan 02's folder_service exports).
+Resume file: Phase 3 / Plan 04 (folders router — DIRECT consumer of folder_service.list_folder/create_folder/rename_folder/delete_folder from Plan 02) OR Plan 05 (files router PATCH + upload-handler kwargs — DIRECT consumer of folder_service.move_document from Plan 02 AND of the new determine_action(scope=, folder_path=) kwargs from Plan 03). Plans 04 and 05 are parallel-safe (different router files; non-overlapping change surfaces).

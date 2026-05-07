@@ -80,7 +80,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(parallel after Wave 1 — different files)*
 - [x] 02-PLAN.md — folder_service.py extensions: list_folder, create_folder, move_document, rename_folder, delete_folder (FOLDER-02) ✅ 2026-05-07
-- [ ] 03-PLAN.md — record_manager.determine_action() extended with scope+folder_path kwargs and the corresponding SELECT-filter branching (FOLDER-05)
+- [x] 03-PLAN.md — record_manager.determine_action() extended with scope+folder_path kwargs and the corresponding SELECT-filter branching (FOLDER-05) ✅ 2026-05-07
 
 **Wave 3** *(parallel after Wave 2 — different router files)*
 - [ ] 04-PLAN.md — backend/app/routers/folders.py (NEW) + main.py registration: GET/POST/PATCH/DELETE with inline admin gate + structured 409 (FOLDER-06)
