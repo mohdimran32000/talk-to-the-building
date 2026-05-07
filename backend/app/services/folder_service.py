@@ -11,9 +11,12 @@ defense-in-depth; this Python helper is the primary enforcement layer.
 Phase 1 ships only `normalize_path`. Phase 3 extends this file with folder CRUD
 (`list_folder`, `create_folder`, `move_document`, `rename_folder`, `delete_folder`).
 """
+import logging
 import re
 import unicodedata
 import uuid as _uuid
+
+logger = logging.getLogger(__name__)
 
 # Canonical path regex (mirrors the DB CHECK constraint added in migration 012/013).
 # Matches: '/' OR '/segment' OR '/segment/segment/...'  where segment = [^/]+
@@ -169,7 +172,13 @@ def list_folder(
     try:
         docs_resp = docs_q.execute()
         documents = docs_resp.data or []
-    except Exception:
+    except Exception as e:
+        # MD-03: log so operators can see real failures (mis-config, table-disabled,
+        # column rename) instead of an empty result indistinguishable from "no data."
+        # We still fall back to an empty list because the function returns a partial
+        # result composed of three independent queries — failing one should not
+        # blank the others. Future hardening: narrow to APIError + map to 5xx.
+        logger.error(f"list_folder documents query failed for path={path!r} scope={scope!r}: {e}", exc_info=True)
         documents = []
 
     # ─ Explicit folders rows (immediate children) ─
@@ -197,7 +206,10 @@ def list_folder(
             f_q = f_q.like("path", f"{esc}/%").not_.like("path", f"{esc}/%/%")
         f_resp = f_q.execute()
         explicit_subfolders = [row["path"] for row in (f_resp.data or [])]
-    except Exception:
+    except Exception as e:
+        # MD-03: log explicit-folders query failures (see comment on the
+        # documents-query block above for rationale).
+        logger.error(f"list_folder explicit-folders query failed for path={path!r} scope={scope!r}: {e}", exc_info=True)
         explicit_subfolders = []
 
     # ─ Inferred subfolders from documents.folder_path (descendants below norm) ─
@@ -229,8 +241,9 @@ def list_folder(
                 if first_seg:
                     # Reconstruct the canonical immediate-child path.
                     inferred_subfolders.add(prefix + first_seg if norm == "/" else f"{norm}/{first_seg}")
-    except Exception:
-        pass
+    except Exception as e:
+        # MD-03: log inferred-subfolders query failures (see documents-query block above).
+        logger.error(f"list_folder inferred-subfolders query failed for path={path!r} scope={scope!r}: {e}", exc_info=True)
 
     # Union explicit + inferred; deduplicate; sort for deterministic output.
     all_subfolders = sorted(set(explicit_subfolders) | inferred_subfolders)
