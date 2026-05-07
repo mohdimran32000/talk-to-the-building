@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 2 / Plan 04 EXECUTED — test_backfill.py integration suite delivered AND Phase 2 closes green. backend/scripts/test_backfill.py (414 lines, 21 h.test() assertions across 7 sections) verifies Plan 01 (Storage round-trip), Plan 02 (synchronous content_markdown write — BACKFILL-01), Plan 03 (backfill happy path — BACKFILL-02, missing-blob → requires_user_reupload — BACKFILL-04, idempotent re-run — Pitfall 4), BACKFILL-03 verifier (folder_path='/' AND scope='user' DEFAULT no-op), and Phase 2 SC4 byte-equivalence (sync write ≈ fresh extract_text within ±20 chars). Registered as the 14th suite in test_all.py (Backfill positioned immediately after Files; SUITES count 13 → 14). Suite-level run: 15/15 PASS, 0 FAIL. Operator-pre-req surprise during run: documents bucket did not exist on the Supabase project despite checkpoint approval; orchestrator created it programmatically via service-role (sb.storage.create_bucket('documents', options={'public':False,'file_size_limit':52428800})) — Migration 018 was already applied. Recommendation captured: future Phase 1/2 setup runbook should automate or canary the bucket pre-req. Cross-suite sweep result: 163 passed / 23 failed across 14 suites; Backfill 15/15; ALL 23 failures attributable to pre-existing Phase-1 carry-forward (admin-assumption + auth middleware regression in Threads/Messages/Hybrid/Tools/Sub-Agents) — NOT Phase-2 regression. 2 atomic commits prior to plan close (2ad9b78 test, 01f2782 test). Zero deviations.
-last_updated: "2026-05-04T00:00:00Z"
-last_activity: 2026-05-04 -- Phase 2 / Plan 04 executed; 2 atomic test commits + plan-close metadata commit; Phase 2 (content_markdown Backfill) now COMPLETE (4/4 plans). All BACKFILL-01/02/03/04 ✅. Project: 12/12 plans complete; 1 phase fully complete (Phase 1: 8/8); Phase 2 also fully complete (4/4). Next phase: Phase 3 (Folder Service + Routers + Dedup Extension — TBD plans).
+last_updated: "2026-05-07T00:00:00Z"
+last_activity: 2026-05-07 -- Phase 3 / PLANNED. 6 PLAN.md files created in 4 waves: Wave 1 (Plan 01, autonomous=false) Migration 019 (rename_folder_prefix + delete_folder_if_empty + create_folder_if_not_exists RPCs) + Pydantic v2 schemas; Wave 2 (Plans 02+03, parallel) folder_service.py CRUD extensions + record_manager.py dedup-key extension; Wave 3 (Plans 04+05, parallel) folders router + main.py registration / files router extensions (POST /upload?folder_path=&scope=, PATCH /{id}); Wave 4 (Plan 06, autonomous=false checkpoint) test_folders.py + test_all.py SUITES registration. All 7 phase requirements covered (FOLDER-02..07 + TEST-01); 5 ROADMAP success criteria mapped to plan must_haves; 3 named pitfalls (4/5/10) addressed. Strategy B locked: folders rows written ONLY by explicit POST /api/folders, never on file upload (per STATE.md line 74). Plan-checker: 1 revision iteration; passed after RESEARCH.md Open Questions formally marked RESOLVED. One non-blocking warning surfaced: Plans 04+05 inline-mirror admin-gate logic (FastAPI Depends evaluates before body parsing — body-conditional gate cannot use Depends; substantive 403 outcome preserved).
 progress:
   total_phases: 6
   completed_phases: 2
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 ## Current Position
 
-Phase: 2 of 6 COMPLETE — content_markdown Backfill (Gated). Next: Phase 3 (Folder Service + Routers + Dedup Extension).
-Plan: 4 of 4 in Phase 2 done. Phase 2 closes green: BACKFILL-01/02/03/04 all ✅.
-Status: Phase 2 fully complete. backend/scripts/test_backfill.py registered in test_all.py SUITES list (14 suites total; Backfill positioned after Files); suite-level run 15/15 PASS. Operator-pre-req runbook gap surfaced and resolved during execution (documents bucket created programmatically via service-role; Migration 018 was already applied). Cross-suite sweep: 163 passed / 23 failed; all 23 FAILs are pre-existing Phase-1 carry-forward (admin-assumption + auth middleware regression in Threads/Messages/Hybrid/Tools/Sub-Agents) — NONE attributable to Phase 2 deliverables.
-Last activity: 2026-05-04 -- Phase 2 / Plan 04 executed; Phase 2 closes green; 12/12 plans done
+Phase: 3 of 6 — Folder Service + Routers + Dedup Extension. STATUS: Ready to execute (planning complete; 6 PLAN.md files; 4 waves).
+Plan: 0 of 6 in Phase 3 done. Wave 1: Plan 01 (Migration 019 + schemas). Wave 2: Plans 02+03 (folder_service + record_manager dedup). Wave 3: Plans 04+05 (folders router + files router extensions). Wave 4: Plan 06 (test_folders.py + test_all.py register).
+Status: Phase 3 plans verified (1 revision iteration; passed after RESEARCH.md Open Questions formally RESOLVED). 7/7 requirements covered (FOLDER-02..07 + TEST-01). Plan 01 [BLOCKING] schema-push task applies Migration 019 RPCs before downstream plans execute. Strategy B locked from Phase 1 STATE line 74: uploads NEVER touch folders table; only POST /api/folders writes folders rows. Non-blocking warning: Plans 04+05 inline admin-gate logic (FastAPI Depends-before-body-parse constraint; SC1 outcome preserved). Phase 2 prior context: closed green at 12/12 plans across phases 1+2; 14-suite test_all.py harness ready for test_folders.py registration as 15th suite.
+Last activity: 2026-05-07 -- Phase 3 PLANNED; 6 plans / 4 waves; ready for /gsd-execute-phase
 
-Progress: [██████████] 100% (12/12 plans across phases 1+2); Project: 33% (2/6 phases complete; Phase 3 next)
+Progress: [██████████] 100% (12/12 plans across phases 1+2 complete; Phase 3 planned 0/6); Project: 33% (2/6 phases complete; Phase 3 next, ready to execute)
 
 ## Performance Metrics
 
@@ -143,8 +143,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-04
-Stopped at: Phase 2 COMPLETE — all 4 plans done; suite-level run 15/15 PASS; cross-suite sweep 163/186 (23 FAILs are Phase-1 carry-forward).
+Last session: 2026-05-06 (resumed)
+Stopped at: Phase 2 COMPLETE — all 4 plans done; suite-level run 15/15 PASS; cross-suite sweep 163/186 (23 FAILs are Phase-1 carry-forward). Resumed and proceeding to Phase 3 (Folder Service + Routers + Dedup Extension) — no CONTEXT.md yet, no PLAN files; phase has TBD plans in ROADMAP.
   - ✅ 01-PLAN.md: Storage upload at upload-time + Migration 018 storage.objects RLS (commits 41e3eeb, e256c91; SUMMARY at 02-01-SUMMARY.md)
   - ✅ 02-PLAN.md: Synchronous content_markdown write in ingest_document() + ingest_document_update() (atomic single-UPDATE) + docling==2.91.0 pin (BACKFILL-01); commits 4dd7c4c, 91ad425; SUMMARY at 02-02-SUMMARY.md
   - ✅ 03-PLAN.md: backfill_content_markdown.py CLI (BACKFILL-02 + BACKFILL-04 — --dry-run / --limit / --document-id / --purge-orphans); reuses extract_text() from app.services.ingestion; canary Storage check; interactive --purge-orphans ritual; commit 28e8fab; SUMMARY at 02-03-SUMMARY.md

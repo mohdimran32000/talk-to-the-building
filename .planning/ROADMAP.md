@@ -73,7 +73,29 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. `DELETE /api/folders/{id}` on a non-empty folder returns a structured `{error: "FOLDER_NOT_EMPTY", document_count, subfolder_count}` instead of cascading; `test_folders.py` confirms no documents are deleted on rejected calls.
   4. `record_manager` dedup key is `(scope, user_id, folder_path, file_name, hash)` — uploading the same file to two different folders succeeds (creates two rows); uploading the same file to the same folder is deduped.
   5. `POST /api/files/upload` accepts `folder_path` and `scope` query args; `PATCH /api/files/{id}` supports rename and folder move; concurrent-upload-no-orphan test (10 parallel uploads to a brand-new path) produces exactly one (or zero) `folders` row.
-**Plans**: TBD
+**Plans**: 6 plans in 4 waves
+
+**Wave 1** *(blocking — Migration 019 RPCs needed by Wave 2+)*
+- [ ] 01-PLAN.md — Migration 019 (rename_folder_prefix + delete_folder_if_empty + create_folder_if_not_exists RPCs) + apply via run_migrations.py + Pydantic schemas (FolderResponse, FolderCreate, FolderPatch, FilePatch + DocumentResponse extensions) (FOLDER-03, FOLDER-04)
+
+**Wave 2** *(parallel after Wave 1 — different files)*
+- [ ] 02-PLAN.md — folder_service.py extensions: list_folder, create_folder, move_document, rename_folder, delete_folder (FOLDER-02)
+- [ ] 03-PLAN.md — record_manager.determine_action() extended with scope+folder_path kwargs and the corresponding SELECT-filter branching (FOLDER-05)
+
+**Wave 3** *(parallel after Wave 2 — different router files)*
+- [ ] 04-PLAN.md — backend/app/routers/folders.py (NEW) + main.py registration: GET/POST/PATCH/DELETE with inline admin gate + structured 409 (FOLDER-06)
+- [ ] 05-PLAN.md — backend/app/routers/files.py extended: POST /upload accepts folder_path + scope query args + PATCH /{id} for rename and folder move (FOLDER-07)
+
+**Wave 4** *(blocked on Waves 1-3 — integration suite tests against shipped code)*
+- [ ] 06-PLAN.md — backend/scripts/test_folders.py + register in test_all.py (TEST-01; covers FOLDER-02..07 + Pitfalls 4/5/10 + SC1..SC5)
+
+**Cross-cutting constraints** *(must_haves shared across multiple plans)*
+- `normalize_path()` is the SOLE chokepoint for every folder_path write — Plan 02 (service-layer entry), Plan 04 (router entry), Plan 05 (router entry); Pitfall 4 mitigation
+- Strategy B (folders rows ONLY on explicit `POST /api/folders`, never on file upload) — Plans 04 (writes), 05 (does not write), 06 (asserts ZERO folders rows after 10 parallel uploads); Pitfall 10 mitigation; locked from STATE.md line 74
+- Migration 015 `forbid_scope_mutation` trigger is bedrock — `FilePatch` Pydantic model omits `scope`; PATCH endpoints reject scope smuggling explicitly (Plan 01 + Plan 05)
+- Path-prefix predicates use `LIKE prefix || '/%'` (NOT `prefix || '%'`) to avoid sibling-folder false matches — Plan 01 RPC, Plan 02 service queries
+- Inline admin-gate mirror in folders/files routers (vs. `Depends(get_admin_user)`) is intentional: gate is body-conditional and FastAPI Depends evaluates before body parsing — Plan 04 `_require_admin` helper, Plan 05 inline; substantive 403 outcome (SC1) preserved
+
 **Threats / pitfalls**: Pitfall 5 (folder deletion orphans/cascade: empty-only delete + structured error + transactional check-and-delete); Pitfall 10 (concurrent upload race: paired with Phase 1 unique constraint, app uses `INSERT ... ON CONFLICT DO NOTHING` or no-write-on-upload model); Pitfall 4 (path drift: every router endpoint runs `folder_path` through `normalize_path()` before any DB write).
 
 ### Phase 4: Five Exploration Tools + search_documents Extension
@@ -124,7 +146,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
-| 3. Folder Service + Routers + Dedup Extension | 0/TBD | Not started | - |
+| 3. Folder Service + Routers + Dedup Extension | 0/6 | Planned (ready to execute) | - |
 | 4. Five Exploration Tools + search_documents Extension | 0/TBD | Not started | - |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
