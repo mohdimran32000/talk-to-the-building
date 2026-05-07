@@ -32,9 +32,9 @@ The agent can locate the *right* piece of information in a large, organized know
 
 <!-- Episode 2 — Agentic Knowledge Base Exploration. Hypotheses until shipped. -->
 
-- [ ] Two-scope knowledge base: per-user private folders + admin-managed global folders, both visible in a unified explorer
-- [ ] Path-based folder model: `documents.folder_path` TEXT + thin `folders` table for empty/named folders
-- [ ] Canonical full-document markdown stored alongside chunks (`documents.content_markdown`) for grep/read tools
+- [x] Two-scope knowledge base: per-user private folders + admin-managed global folders, both visible in a unified explorer — validated in Phase 03 (folder CRUD endpoints + admin gate)
+- [x] Path-based folder model: `documents.folder_path` TEXT + thin `folders` table for empty/named folders — validated in Phase 01 schema + Phase 03 service layer
+- [x] Canonical full-document markdown stored alongside chunks (`documents.content_markdown`) for grep/read tools — validated in Phase 02 backfill
 - [ ] File explorer UI with two top-level sections ("Shared" + "My Files"), expandable tree, breadcrumbs, folder CRUD, upload-into-folder, drag-move documents, rename document
 - [ ] `tree` tool — returns nested folder structure with `path` + `max_depth` args, count-summary at deeper levels, hard token-budget truncation note
 - [ ] `glob` tool — file-pattern matching against `folder_path` + `file_name` (e.g. `**/*.pdf`, `projects/**/floor-plans/*`)
@@ -124,4 +124,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-01 after initialization*
+*Last updated: 2026-05-07 after Phase 03 (folder service + routers + dedup extension) completion*
