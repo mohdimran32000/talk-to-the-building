@@ -14,6 +14,7 @@ import test_auth
 import test_threads
 import test_messages
 import test_files
+import test_folders         # NEW (Phase 3)
 import test_backfill
 import test_rag
 import test_rls
@@ -30,6 +31,7 @@ SUITES = [
     ("Threads", test_threads),
     ("Messages", test_messages),
     ("Files", test_files),
+    ("Folders", test_folders),       # NEW (Phase 3 — folders is logically a Files extension)
     ("Backfill", test_backfill),
     ("RAG", test_rag),
     ("RLS", test_rls),
