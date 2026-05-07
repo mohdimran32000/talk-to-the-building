@@ -272,8 +272,16 @@ def create_folder(
 
     row = result.data[0]
     # Hydrate the full folders row so the caller (router) gets created_at.
-    full_q = supabase_client.table("folders").select("*").eq("id", row["id"]).maybe_single().execute()
-    full = (full_q.data or {}) if full_q else {}
+    # MD-02: supabase-py's `.maybe_single()` RAISES on 0 rows (HTTP 204) — the
+    # `if full_q else {}` guard is dead code because the exception fires before
+    # assignment. Wrap in try/except so a row vanishing between the RPC and
+    # this hydration (concurrent delete) does not turn into a 500. Mirrors the
+    # try/except idiom in record_manager.determine_action.
+    try:
+        full_q = supabase_client.table("folders").select("*").eq("id", row["id"]).maybe_single().execute()
+        full = (full_q.data or {}) if full_q else {}
+    except Exception:
+        full = {}
 
     return {
         "id": row["id"],
