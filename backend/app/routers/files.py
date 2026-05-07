@@ -2,9 +2,10 @@ import logging
 import os
 import threading
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
-from app.auth import get_current_user, get_supabase_client
-from app.models.schemas import DocumentResponse
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Query
+from app.auth import get_current_user, get_supabase_client, get_user_profile
+from app.models.schemas import DocumentResponse, FilePatch
+from app.services.folder_service import normalize_path
 from app.services.ingestion import ingest_document, ingest_document_update
 from app.services.record_manager import compute_file_hash, determine_action
 
@@ -61,6 +62,9 @@ def _upload_to_storage(supabase, user_id: str, document_id: str, file_name: str,
 async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    folder_path: str = Query("/", description="Canonical folder path"),
+    scope: str = Query("user", regex="^(user|global)$",
+                       description="'user' (default) or 'global'; admin required for 'global'"),
     user_id: str = Depends(get_current_user),
 ):
     supabase = get_supabase_client()
@@ -68,9 +72,33 @@ async def upload_file(
     file_name = file.filename or "unnamed"
     mime_type = file.content_type or "application/octet-stream"
 
-    # Record Manager: check for duplicates
+    # Pitfall 4 belt: normalize the path at the router boundary.
+    try:
+        folder_path = normalize_path(folder_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Admin gate for global scope (inline mirror of auth.py:46-51).
+    if scope == "global":
+        profile = get_user_profile(user_id)
+        if not profile or not profile.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Admin required for global scope")
+        # Migration 012 coupling CHECK: scope='global' requires user_id IS NULL.
+        effective_user_id = None
+        # Pitfall F: avoid 'None' in storage path; use 'global' segment so the
+        # path is well-formed. Migration 018 RLS rejects this for the authenticated
+        # role; service-role bypasses (admin / backend reads work).
+        storage_user_segment = "global"
+    else:
+        effective_user_id = user_id
+        storage_user_segment = user_id
+
+    # Record Manager: check for duplicates (Plan 03 extended dedup key).
     file_hash = compute_file_hash(contents)
-    record_action = determine_action(file_hash, file_name, user_id, supabase)
+    record_action = determine_action(
+        file_hash, file_name, user_id, supabase,
+        scope=scope, folder_path=folder_path,
+    )
 
     if record_action.action == "skip":
         doc = supabase.table("documents").select("*") \
@@ -92,7 +120,7 @@ async def upload_file(
 
         _upload_to_storage(
             supabase,
-            user_id=user_id,
+            user_id=storage_user_segment,
             document_id=doc["id"],
             file_name=file_name,
             contents=contents,
@@ -114,7 +142,9 @@ async def upload_file(
 
     # action == "create": new document
     doc = supabase.table("documents").insert({
-        "user_id": user_id,
+        "user_id": effective_user_id,
+        "scope": scope,                  # NEW (Phase 3 / FOLDER-07)
+        "folder_path": folder_path,      # NEW (Phase 3 / FOLDER-07)
         "file_name": file_name,
         "file_size": len(contents),
         "mime_type": mime_type,
@@ -123,7 +153,7 @@ async def upload_file(
 
     _upload_to_storage(
         supabase,
-        user_id=user_id,
+        user_id=storage_user_segment,
         document_id=doc["id"],
         file_name=file_name,
         contents=contents,
