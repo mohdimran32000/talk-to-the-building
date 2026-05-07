@@ -31,7 +31,7 @@ class MessageResponse(BaseModel):
 
 class DocumentResponse(BaseModel):
     id: str
-    user_id: str
+    user_id: Optional[str] = None       # CHANGED: nullable for scope='global' rows (Migration 012 coupling CHECK)
     file_name: str
     file_size: int
     mime_type: str
@@ -39,9 +39,34 @@ class DocumentResponse(BaseModel):
     error_message: Optional[str] = None
     content_hash: Optional[str] = None
     metadata: Optional[dict] = None
+    folder_path: str = "/"              # NEW (Phase 3 / FOLDER-07) — default preserves existing-row response shape
+    scope: str = "user"                 # NEW (Phase 3 / FOLDER-07) — default preserves existing-row response shape
     action: Optional[str] = None  # "created" | "skipped" | "updated" (only on upload response)
     created_at: datetime
     updated_at: datetime
+
+
+class FolderResponse(BaseModel):
+    id: str
+    scope: str                          # 'user' | 'global'
+    user_id: Optional[str] = None       # nullable for scope='global' rows
+    path: str
+    created_at: datetime
+
+
+class FolderCreate(BaseModel):
+    path: str
+    scope: str = "user"                 # 'user' | 'global'
+
+
+class FolderPatch(BaseModel):
+    new_path: str
+
+
+class FilePatch(BaseModel):
+    # Mutable fields ONLY. scope is IMMUTABLE per Migration 015 forbid_scope_mutation trigger; Pydantic v2 ignores unknown fields by default, so a smuggled "scope" in the request body is silently dropped here (defense in depth alongside the DB trigger).
+    file_name: Optional[str] = None
+    folder_path: Optional[str] = None
 
 
 class MetadataFieldDefinition(BaseModel):
