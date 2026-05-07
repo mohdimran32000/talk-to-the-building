@@ -942,43 +942,53 @@ def test_concurrent_upload_no_orphan(token, headers):
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All 8 questions resolved during /gsd-plan-phase 3 (2026-05-07). Each carries an explicit RESOLVED line stating the disposition the planner adopted (or formally deferred to a later phase). 6/8 are implemented in the Phase 3 plans; 2/8 are deferred with rationale.
 
 1. **Should `POST /api/folders {path: 'projects/'}` (trailing slash) reject with 400, or auto-normalize and accept?**
    - What we know: `normalize_path('projects/')` returns `'/projects'` — auto-normalize works.
    - What's unclear: API ergonomics — strict (400 with "use canonical form") is more honest; lenient (auto-normalize) is more friendly.
    - Recommendation: auto-normalize and accept (matches the spirit of `normalize_path` as the canonical chokepoint; matches Phase 1's "every write path runs through normalize_path" convention). Document this in the OpenAPI description so callers know the field is normalized server-side.
+   - **RESOLVED:** Auto-normalize. Implemented in Plan 04 (folders router calls `normalize_path()` at the top of every handler). OpenAPI description documents the server-side normalization.
 
 2. **Should the file-rename PATCH check for filename collision in the new (or current) folder?**
    - What we know: the unique index `documents_scope_user_path_filename_unique` rejects the rename if a file with the new name already exists at the same `folder_path` — the supabase-py UPDATE raises a Python exception with SQLSTATE 23505.
    - What's unclear: should the router catch this and return a clean 409 with `{error: 'FILENAME_EXISTS_IN_FOLDER'}`?
    - Recommendation: yes — mirrors the FOLDER_NOT_EMPTY structured-error pattern; cleaner DX for the Phase 6 UI.
+   - **RESOLVED — DEFERRED to Phase 6 UI hardening.** The DB-level uniqueness constraint already rejects collisions; the bare PostgREST 23505 reaches the client (just less prettily) so SC1..SC5 are unaffected. Adding the structured `FILENAME_EXISTS_IN_FOLDER` 409 wrapper is a Phase 6 UI-DX concern, not a Phase 3 functional requirement (no REQ-ID, not in ROADMAP SC1..SC5). Phase 6 backlog item: catch SQLSTATE 23505 in `routers/files.py:patch_file` and return the structured 409.
 
 3. **Should the move-document PATCH validate that the target folder exists in `folders`, or accept any well-formed canonical path?**
    - What we know: Strategy B says folders exist by inference from `documents.folder_path`; therefore move-to-a-path-with-no-existing-folders-row is normal.
    - What's unclear: should the API force an explicit `POST /api/folders` first, or accept the move and let the inference logic catch up?
    - Recommendation: accept any canonical path (no folders-row check). Matches Strategy B's "folders are sparse, mostly inferred" semantics. Phase 6 UI surfaces the new path as a folder automatically once a doc lives in it.
+   - **RESOLVED:** Accept any canonical path. Implemented in Plan 05 (`PATCH /api/files/{id}` for folder move calls `normalize_path()` and proceeds without a folders-row existence check). Strategy B (sparse folders table; rows only on explicit POST /api/folders) is preserved.
 
 4. **Do we ship `create_folder_if_not_exists` as a third RPC in Migration 019, or do the ON CONFLICT logic in Python via try/except?**
    - What we know: the RPC is ~10 lines of PL/pgSQL and gives clean, atomic, exception-free semantics. The try/except is brittle (depends on the exact PostgREST error shape).
    - Recommendation: ship the RPC. Cost is one extra function in Migration 019; clarity benefit is substantial.
+   - **RESOLVED:** Ship the RPC. Implemented in Plan 01 (Migration 019 contains all three RPCs: `rename_folder_prefix`, `delete_folder_if_empty`, `create_folder_if_not_exists`).
 
 5. **What is the response shape for `GET /api/folders`?** (Two reasonable shapes; planner picks.)
    - Option A: `{path: '/x', documents: [...], subfolders: [...]}` — single-folder view (matches `list_folder()` service function signature)
    - Option B: `[{id, scope, user_id, path, ...}, ...]` — flat list of all folders, frontend reconstructs the tree
    - Recommendation: ship A as the default; the Phase 6 UI uses one folder at a time anyway. If Phase 6 reveals the tree-reconstruction is needed, add a `?flat=true` query param later.
+   - **RESOLVED:** Option A (single-folder view). Implemented in Plan 02's `list_folder()` service function and Plan 04's `GET /api/folders` handler. `?flat=true` query param can be added in a later phase if Phase 6 demands it.
 
 6. **Should the rename RPC return a `before/after` diff for audit purposes?**
    - Recommendation: not this phase. AUDIT-01 / AUDIT-02 are explicitly v2 (REQUIREMENTS.md lines 117-120). Just return the row counts.
+   - **RESOLVED — DEFERRED to v2 AUDIT-01/AUDIT-02.** Plan 01's `rename_folder_prefix` RPC returns row counts only (`documents_updated`, `folders_updated`). Audit diffing is out of scope per REQUIREMENTS.md.
 
 7. **How does PATCH `/api/files/{id}` interact with Storage when the file is renamed?**
    - What we know: Storage path is `{user_id}/{doc_id}{ext}` — computed from `doc_id` and the file's *original* extension. Renaming `file_name` from `report.pdf` to `q4-report.pdf` doesn't change `doc_id` or extension, so the Storage object is unaffected.
    - What's unclear: if the rename changes the extension (e.g., `report.pdf` → `report.txt`), the Storage path becomes stale.
    - Recommendation: reject extension-changing renames in the router with a 400. Or, ignore — the Storage blob stays at the original `{ext}` and Phase 2 backfill still finds it via `doc_id` lookup. Recommend ignoring; document the behavior. Alternatively, freeze rename to filename-stem-only (no extension change). Decide in plan-discuss.
+   - **RESOLVED:** Ignore. Plan 05 implements rename without checking or constraining extension. The Storage blob's path key is stable (computed from `doc_id` + original extension); the displayed `file_name` is purely a metadata-row column. Behavior documented in Plan 05's threat-model "edge cases" note. Future Phase 6 UI may surface a warning if a user attempts an extension-changing rename, but no router-side rejection.
 
 8. **Should `move_document()` validate that the target scope matches the document's existing scope?**
    - What we know: Migration 015's trigger blocks scope changes regardless. The PATCH endpoint doesn't accept a `scope` field anyway.
    - Recommendation: explicit assert in service-layer for defense in depth (`if document_row['scope'] != target_scope: raise`). Trivial belt-and-suspenders.
+   - **RESOLVED — DEFERRED (defense-in-depth optional).** Migration 015's `forbid_scope_mutation` trigger is the bedrock and cannot be bypassed even with the service-role key. Plan 02's `move_document` does NOT accept a `scope` argument — the document's existing scope is preserved by definition (the SQL UPDATE only touches `folder_path`, never `scope`). The recommended belt-and-suspenders assert is redundant given the schema constraint and the function signature; skipping it preserves DRY without weakening the security posture. If a future code change adds a `scope` parameter to `move_document`, that change must re-open this question.
 
 ---
 
