@@ -108,7 +108,43 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Every result row from every tool carries `scope: 'user' | 'global'` (no exceptions); `EXPLAIN ANALYZE` on the grep query shows `Bitmap Index Scan on documents_content_trgm_idx`, and a 5000-doc fixture grep runs in < 500ms p95.
   4. `search_documents` accepts optional `folder_path` (prefix filter) and `scope` parameters; both default to existing behavior (no narrowing) when omitted; `match_document_chunks_with_filters` and `match_document_chunks_hybrid` RPCs accept `match_folder_path TEXT DEFAULT NULL` and `match_scope TEXT DEFAULT NULL`; existing call sites are unaffected.
   5. LangSmith `@traceable(run_type="tool")` is on every new tool function; an adversarial 50K-char tool result reproduces no empty-response failure (the SQL-tool empty-response bug regression test passes for every new tool).
-**Plans**: TBD
+**Plans**: 9 plans in 7 waves
+
+**Wave 1** *(parallel — disjoint files; both blocking foundation)*
+- [ ] 04-01-PLAN.md — Migration 020: grep_documents RPC + extend match_document_chunks_with_filters/hybrid with match_folder_path/match_scope (NULL defaults) + apply via run_migrations.py [BLOCKING] (TOOL-03 backend, SEARCH-02)
+- [ ] 04-02-PLAN.md — exploration_tools/ package: schemas.py (5 Pydantic v2 BaseModels) + _truncate.py (apply_12k_cap) + _scope_tag.py (ensure_scope_tag) (TOOL-06, TOOL-07, TOOL-08)
+
+**Wave 2** *(blocked on Wave 1; locks the dispatch-arm template Plans 04-07 mirror)*
+- [ ] 04-03-PLAN.md — list_files tool + openai_client.py _build_list_files_tool factory + dispatch arm (TOOL-04 + TOOL-06/07/08/09/10 cross-cutting)
+
+**Wave 3** *(blocked on Wave 2; openai_client.py serialized to avoid merge conflicts)*
+- [ ] 04-04-PLAN.md — tree tool with iterative-BFS budget + per-level summaries + openai_client.py extension (TOOL-01 + cross-cutting)
+
+**Wave 4** *(blocked on Wave 3)*
+- [ ] 04-05-PLAN.md — glob tool with glob→regex translator + type=file/folder/both branches + openai_client.py extension (TOOL-02 + cross-cutting)
+
+**Wave 5** *(blocked on Wave 4)*
+- [ ] 04-06-PLAN.md — read_document tool with arrow-form rendering + CRLF normalization + UTF-8-safe truncation + openai_client.py extension (TOOL-05 + cross-cutting)
+
+**Wave 6** *(blocked on Wave 5 + depends on Wave 1 RPC)*
+- [ ] 04-07-PLAN.md — grep tool with pathological-regex blocklist + literal-hint extraction + ±A/B/C context + openai_client.py extension (TOOL-03 + cross-cutting)
+
+**Wave 7** *(parallel — Plan 08 finishes openai_client.py edits; Plan 09 tests everything end-to-end)*
+- [ ] 04-08-PLAN.md — search_documents extension: _build_search_tool gains folder_path + scope properties; dispatch passes match_folder_path/match_scope to RPCs; system prompt updated (SEARCH-01, SEARCH-03)
+- [ ] 04-09-PLAN.md — test_exploration_tools.py: 600+ line integration suite covering TOOL-01..10 + SEARCH-01..03 + Phase 4 SC1..5; register in test_all.py SUITES (TEST-02)
+
+**Cross-cutting constraints** *(must_haves shared across multiple plans)*
+- normalize_path() FIRST statement of every tool function (Pitfall 4 chokepoint) — Plans 03/04/05/06/07; SEARCH-01 dispatch (Plan 08)
+- @traceable(name="<tool>", run_type="tool") on every tool fn (TOOL-10) — Plans 03-07
+- result_text = json.dumps(tool_result) flows through unchanged layered-fallback wrapper at openai_client.py:565-610 (TOOL-09) — Plans 03-08
+- Every result row carries scope ∈ {user,global} via ensure_scope_tag (TOOL-07) — Plans 03/04/05/06/07
+- apply_12k_cap() at the tail of every tool except read_document which does its own UTF-8-safe truncation (TOOL-08) — Plans 03/04/05/07
+- _assert_uuid(user_id, "user_id") before any PostgREST or() interpolation (HI-01 from Phase 3) — Plans 05 (glob), 07 (grep)
+- _escape_like() on literal-prefix LIKE predicates (HI-03 from Phase 3) — Plan 05 (glob)
+- Phase 2 LOCKED contract: non-ready content_markdown rows surface as {status: "pending_reindex", content_markdown_status: <X>} — Plans 01 (RPC), 06 (read_document), 07 (grep)
+- Tools NEVER accept user_id as a Pydantic Args field — derived from JWT in dispatch loop (Episode 1 invariant; T-UserIdSmuggling) — Plan 02 (schemas)
+- openai_client.py:565-610 layered-fallback wrapper UNCHANGED across all 7 edits — Plans 03/04/05/06/07/08
+
 **Threats / pitfalls**: Pitfall 2 (`tree` context blow-up — RANK 4: server-side `max_depth` cap, hard 500-entry cap with truncation marker); Pitfall 3 (grep perf: index from Phase 1 + ILIKE pre-filter + `LATERAL regexp_split_to_table` line-split + `SET LOCAL statement_timeout = '5s'`); Pitfall 8 (Gemini empty-response — RANK 3: layered-fallback wrapper from `openai_client.py:567` post-`53ff28d` is the ONLY context-injection path); Pitfall 9 (`read_document` line drift: CRLF normalized at ingestion, `splitlines(keepends=False)` consistently, 1-based offsets, UTF-8 codepoint-safe last-line truncation); Pitfall 11 (scope confusion: every tool result row carries `scope` field; system prompt instructs LLM to disambiguate).
 
 ### Phase 5: Explorer Sub-Agent + SSE Protocol Generalization
@@ -147,7 +183,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 5/6 | In progress | - |
-| 4. Five Exploration Tools + search_documents Extension | 0/TBD | Not started | - |
+| 4. Five Exploration Tools + search_documents Extension | 0/9 | Not started | - |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
 
