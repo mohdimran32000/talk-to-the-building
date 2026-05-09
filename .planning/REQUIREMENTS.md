@@ -81,7 +81,7 @@
 
 ### Tests
 
-- [ ] **TEST-01**: `test_folders.py` — folder CRUD, transactional rename, non-empty-delete rejection, concurrent-upload-no-orphan
+- [x] **TEST-01**: `test_folders.py` — folder CRUD, transactional rename, non-empty-delete rejection, concurrent-upload-no-orphan
 - [ ] **TEST-02**: `test_exploration_tools.py` — 200-folder fixture for tree truncation, 5000-doc fixture for grep perf (assert Bitmap Index Scan in EXPLAIN), CRLF/Unicode/single-long-line/mixed-ending fixtures for read_document, adversarial-payload fixtures for empty-response guard
 - [ ] **TEST-03**: `test_explorer_sub_agent.py` — MAX_TURNS bound, timeout, no-progress detector, recursive-sub-agent rejection
 - [ ] **TEST-04**: `test_two_scope_rls.py` — full cross-user × cross-scope matrix
@@ -192,7 +192,7 @@
 | UI-09 | Phase 6 | Pending |
 | UI-10 | Phase 6 | Pending |
 | UI-11 | Phase 6 | Pending |
-| TEST-01 | Phase 3 | Pending |
+| TEST-01 | Phase 3 | Complete |
 | TEST-02 | Phase 4 | Pending |
 | TEST-03 | Phase 5 | Pending |
 | TEST-04 | Phase 1 | Pending |

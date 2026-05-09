@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Schema Foundation + Two-Scope RLS + Path Normalizer** — Five small migrations (012–016) introduce `folder_path`, `scope`, `content_markdown`, the thin `folders` table, two-scope RLS, `pg_trgm` indexes, and the canonical `normalize_path()` helper. ✅ 2026-05-04
 - [x] **Phase 2: content_markdown Backfill (Gated)** — Re-run Docling against existing Storage blobs to populate `documents.content_markdown`; surface re-index status; gate `grep`/`read_document` until operational. ✅ 2026-05-04
-- [ ] **Phase 3: Folder Service + Routers + Dedup Extension** — Pure CRUD layer: `folder_service.py`, `folders` router, extended `files` router (upload-into-folder, rename, move), `record_manager` dedup key extended.
+- [x] **Phase 3: Folder Service + Routers + Dedup Extension** — Pure CRUD layer: `folder_service.py`, `folders` router, extended `files` router (upload-into-folder, rename, move), `record_manager` dedup key extended. ✅ 2026-05-09
 - [ ] **Phase 4: Five Exploration Tools + search_documents Extension** — `tree`, `glob`, `grep`, `list_files`, `read_document` with Pydantic v2 arg validation, hard token-budget caps, scope-tagged result rows; `search_documents` extended with `folder_path`/`scope` filters.
 - [ ] **Phase 5: Explorer Sub-Agent + SSE Protocol Generalization** — `run_explorer_sub_agent` with `MAX_TURNS=8`, wall-clock timeout, no-progress detector; SSE sub-agent event protocol generalized; `messages.tool_metadata` persistence.
 - [ ] **Phase 6: File-Explorer UI Cluster** — `FileExplorerPanel` cluster (two-section tree, folder CRUD, drag-move, breadcrumbs, scope badges, Explorer activity card); replaces `FileUploadPanel`; Playwright e2e additions.
@@ -87,7 +87,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 05-PLAN.md — backend/app/routers/files.py extended: POST /upload accepts folder_path + scope query args + PATCH /{id} for rename and folder move (FOLDER-07) ✅ 2026-05-07
 
 **Wave 4** *(blocked on Waves 1-3 — integration suite tests against shipped code)*
-- [x] 06-PLAN.md — backend/scripts/test_folders.py (591 lines / 10 sections / 36 h.test() assertions) + register in test_all.py (TEST-01; covers FOLDER-02..07 + Pitfalls 4/5/10 + SC1..SC5 + cross-user isolation) 🟢 2026-05-07 CODE-COMPLETE — focused-suite green run gated on operator backend restart (canary correctly caught stale-backend pre-req)
+- [x] 06-PLAN.md — backend/scripts/test_folders.py (591 lines / 10 sections / 36 h.test() assertions) + register in test_all.py (TEST-01; covers FOLDER-02..07 + Pitfalls 4/5/10 + SC1..SC5 + cross-user isolation) ✅ 2026-05-09 — focused suite 33/33 PASS after FOLDER-03 (RenameFolderResponse) + FOLDER-05 (synchronous content_hash) gap-closure fixes (commits 378cffb, b11a90f)
 
 **Cross-cutting constraints** *(must_haves shared across multiple plans)*
 - `normalize_path()` is the SOLE chokepoint for every folder_path write — Plan 02 (service-layer entry), Plan 04 (router entry), Plan 05 (router entry); Pitfall 4 mitigation
@@ -182,7 +182,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
-| 3. Folder Service + Routers + Dedup Extension | 5/6 | In progress | - |
+| 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
 | 4. Five Exploration Tools + search_documents Extension | 0/9 | Not started | - |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
