@@ -118,6 +118,10 @@ async def upload_file(
             "mime_type": mime_type,
             "status": "pending",
             "error_message": None,
+            # FOLDER-05: persist content_hash synchronously so an immediate re-upload
+            # of the same bytes is correctly classified as 'skip' by determine_action,
+            # without waiting for the background ingestion task to complete.
+            "content_hash": file_hash,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", record_action.document_id).execute()
 
@@ -155,6 +159,10 @@ async def upload_file(
         "file_size": len(contents),
         "mime_type": mime_type,
         "status": "pending",
+        # FOLDER-05: persist content_hash synchronously so an immediate re-upload
+        # of the same bytes is correctly classified as 'skip' by determine_action,
+        # without waiting for the background ingestion task to complete.
+        "content_hash": file_hash,
     }).execute().data[0]
 
     _upload_to_storage(
