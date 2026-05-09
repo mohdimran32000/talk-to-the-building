@@ -349,6 +349,74 @@ def _build_read_document_tool() -> "types.FunctionDeclaration":
     )
 
 
+def _build_grep_tool() -> "types.FunctionDeclaration":
+    """Phase 4 / TOOL-03: grep tool definition.
+
+    Regex search across document content. Use when the user wants to find a
+    phrase, term, or pattern across many documents (e.g., 'find all docs that
+    mention panel MDB-C-G3'). For navigation by name use `glob`; for reading
+    a known doc use `read_document`.
+    """
+    from google.genai import types
+    return types.FunctionDeclaration(
+        name="grep",
+        description=(
+            "Regex search across document text. Returns matching lines with +/-A/B "
+            "lines of context (default +/-2). `output_mode` selects 'content' (default; "
+            "lines + context), 'files_with_matches' (just doc list), or 'count' "
+            "(per-doc match count). Each hit carries 'scope' ('user' for private, "
+            "'global' for shared). Pathological regex (e.g., `(.*)+`) is rejected. "
+            "Documents that haven't been re-indexed yet appear with status='pending_reindex' "
+            "rather than being silently skipped. Use for content search; use `glob` for "
+            "name patterns; use `read_document` to read a known doc."
+        ),
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "pattern": types.Schema(
+                    type="STRING",
+                    description="Postgres-flavor regex (1-500 chars).",
+                ),
+                "path": types.Schema(
+                    type="STRING",
+                    description="Restrict search to this folder prefix (default '/').",
+                ),
+                "case_insensitive": types.Schema(
+                    type="BOOLEAN",
+                    description="Default true.",
+                ),
+                "multiline": types.Schema(
+                    type="BOOLEAN",
+                    description="Default false (rarely needed).",
+                ),
+                "output_mode": types.Schema(
+                    type="STRING",
+                    enum=["content", "files_with_matches", "count"],
+                    description="Default 'content'.",
+                ),
+                "A": types.Schema(
+                    type="INTEGER",
+                    description="Lines AFTER each match (0-10; default 2).",
+                ),
+                "B": types.Schema(
+                    type="INTEGER",
+                    description="Lines BEFORE each match (0-10; default 2).",
+                ),
+                "C": types.Schema(
+                    type="INTEGER",
+                    description="If set, overrides both A and B.",
+                ),
+                "scope": types.Schema(
+                    type="STRING",
+                    enum=["user", "global", "both"],
+                    description="'user' / 'global' / 'both' (default).",
+                ),
+            },
+            required=["pattern"],
+        ),
+    )
+
+
 def _sanitize_keyword_query(q: str) -> str:
     """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
     A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
@@ -525,6 +593,10 @@ Document excerpts:
             function_declarations.append(_build_read_document_tool())
         except Exception as e:
             logger.warning(f"Failed to build read_document tool (non-fatal): {e}")
+        try:
+            function_declarations.append(_build_grep_tool())
+        except Exception as e:
+            logger.warning(f"Failed to build grep tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
             function_declarations.append(_build_sql_tool())
@@ -849,6 +921,37 @@ Document excerpts:
                         detail = f"lines {sl}-{el}/{tl}"
                 else:
                     detail = "read_document complete"
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": detail,
+                }))
+
+        elif tool_name == "grep":
+            from app.services.exploration_tools.grep import grep as _grep
+            from app.services.exploration_tools.schemas import GrepArgs
+            try:
+                parsed_args = GrepArgs(**args)
+            except Exception as e:
+                result_text = json.dumps({
+                    "tool": "grep",
+                    "error": "INVALID_ARGS",
+                    "message": str(e),
+                })
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": "Invalid arguments",
+                }))
+            else:
+                tool_result = _grep(parsed_args, user_id, supabase_client)
+                result_text = json.dumps(tool_result)
+                if isinstance(tool_result, dict):
+                    if tool_result.get("error"):
+                        detail = f"error: {tool_result['error']}"
+                    else:
+                        th = tool_result.get("total_hits", 0)
+                        detail = f"{th} hits for {parsed_args.pattern!r}"
+                else:
+                    detail = "grep complete"
                 yield ("tool_done", json.dumps({
                     "tool": tool_name,
                     "detail": detail,
