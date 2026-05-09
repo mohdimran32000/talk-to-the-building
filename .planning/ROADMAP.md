@@ -173,7 +173,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 05-05-PLAN.md — frontend/src/lib/api.ts + frontend/src/pages/Chat.tsx: Message interface extended with question?/sub_agent_id?/tool_calls? optional fields + sendMessage signature gains onSubAgentToolStart/onSubAgentToolDone callbacks (positional-end for back-compat) + two new SSE branches (legacy channel only — Phase 6 owns the generalized envelope switch) + Chat.tsx wires callbacks into setToolSteps with isSubAgent=true marker; ToolStep type extended (EXPLORER-04 frontend half)
 
 **Wave 4** *(blocked on Waves 0-3 — integration suite tests against shipped code)*
-- [ ] 05-06-PLAN.md — backend/scripts/test_explorer_sub_agent.py NEW (~700 LOC, 10 sections) + register in test_all.py SUITES as ('Explorer', test_explorer_sub_agent) between Exploration and Backfill; covers EXPLORER-01..06 + Pitfall 8 carry-forward; canary precheck names missing Plan; per-id batched cleanup (CLAUDE.md mandatory) (EXPLORER-01..06, TEST-03)
+- [x] 05-06-PLAN.md — backend/scripts/test_explorer_sub_agent.py NEW (~700 LOC, 10 sections) + register in test_all.py SUITES as ('Explorer', test_explorer_sub_agent) between Exploration and Backfill; covers EXPLORER-01..06 + Pitfall 8 carry-forward; canary precheck names missing Plan; per-id batched cleanup (CLAUDE.md mandatory) (EXPLORER-01..06, TEST-03)
 
 **Cross-cutting constraints** *(must_haves shared across multiple plans)*
 - Recommendation A LOCKED: extend sub_agent.py rather than create sub_agents/ package (research/ARCHITECTURE.md:175; revisit when third sub-agent appears) — Plans 01 + 02
