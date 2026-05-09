@@ -185,6 +185,41 @@ def _build_analyze_tool() -> types.FunctionDeclaration:
     )
 
 
+def _build_list_files_tool() -> "types.FunctionDeclaration":
+    """Phase 4 / TOOL-04: list_files tool definition.
+
+    Single-folder one-level listing. Returns folders + files at the given path,
+    folders-then-files alphabetical. Use when the user asks 'what's in <folder>?'
+    — distinct from `tree` (multi-level) and `glob` (pattern matching).
+    """
+    from google.genai import types
+    return types.FunctionDeclaration(
+        name="list_files",
+        description=(
+            "List the immediate folders and files under a single path (one level deep). "
+            "Use when the user asks 'what's in <folder>?' or 'show me the files in <folder>'. "
+            "Returns folders first (alpha-sorted), then documents (alpha-sorted). "
+            "Each row carries 'scope' ('user' for private, 'global' for shared). "
+            "For multi-level views use `tree`; for name patterns use `glob`."
+        ),
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "path": types.Schema(
+                    type="STRING",
+                    description="Canonical folder path (must start with '/'; '/' for root).",
+                ),
+                "scope": types.Schema(
+                    type="STRING",
+                    enum=["user", "global", "both"],
+                    description="'user' for private docs, 'global' for shared, 'both' (default) for union.",
+                ),
+            },
+            required=[],
+        ),
+    )
+
+
 def _sanitize_keyword_query(q: str) -> str:
     """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
     A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
@@ -345,6 +380,10 @@ Document excerpts:
             function_declarations.append(_build_search_tool())
         except Exception as e:
             logger.warning(f"Failed to build search tool (non-fatal): {e}")
+        try:
+            function_declarations.append(_build_list_files_tool())
+        except Exception as e:
+            logger.warning(f"Failed to build list_files tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
             function_declarations.append(_build_sql_tool())
@@ -557,6 +596,30 @@ Document excerpts:
                     if evt_type == "sub_agent_done":
                         sub_agent_result = evt_data
                 result_text = sub_agent_result
+
+        elif tool_name == "list_files":
+            from app.services.exploration_tools.list_files import list_files as _list_files
+            from app.services.exploration_tools.schemas import ListFilesArgs
+            try:
+                parsed_args = ListFilesArgs(**args)
+            except Exception as e:
+                result_text = json.dumps({
+                    "tool": "list_files",
+                    "error": "INVALID_ARGS",
+                    "message": str(e),
+                })
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": "Invalid arguments",
+                }))
+            else:
+                tool_result = _list_files(parsed_args, user_id, supabase_client)
+                result_text = json.dumps(tool_result)
+                total = tool_result.get("total", 0) if isinstance(tool_result, dict) else 0
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": f"{total} entries at {parsed_args.path}",
+                }))
 
         else:
             logger.warning(f"Unknown tool: {tool_name}")
