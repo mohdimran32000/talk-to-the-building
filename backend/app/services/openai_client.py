@@ -467,6 +467,45 @@ def _build_grep_tool() -> "types.FunctionDeclaration":
     )
 
 
+def _build_explore_knowledge_base_tool() -> "types.FunctionDeclaration":
+    """Build the explore_knowledge_base tool definition for open-ended exploration.
+
+    Use when the user's question is open-ended ('where are X', 'what's in the KB
+    about Y', 'find me all docs related to Z') and answering requires multiple
+    steps. Spawns an isolated sub-agent that iteratively calls
+    tree/glob/grep/list_files/read_document for up to 8 turns then returns a
+    compact summary. Distinct from analyze_document (which targets a SPECIFIC
+    named document). Recursive sub-agents forbidden — Explorer cannot call
+    analyze_document or itself (EXPLORER-03 setup-time assert in sub_agent.py).
+    """
+    return types.FunctionDeclaration(
+        name="explore_knowledge_base",
+        description=(
+            "REQUIRED for OPEN-ENDED exploration of the user's knowledge base. "
+            "Use when the user asks 'where is X', 'find me everything about Y', or "
+            "'what does the KB say about Z' and the answer requires multiple steps. "
+            "Spawns an exploration sub-agent that uses tree, glob, grep, list_files, "
+            "read_document for up to 8 turns then returns a compact summary. "
+            "Distinct from analyze_document — that tool is for a specific named document. "
+            "Distinct from search_documents — that tool returns raw snippets in one shot."
+        ),
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "query": types.Schema(
+                    type="STRING",
+                    description=(
+                        "The open-ended exploration question. Pass the user's question "
+                        "verbatim or a slightly normalized version. The sub-agent has its "
+                        "own system prompt and will plan the tool sequence."
+                    ),
+                ),
+            },
+            required=["query"],
+        ),
+    )
+
+
 def _sanitize_keyword_query(q: str) -> str:
     """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
     A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
@@ -677,6 +716,10 @@ Document excerpts:
             function_declarations.append(_build_grep_tool())
         except Exception as e:
             logger.warning(f"Failed to build grep tool (non-fatal): {e}")
+        try:
+            function_declarations.append(_build_explore_knowledge_base_tool())
+        except Exception as e:
+            logger.warning(f"Failed to build explore_knowledge_base tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
             function_declarations.append(_build_sql_tool())
