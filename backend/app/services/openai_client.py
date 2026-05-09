@@ -306,6 +306,49 @@ def _build_glob_tool() -> "types.FunctionDeclaration":
     )
 
 
+def _build_read_document_tool() -> "types.FunctionDeclaration":
+    """Phase 4 / TOOL-05: read_document tool definition.
+
+    Line-numbered slice of a document's content. Use when the user wants to
+    see the literal text of a known document. For pattern-search across many
+    docs use `grep`; for full-document analysis use `analyze_document`.
+    """
+    from google.genai import types
+    return types.FunctionDeclaration(
+        name="read_document",
+        description=(
+            "Read a line-numbered slice of one document's content. Returns lines in "
+            "arrow form ('123→content of line 123'). Specify either `document_id` "
+            "OR `path` (e.g. '/projects/readme.md'). Default reads lines 1-2000; "
+            "hard cap 5000 lines. Use when you need the literal text of a known "
+            "document; for content search across many docs use `grep`."
+        ),
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "document_id": types.Schema(
+                    type="STRING",
+                    description="UUID of the document. Either this OR `path` is required.",
+                ),
+                "path": types.Schema(
+                    type="STRING",
+                    description="Folder + file_name combo, e.g. '/projects/readme.md'. "
+                                "Either this OR `document_id` is required.",
+                ),
+                "offset": types.Schema(
+                    type="INTEGER",
+                    description="1-based line number to START at (default 1).",
+                ),
+                "limit": types.Schema(
+                    type="INTEGER",
+                    description="Lines to return (default 2000; hard cap 5000).",
+                ),
+            },
+            required=[],
+        ),
+    )
+
+
 def _sanitize_keyword_query(q: str) -> str:
     """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
     A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
@@ -478,6 +521,10 @@ Document excerpts:
             function_declarations.append(_build_glob_tool())
         except Exception as e:
             logger.warning(f"Failed to build glob tool (non-fatal): {e}")
+        try:
+            function_declarations.append(_build_read_document_tool())
+        except Exception as e:
+            logger.warning(f"Failed to build read_document tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
             function_declarations.append(_build_sql_tool())
@@ -767,6 +814,41 @@ Document excerpts:
                     detail = f"{tm} matches for {parsed_args.pattern!r}"
                 else:
                     detail = "glob complete"
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": detail,
+                }))
+
+        elif tool_name == "read_document":
+            from app.services.exploration_tools.read_document import read_document as _read_document
+            from app.services.exploration_tools.schemas import ReadDocumentArgs
+            try:
+                parsed_args = ReadDocumentArgs(**args)
+            except Exception as e:
+                result_text = json.dumps({
+                    "tool": "read_document",
+                    "error": "INVALID_ARGS",
+                    "message": str(e),
+                })
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": "Invalid arguments",
+                }))
+            else:
+                tool_result = _read_document(parsed_args, user_id, supabase_client)
+                result_text = json.dumps(tool_result)
+                if isinstance(tool_result, dict):
+                    if tool_result.get("error"):
+                        detail = f"error: {tool_result['error']}"
+                    elif tool_result.get("status") == "pending_reindex":
+                        detail = "pending_reindex"
+                    else:
+                        sl = tool_result.get("start_line", 0)
+                        el = tool_result.get("end_line", 0)
+                        tl = tool_result.get("total_lines", 0)
+                        detail = f"lines {sl}-{el}/{tl}"
+                else:
+                    detail = "read_document complete"
                 yield ("tool_done", json.dumps({
                     "tool": tool_name,
                     "detail": detail,
