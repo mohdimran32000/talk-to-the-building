@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from app.auth import get_current_user, get_user_profile, get_supabase_client
-from app.models.schemas import FolderResponse, FolderCreate, FolderPatch
+from app.models.schemas import FolderResponse, FolderCreate, FolderPatch, RenameFolderResponse
 from app.services.folder_service import (
     normalize_path,
     list_folder,
@@ -71,7 +71,7 @@ async def create_folder_endpoint(
     return create_folder(norm, "user", user_id, sb)
 
 
-@router.patch("/{folder_id}", response_model=FolderResponse)
+@router.patch("/{folder_id}", response_model=RenameFolderResponse)
 async def rename_folder_endpoint(
     folder_id: str,
     body: FolderPatch,

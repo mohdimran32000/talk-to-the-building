@@ -63,6 +63,14 @@ class FolderPatch(BaseModel):
     new_path: str
 
 
+class RenameFolderResponse(FolderResponse):
+    # FOLDER-03 contract: the rename endpoint returns the folder row PLUS atomic
+    # counters from the rename_folder_prefix RPC (Migration 019). FolderResponse
+    # alone would silently drop them via FastAPI's response_model serialization.
+    documents_updated: int = 0
+    folders_updated: int = 0
+
+
 class FilePatch(BaseModel):
     # Mutable fields ONLY. scope is IMMUTABLE per Migration 015 forbid_scope_mutation trigger; Pydantic v2 ignores unknown fields by default, so a smuggled "scope" in the request body is silently dropped here (defense in depth alongside the DB trigger).
     file_name: Optional[str] = None
