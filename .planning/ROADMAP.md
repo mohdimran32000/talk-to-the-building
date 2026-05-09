@@ -160,10 +160,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 6 plans in 4 waves
 
 **Wave 0** *(foundation — constants/helpers/types ABOVE the existing run_sub_agent)*
-- [ ] 05-01-PLAN.md — sub_agent.py extension: ExplorerArgs Pydantic v2 model + 4 budget constants (MAX_TURNS=8, WALL_CLOCK_BUDGET_S=60, RESULT_CHAR_CAP=12_000, SSE_ARG_CAP=500) + EXPLORER_ALLOWED_TOOLS tuple + setup-time recursion-ban assert (layer 1 of EXPLORER-03 triple-defense) + EXPLORER_SYSTEM_PROMPT + _signature no-progress hash helper (EXPLORER-01, EXPLORER-02, EXPLORER-03)
+- [x] 05-01-PLAN.md — sub_agent.py extension: ExplorerArgs Pydantic v2 model + 4 budget constants (MAX_TURNS=8, WALL_CLOCK_BUDGET_S=60, RESULT_CHAR_CAP=12_000, SSE_ARG_CAP=500) + EXPLORER_ALLOWED_TOOLS tuple + setup-time recursion-ban assert (layer 1 of EXPLORER-03 triple-defense) + EXPLORER_SYSTEM_PROMPT + _signature no-progress hash helper (EXPLORER-01, EXPLORER-02, EXPLORER-03)
 
 **Wave 1** *(blocked on Wave 0 — depends on every Plan 01 helper)*
-- [ ] 05-02-PLAN.md — sub_agent.py: run_explorer_sub_agent generator + _build_explorer_tool_set (EXPLORER-03 layer 2) + _dispatch_explorer_tool (EXPLORER-03 layer 3) + _extract_function_call/_extract_text/_truncate_args_for_sse helpers; bounded for-range loop with for-else MAX_TURNS exhaustion + wall-clock guard + no-progress detector + apply_12k_cap on tool results + final compact-summary streaming + @traceable(run_type='chain') (EXPLORER-01, EXPLORER-02, EXPLORER-03, EXPLORER-06)
+- [x] 05-02-PLAN.md — sub_agent.py: run_explorer_sub_agent generator + _build_explorer_tool_set (EXPLORER-03 layer 2) + _dispatch_explorer_tool (EXPLORER-03 layer 3) + _extract_function_call/_extract_text/_truncate_args_for_sse helpers; bounded for-range loop with for-else MAX_TURNS exhaustion + wall-clock guard + no-progress detector + apply_12k_cap on tool results + final compact-summary streaming + @traceable(run_type='chain') (EXPLORER-01, EXPLORER-02, EXPLORER-03, EXPLORER-06)
 
 **Wave 2** *(blocked on Wave 1 — openai_client.py serialized to avoid cross-plan merge conflicts)*
 - [ ] 05-03-PLAN.md — openai_client.py: _build_explore_knowledge_base_tool factory + registration in if has_documents block + elif tool_name=='explore_knowledge_base' dispatch arm forwarding generator events + _build_system_prompt update with explore_knowledge_base bullet + disambiguation rule; TOOL-09 layered-fallback wrapper at L1070+L1146 UNCHANGED bit-identically (EXPLORER-01, EXPLORER-03)
