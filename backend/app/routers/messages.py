@@ -1,5 +1,6 @@
 import json
 import logging
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 from app.auth import get_current_user, get_supabase_client
@@ -89,16 +90,118 @@ async def send_message(
                     parsed = json.loads(data)
                     yield json.dumps({"type": "tool_done", **parsed})
                 elif event_type == "sub_agent_start":
+                    # Phase 5: refactored to support BOTH analyze_document (legacy
+                    # — no agent_name in payload) AND explore_knowledge_base (new
+                    # — payload carries agent_name='explore_knowledge_base'). The
+                    # accumulator is a list of slots; each new sub_agent_start
+                    # appends a fresh slot rather than overwriting [0].
                     parsed = json.loads(data)
-                    tool_metadata = {"tools_used": [{"document_name": parsed.get("document_name", "")}]}
+                    sub_agent_id = str(uuid.uuid4())
+                    if not tool_metadata:
+                        tool_metadata = {"tools_used": []}
+                    elif "tools_used" not in tool_metadata:
+                        tool_metadata["tools_used"] = []
+                    # Legacy `analyze_document` events have no agent_name field —
+                    # default to "analyze_document" so older flows still persist
+                    # the same `tool: analyze_document` value frontend expects.
+                    agent_name = parsed.get("agent_name", "analyze_document")
+                    slot = {
+                        "tool": agent_name,
+                        "sub_agent_id": sub_agent_id,
+                        "tool_calls": [],
+                    }
+                    if agent_name == "analyze_document":
+                        slot["document_name"] = parsed.get("document_name", "")
+                    elif agent_name == "explore_knowledge_base":
+                        slot["question"] = parsed.get("question", "")
+                    tool_metadata["tools_used"].append(slot)
+                    # Dual-emit window (Phase 5 ONLY — removed in Phase 6 cleanup):
+                    # 1) LEGACY shape — kept for one release for frontend back-compat
                     yield json.dumps({"type": "sub_agent_start", **parsed})
+                    # 2) GENERALIZED envelope — Phase 6 frontend consumes this
+                    yield json.dumps({
+                        "type": "sub_agent",
+                        "agent_name": agent_name,
+                        "event": "start",
+                        "payload": {"sub_agent_id": sub_agent_id, **parsed},
+                    })
+                elif event_type == "sub_agent_tool_start":
+                    # Phase 5 NEW (Explorer-only — analyze_document never emits this):
+                    # Append the in-flight inner tool call to the most recent slot's
+                    # tool_calls array. Result_preview is filled in on tool_done.
+                    parsed = json.loads(data)
+                    if tool_metadata and tool_metadata.get("tools_used"):
+                        slot = tool_metadata["tools_used"][-1]
+                        slot.setdefault("tool_calls", []).append({
+                            "tool": parsed.get("tool", ""),
+                            "args": parsed.get("args", {}),
+                            "turn": parsed.get("turn"),
+                        })
+                    # Dual-emit:
+                    yield json.dumps({"type": "sub_agent_tool_start", **parsed})
+                    yield json.dumps({
+                        "type": "sub_agent",
+                        "agent_name": "explore_knowledge_base",
+                        "event": "tool_start",
+                        "payload": parsed,
+                    })
+                elif event_type == "sub_agent_tool_done":
+                    # Phase 5 NEW: update the LAST in-flight tool_call in the most
+                    # recent slot with its result_preview (300-char cap — V8 + matches
+                    # Phase 4's result_preview discipline at messages.py:100 LOCKED).
+                    parsed = json.loads(data)
+                    if tool_metadata and tool_metadata.get("tools_used"):
+                        slot = tool_metadata["tools_used"][-1]
+                        if slot.get("tool_calls"):
+                            slot["tool_calls"][-1]["result_preview"] = (
+                                parsed.get("result_preview", "")[:300]
+                            )
+                    # Dual-emit:
+                    yield json.dumps({"type": "sub_agent_tool_done", **parsed})
+                    yield json.dumps({
+                        "type": "sub_agent",
+                        "agent_name": "explore_knowledge_base",
+                        "event": "tool_done",
+                        "payload": parsed,
+                    })
                 elif event_type == "sub_agent_token":
+                    # Dual-emit: token stream from the sub-agent's compact summary.
+                    # Generalized envelope MUST carry agent_name (uniform contract
+                    # across all 5 sub-agent events — Phase 6 frontend routes by
+                    # agent_name to the correct sub-agent slot). Resolve from the
+                    # most recent slot in the accumulator (the active sub-agent).
+                    agent_name = "analyze_document"  # legacy default
+                    if tool_metadata and tool_metadata.get("tools_used"):
+                        agent_name = tool_metadata["tools_used"][-1].get("tool", "analyze_document")
                     yield json.dumps({"type": "sub_agent_token", "content": data})
+                    yield json.dumps({
+                        "type": "sub_agent",
+                        "agent_name": agent_name,
+                        "event": "token",
+                        "payload": {"content": data},
+                    })
                 elif event_type == "sub_agent_done":
-                    if tool_metadata and tool_metadata["tools_used"]:
-                        tool_metadata["tools_used"][0]["tool"] = "analyze_document"
-                        tool_metadata["tools_used"][0]["sub_agent_result"] = data[:300]
+                    # Phase 5 refactor: write to tools_used[-1] (LAST slot) instead
+                    # of [0] — supports multi-sub-agent-per-message (e.g.
+                    # analyze_document + explore_knowledge_base in one assistant
+                    # turn). The 300-char cap on sub_agent_result matches Phase 4
+                    # discipline (V8 data protection).
+                    # Generalized envelope MUST carry agent_name (uniform contract
+                    # across all 5 sub-agent events). Resolve from the most recent
+                    # slot in the accumulator (the active sub-agent that is closing).
+                    agent_name = "analyze_document"  # legacy default
+                    if tool_metadata and tool_metadata.get("tools_used"):
+                        slot = tool_metadata["tools_used"][-1]
+                        slot["sub_agent_result"] = data[:300]
+                        agent_name = slot.get("tool", "analyze_document")
+                    # Dual-emit:
                     yield json.dumps({"type": "sub_agent_done"})
+                    yield json.dumps({
+                        "type": "sub_agent",
+                        "agent_name": agent_name,
+                        "event": "done",
+                        "payload": {"summary": data[:300]},
+                    })
                 elif event_type == "done":
                     yield json.dumps({"type": "done"})
         except Exception as e:
