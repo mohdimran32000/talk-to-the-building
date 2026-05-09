@@ -16,6 +16,7 @@ import test_messages
 import test_files
 import test_folders         # NEW (Phase 3)
 import test_exploration_tools  # NEW (Phase 4)
+import test_explorer_sub_agent  # NEW (Phase 5)
 import test_backfill
 import test_rag
 import test_rls
@@ -34,6 +35,7 @@ SUITES = [
     ("Files", test_files),
     ("Folders", test_folders),       # NEW (Phase 3 — folders is logically a Files extension)
     ("Exploration", test_exploration_tools),  # NEW (Phase 4)
+    ("Explorer", test_explorer_sub_agent),    # NEW (Phase 5 — explore_knowledge_base sub-agent)
     ("Backfill", test_backfill),
     ("RAG", test_rag),
     ("RLS", test_rls),
