@@ -124,6 +124,142 @@ Compact-summary format:
 """
 
 
+def _build_explorer_tool_set() -> list:
+    """EXPLORER-03 layer 2: build the 5-tool set, asserting no analyze_document.
+
+    Lazy import inside this function avoids the openai_client.py <-> sub_agent.py
+    circular import (openai_client imports run_sub_agent; sub_agent imports the
+    Phase 4 tool factories that live in openai_client). The import resolves the
+    first time Explorer is invoked — AFTER both modules have loaded.
+    """
+    from app.services.openai_client import (
+        _build_list_files_tool,
+        _build_tree_tool,
+        _build_glob_tool,
+        _build_read_document_tool,
+        _build_grep_tool,
+    )
+    declarations = [
+        _build_list_files_tool(),
+        _build_tree_tool(),
+        _build_glob_tool(),
+        _build_read_document_tool(),
+        _build_grep_tool(),
+    ]
+    names = {fd.name for fd in declarations}
+    # Defense-in-depth: even if a future maintainer mutates EXPLORER_ALLOWED_TOOLS
+    # without touching the factory list (or vice versa), this assertion fires.
+    assert names == set(EXPLORER_ALLOWED_TOOLS), (
+        f"Explorer tool-set drift: declared={sorted(names)}, "
+        f"allowed={sorted(EXPLORER_ALLOWED_TOOLS)}"
+    )
+    assert "analyze_document" not in names, "EXPLORER-03 violation"
+    return [types.Tool(function_declarations=declarations)]
+
+
+def _extract_function_call(response):
+    """Return the first function_call part from a Gemini response, or None.
+
+    Mirrors the extraction shape used in openai_client.py:843-859 (the main
+    agent's tool-call detection). Returns the function_call object directly
+    (with .name and .args attributes) or None if the model emitted plain text.
+    """
+    try:
+        parts = response.candidates[0].content.parts
+    except (AttributeError, IndexError):
+        return None
+    for part in parts or []:
+        fc = getattr(part, "function_call", None)
+        if fc and getattr(fc, "name", None):
+            return fc
+    return None
+
+
+def _extract_text(response) -> str:
+    """Concatenate all text parts of a Gemini response, returning '' if none."""
+    try:
+        parts = response.candidates[0].content.parts
+    except (AttributeError, IndexError):
+        return ""
+    out = []
+    for part in parts or []:
+        text = getattr(part, "text", None)
+        if text:
+            out.append(text)
+    return "".join(out)
+
+
+def _truncate_args_for_sse(args: dict) -> dict:
+    """Per-arg cap to SSE_ARG_CAP chars before echoing in sub_agent_tool_start.
+
+    RESEARCH.md §Open Questions #4 recommendation: bound SSE message size by
+    truncating long arg values at emit time (matches Phase 4's result_preview
+    300-char discipline). Non-string values pass through untouched.
+    """
+    out = {}
+    for k, v in (args or {}).items():
+        if isinstance(v, str) and len(v) > SSE_ARG_CAP:
+            out[k] = v[:SSE_ARG_CAP] + "...[truncated]"
+        else:
+            out[k] = v
+    return out
+
+
+def _dispatch_explorer_tool(
+    tool_name: str,
+    args,
+    user_id: str,
+    supabase_client,
+) -> dict:
+    """EXPLORER-03 layer 3: dispatch ONLY if tool_name is in the allowlist.
+
+    Validates args via the Phase 4 Pydantic schemas (TOOL-06 invariant), then
+    invokes the Phase 4 tool function (UNCHANGED — same contract Phase 4 ships).
+    Lazy imports inside this function avoid eager-load cost when Explorer is
+    not invoked.
+    """
+    if tool_name not in EXPLORER_ALLOWED_TOOLS:
+        logger.warning(
+            f"EXPLORER-03 dispatch-time block: tool_name={tool_name!r} "
+            f"not in EXPLORER_ALLOWED_TOOLS"
+        )
+        return {"error": "TOOL_NOT_ALLOWED_IN_EXPLORER", "tool": tool_name}
+
+    # Lazy imports (Pitfall 1 + lazy-load discipline)
+    from app.services.exploration_tools.schemas import (
+        TreeArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadDocumentArgs,
+    )
+    from app.services.exploration_tools.list_files import list_files
+    from app.services.exploration_tools.tree import tree
+    from app.services.exploration_tools.glob_match import glob_match
+    from app.services.exploration_tools.read_document import read_document
+    from app.services.exploration_tools.grep import grep
+
+    args_dict = dict(args) if args else {}
+    try:
+        if tool_name == "list_files":
+            parsed = ListFilesArgs(**args_dict)
+            return list_files(parsed, user_id, supabase_client)
+        elif tool_name == "tree":
+            parsed = TreeArgs(**args_dict)
+            return tree(parsed, user_id, supabase_client)
+        elif tool_name == "glob":
+            parsed = GlobArgs(**args_dict)
+            return glob_match(parsed, user_id, supabase_client)
+        elif tool_name == "read_document":
+            parsed = ReadDocumentArgs(**args_dict)
+            return read_document(parsed, user_id, supabase_client)
+        elif tool_name == "grep":
+            parsed = GrepArgs(**args_dict)
+            return grep(parsed, user_id, supabase_client)
+    except Exception as e:
+        logger.error(f"Explorer dispatch failed for {tool_name}: {e}", exc_info=True)
+        return {"error": "DISPATCH_FAILED", "tool": tool_name, "detail": str(e)}
+
+    # Defensive — should be unreachable due to allowlist guard above.
+    return {"error": "UNHANDLED_TOOL_NAME", "tool": tool_name}
+
+
 @traceable(name="sub_agent_analyze", run_type="chain")
 def run_sub_agent(
     document_id: str,
