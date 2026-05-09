@@ -46,6 +46,7 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
     if has_documents:
         parts.append("- analyze_document: Summarize, review, or analyze a specific document in depth. Loads the FULL document. MUST be used for any summarization request.")
         parts.append("- search_documents: Find specific facts or snippets across documents. Only returns a few excerpts — NOT for summarization.")
+        parts.append("- explore_knowledge_base: Open-ended exploration that spawns a sub-agent which iteratively uses tree/glob/grep/list_files/read_document over up to 8 turns and returns a compact summary. Use when the user asks 'where is X', 'find everything about Y', or 'what does the KB say about Z' and the answer requires multi-step exploration to even find what to read.")
     if has_structured_data:
         parts.append("- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons).")
     if web_search_enabled:
@@ -74,6 +75,19 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
             "and `read_document` to read specific lines of a doc. Prefer these over "
             "search_documents when the user asks 'where is X' or 'show me all PDFs in "
             "/projects'."
+        )
+        # Phase 5 NEW: explore_knowledge_base disambiguation — distinguishes
+        # the three closest tools (analyze_document = specific named doc;
+        # search_documents = single-shot snippet retrieval; explore_knowledge_base
+        # = multi-step iterative exploration that delegates to the precision tools).
+        parts.append(
+            "- For OPEN-ENDED exploration that needs multiple steps, use "
+            "`explore_knowledge_base`. It runs a sub-agent that calls "
+            "tree/glob/grep/list_files/read_document iteratively and returns a "
+            "compact summary. Use `analyze_document` for a specific NAMED "
+            "document, `search_documents` for one-shot snippet retrieval, and "
+            "`explore_knowledge_base` when the user's question requires multiple "
+            "steps to even locate what to read."
         )
         # Phase 4 NEW: scope disambiguation in citations (TOOL-07 invariant /
         # Pitfall 11 mitigation — every tool result row carries a scope field).
@@ -467,6 +481,45 @@ def _build_grep_tool() -> "types.FunctionDeclaration":
     )
 
 
+def _build_explore_knowledge_base_tool() -> "types.FunctionDeclaration":
+    """Build the explore_knowledge_base tool definition for open-ended exploration.
+
+    Use when the user's question is open-ended ('where are X', 'what's in the KB
+    about Y', 'find me all docs related to Z') and answering requires multiple
+    steps. Spawns an isolated sub-agent that iteratively calls
+    tree/glob/grep/list_files/read_document for up to 8 turns then returns a
+    compact summary. Distinct from analyze_document (which targets a SPECIFIC
+    named document). Recursive sub-agents forbidden — Explorer cannot call
+    analyze_document or itself (EXPLORER-03 setup-time assert in sub_agent.py).
+    """
+    return types.FunctionDeclaration(
+        name="explore_knowledge_base",
+        description=(
+            "REQUIRED for OPEN-ENDED exploration of the user's knowledge base. "
+            "Use when the user asks 'where is X', 'find me everything about Y', or "
+            "'what does the KB say about Z' and the answer requires multiple steps. "
+            "Spawns an exploration sub-agent that uses tree, glob, grep, list_files, "
+            "read_document for up to 8 turns then returns a compact summary. "
+            "Distinct from analyze_document — that tool is for a specific named document. "
+            "Distinct from search_documents — that tool returns raw snippets in one shot."
+        ),
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "query": types.Schema(
+                    type="STRING",
+                    description=(
+                        "The open-ended exploration question. Pass the user's question "
+                        "verbatim or a slightly normalized version. The sub-agent has its "
+                        "own system prompt and will plan the tool sequence."
+                    ),
+                ),
+            },
+            required=["query"],
+        ),
+    )
+
+
 def _sanitize_keyword_query(q: str) -> str:
     """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
     A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
@@ -677,6 +730,10 @@ Document excerpts:
             function_declarations.append(_build_grep_tool())
         except Exception as e:
             logger.warning(f"Failed to build grep tool (non-fatal): {e}")
+        try:
+            function_declarations.append(_build_explore_knowledge_base_tool())
+        except Exception as e:
+            logger.warning(f"Failed to build explore_knowledge_base tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
             function_declarations.append(_build_sql_tool())
@@ -1060,6 +1117,27 @@ Document excerpts:
                     "tool": tool_name,
                     "detail": detail,
                 }))
+
+        elif tool_name == "explore_knowledge_base":
+            # Phase 5: forward generator events from run_explorer_sub_agent and
+            # capture the compact summary as result_text. Lazy import avoids the
+            # openai_client.py <-> sub_agent.py circular cycle (Pitfall 1).
+            from app.services.sub_agent import run_explorer_sub_agent
+
+            query_arg = args.get("query", "")
+            if not query_arg or not query_arg.strip():
+                result_text = "explore_knowledge_base called with empty query."
+            else:
+                sub_agent_result = ""
+                for evt_type, evt_data in run_explorer_sub_agent(
+                    query_arg, user_id, supabase_client,
+                ):
+                    yield (evt_type, evt_data)
+                    if evt_type == "sub_agent_done":
+                        sub_agent_result = evt_data
+                result_text = sub_agent_result or (
+                    "Exploration completed without a summary."
+                )
 
         else:
             logger.warning(f"Unknown tool: {tool_name}")
