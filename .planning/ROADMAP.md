@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Schema Foundation + Two-Scope RLS + Path Normalizer** — Five small migrations (012–016) introduce `folder_path`, `scope`, `content_markdown`, the thin `folders` table, two-scope RLS, `pg_trgm` indexes, and the canonical `normalize_path()` helper. ✅ 2026-05-04
 - [x] **Phase 2: content_markdown Backfill (Gated)** — Re-run Docling against existing Storage blobs to populate `documents.content_markdown`; surface re-index status; gate `grep`/`read_document` until operational. ✅ 2026-05-04
 - [x] **Phase 3: Folder Service + Routers + Dedup Extension** — Pure CRUD layer: `folder_service.py`, `folders` router, extended `files` router (upload-into-folder, rename, move), `record_manager` dedup key extended. ✅ 2026-05-09
-- [ ] **Phase 4: Five Exploration Tools + search_documents Extension** — `tree`, `glob`, `grep`, `list_files`, `read_document` with Pydantic v2 arg validation, hard token-budget caps, scope-tagged result rows; `search_documents` extended with `folder_path`/`scope` filters.
+- [x] **Phase 4: Five Exploration Tools + search_documents Extension** — `tree`, `glob`, `grep`, `list_files`, `read_document` with Pydantic v2 arg validation, hard token-budget caps, scope-tagged result rows; `search_documents` extended with `folder_path`/`scope` filters. (completed 2026-05-09)
 - [ ] **Phase 5: Explorer Sub-Agent + SSE Protocol Generalization** — `run_explorer_sub_agent` with `MAX_TURNS=8`, wall-clock timeout, no-progress detector; SSE sub-agent event protocol generalized; `messages.tool_metadata` persistence.
 - [ ] **Phase 6: File-Explorer UI Cluster** — `FileExplorerPanel` cluster (two-section tree, folder CRUD, drag-move, breadcrumbs, scope badges, Explorer activity card); replaces `FileUploadPanel`; Playwright e2e additions.
 
@@ -131,7 +131,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 7** *(parallel — Plan 08 finishes openai_client.py edits; Plan 09 tests everything end-to-end)*
 - [x] 04-08-PLAN.md — search_documents extension: _build_search_tool gains folder_path + scope properties; dispatch passes match_folder_path/match_scope to RPCs; system prompt updated (SEARCH-01, SEARCH-03)
-- [ ] 04-09-PLAN.md — test_exploration_tools.py: 600+ line integration suite covering TOOL-01..10 + SEARCH-01..03 + Phase 4 SC1..5; register in test_all.py SUITES (TEST-02)
+- [x] 04-09-PLAN.md — test_exploration_tools.py: 600+ line integration suite covering TOOL-01..10 + SEARCH-01..03 + Phase 4 SC1..5; register in test_all.py SUITES (TEST-02)
 
 **Cross-cutting constraints** *(must_haves shared across multiple plans)*
 - normalize_path() FIRST statement of every tool function (Pitfall 4 chokepoint) — Plans 03/04/05/06/07; SEARCH-01 dispatch (Plan 08)
@@ -183,7 +183,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
-| 4. Five Exploration Tools + search_documents Extension | 8/9 | In Progress|  |
+| 4. Five Exploration Tools + search_documents Extension | 9/9 | Complete   | 2026-05-09 |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
 
