@@ -261,6 +261,51 @@ def _build_tree_tool() -> "types.FunctionDeclaration":
     )
 
 
+def _build_glob_tool() -> "types.FunctionDeclaration":
+    """Phase 4 / TOOL-02: glob tool definition.
+
+    File-name and folder-path pattern matching with `**` (any depth) and `*`
+    (single segment) semantics. Use when the user asks 'find all PDFs' or
+    'show me everything under /projects/2026/floor-plans'.
+    """
+    from google.genai import types
+    return types.FunctionDeclaration(
+        name="glob",
+        description=(
+            "Find files or folders by name pattern. Supports `**` (any depth) and "
+            "`*` (single segment). Examples: '**/*.pdf' (all PDFs anywhere), "
+            "'projects/**/floor-plans/*' (everything in any 'floor-plans' subfolder). "
+            "`type` selects 'file' (docs only), 'folder' (folders only), or 'both' (default). "
+            "Each row carries 'scope' ('user' for private, 'global' for shared). "
+            "Use when looking by name; for tree shape use `tree`; for content search use `grep`."
+        ),
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "pattern": types.Schema(
+                    type="STRING",
+                    description="Glob pattern with `**`/`*` semantics. 1-200 chars.",
+                ),
+                "path": types.Schema(
+                    type="STRING",
+                    description="Restrict matching to this prefix (canonical path; '/' for root).",
+                ),
+                "type": types.Schema(
+                    type="STRING",
+                    enum=["file", "folder", "both"],
+                    description="'file' for docs only, 'folder' for folders only, 'both' (default).",
+                ),
+                "scope": types.Schema(
+                    type="STRING",
+                    enum=["user", "global", "both"],
+                    description="'user' / 'global' / 'both' (default).",
+                ),
+            },
+            required=["pattern"],
+        ),
+    )
+
+
 def _sanitize_keyword_query(q: str) -> str:
     """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
     A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
@@ -429,6 +474,10 @@ Document excerpts:
             function_declarations.append(_build_tree_tool())
         except Exception as e:
             logger.warning(f"Failed to build tree tool (non-fatal): {e}")
+        try:
+            function_declarations.append(_build_glob_tool())
+        except Exception as e:
+            logger.warning(f"Failed to build glob tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
             function_declarations.append(_build_sql_tool())
@@ -690,6 +739,34 @@ Document excerpts:
                     detail = f"{tf} folders, {td} docs"
                 else:
                     detail = "tree complete"
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": detail,
+                }))
+
+        elif tool_name == "glob":
+            from app.services.exploration_tools.glob_match import glob_match as _glob
+            from app.services.exploration_tools.schemas import GlobArgs
+            try:
+                parsed_args = GlobArgs(**args)
+            except Exception as e:
+                result_text = json.dumps({
+                    "tool": "glob",
+                    "error": "INVALID_ARGS",
+                    "message": str(e),
+                })
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": "Invalid arguments",
+                }))
+            else:
+                tool_result = _glob(parsed_args, user_id, supabase_client)
+                result_text = json.dumps(tool_result)
+                if isinstance(tool_result, dict):
+                    tm = tool_result.get("total_matches", 0)
+                    detail = f"{tm} matches for {parsed_args.pattern!r}"
+                else:
+                    detail = "glob complete"
                 yield ("tool_done", json.dumps({
                     "tool": tool_name,
                     "detail": detail,
