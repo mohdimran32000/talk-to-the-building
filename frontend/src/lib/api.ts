@@ -38,8 +38,16 @@ export interface Message {
   content: string
   tool_metadata?: {
     tools_used: Array<{
-      tool: string
-      document_name?: string
+      tool: string                              // 'analyze_document' | 'explore_knowledge_base' | future
+      document_name?: string                    // analyze_document only (legacy)
+      question?: string                         // Phase 5 NEW — explore_knowledge_base only
+      sub_agent_id?: string                     // Phase 5 NEW — server-generated UUID
+      tool_calls?: Array<{                      // Phase 5 NEW — Explorer's nested tool trace
+        tool: string                            // 'tree' | 'glob' | 'grep' | 'list_files' | 'read_document'
+        args?: Record<string, any>
+        result_preview?: string
+        turn?: number
+      }>
       sub_agent_result?: string
     }>
   } | null
@@ -208,13 +216,29 @@ export async function sendMessage(
   onDone: (responseId: string) => void,
   signal?: AbortSignal,
   metadataFilter?: Record<string, any>,
-  onSubAgentStart?: (data: { document_name: string }) => void,
+  onSubAgentStart?: (data: {
+    document_name?: string                    // analyze_document (legacy)
+    question?: string                         // Phase 5 NEW — explore_knowledge_base
+    agent_name?: string                       // Phase 5 NEW — discriminator
+    sub_agent_id?: string                     // Phase 5 NEW
+  }) => void,
   onSubAgentToken?: (token: string) => void,
   onSubAgentDone?: () => void,
   onError?: (message: string) => void,
   onToolThinking?: (data: ToolThinkingEvent) => void,
   onToolStart?: (data: ToolStartEvent) => void,
   onToolDone?: (data: ToolDoneEvent) => void,
+  // Phase 5 NEW callbacks (positional-compat: appended at end)
+  onSubAgentToolStart?: (data: {
+    tool: string
+    args?: Record<string, any>
+    turn?: number
+  }) => void,
+  onSubAgentToolDone?: (data: {
+    tool: string
+    result_preview?: string
+    turn?: number
+  }) => void,
 ) {
   const token = await getToken()
   const body: Record<string, any> = { content }
@@ -280,14 +304,29 @@ export async function sendMessage(
         onError?.(msg)
         onToken(`\n\n**Error:** ${msg}`)
       } else if (parsed.type === 'sub_agent_start') {
+        // Phase 5: payload may carry agent_name + question (Explorer) OR
+        // document_name (legacy analyze_document). The callback signature
+        // accepts either via optional fields.
         onSubAgentStart?.(parsed)
       } else if (parsed.type === 'sub_agent_token') {
         onSubAgentToken?.(parsed.content)
+      } else if (parsed.type === 'sub_agent_tool_start') {
+        // Phase 5 NEW — Explorer's per-turn inner tool dispatch.
+        onSubAgentToolStart?.(parsed)
+      } else if (parsed.type === 'sub_agent_tool_done') {
+        // Phase 5 NEW — Explorer's per-turn inner tool result.
+        onSubAgentToolDone?.(parsed)
       } else if (parsed.type === 'sub_agent_done') {
         onSubAgentDone?.()
       } else if (parsed.type === 'done') {
         onDone(parsed.response_id)
       }
+      // NOTE: Plan 04 backend ALSO emits a generalized `parsed.type === 'sub_agent'`
+      // envelope (dual-emit window). Phase 5 frontend intentionally listens to the
+      // LEGACY channel only to avoid double-firing callbacks. Phase 6's frontend
+      // rewrite (UI-10) will switch to the generalized envelope and Plan 04's
+      // legacy emissions will be removed in the same release per the dual-emit
+      // contract (Pitfall 12 mitigation 1).
     }
 
     if (done) break
