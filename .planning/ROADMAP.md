@@ -20,7 +20,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Schema Foundation + Two-Scope RLS + Path Normalizer** — Five small migrations (012–016) introduce `folder_path`, `scope`, `content_markdown`, the thin `folders` table, two-scope RLS, `pg_trgm` indexes, and the canonical `normalize_path()` helper. ✅ 2026-05-04
 - [x] **Phase 2: content_markdown Backfill (Gated)** — Re-run Docling against existing Storage blobs to populate `documents.content_markdown`; surface re-index status; gate `grep`/`read_document` until operational. ✅ 2026-05-04
 - [x] **Phase 3: Folder Service + Routers + Dedup Extension** — Pure CRUD layer: `folder_service.py`, `folders` router, extended `files` router (upload-into-folder, rename, move), `record_manager` dedup key extended. ✅ 2026-05-09
-- [x] **Phase 4: Five Exploration Tools + search_documents Extension** — `tree`, `glob`, `grep`, `list_files`, `read_document` with Pydantic v2 arg validation, hard token-budget caps, scope-tagged result rows; `search_documents` extended with `folder_path`/`scope` filters. (completed 2026-05-09)
+- [x] **Phase 4: Five Exploration Tools + search_documents Extension** — `tree`, `glob`, `grep`, `list_files`, `read_document` with Pydantic v2 arg validation, hard token-budget caps, scope-tagged result rows; `search_documents` extended with `folder_path`/`scope` filters.
+ (completed 2026-05-09)
 - [ ] **Phase 5: Explorer Sub-Agent + SSE Protocol Generalization** — `run_explorer_sub_agent` with `MAX_TURNS=8`, wall-clock timeout, no-progress detector; SSE sub-agent event protocol generalized; `messages.tool_metadata` persistence.
 - [ ] **Phase 6: File-Explorer UI Cluster** — `FileExplorerPanel` cluster (two-section tree, folder CRUD, drag-move, breadcrumbs, scope badges, Explorer activity card); replaces `FileUploadPanel`; Playwright e2e additions.
 
@@ -156,7 +157,36 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. `analyze_document` is hard-excluded from Explorer's toolset (no recursive sub-agents); attempting to register it raises a setup-time error.
   3. The SSE event protocol is generalized to `{type: 'sub_agent', agent_name, event, payload}` with new `sub_agent_tool_start`/`sub_agent_tool_done` events forwarded by `messages.py:event_generator`; both `analyze_document` and `explore_knowledge_base` flows render correctly in the same conversation, and `messages.tool_metadata` JSONB persists Explorer traces so old chats render correctly on reload.
   4. LangSmith shows Explorer as a `chain` span with its tool calls as nested children (not flat siblings); a CI assertion confirms Explorer spans never exceed 8 tool-call children and tool-result size stays under 12K chars.
-**Plans**: TBD
+**Plans**: 6 plans in 4 waves
+
+**Wave 0** *(foundation — constants/helpers/types ABOVE the existing run_sub_agent)*
+- [ ] 05-01-PLAN.md — sub_agent.py extension: ExplorerArgs Pydantic v2 model + 4 budget constants (MAX_TURNS=8, WALL_CLOCK_BUDGET_S=60, RESULT_CHAR_CAP=12_000, SSE_ARG_CAP=500) + EXPLORER_ALLOWED_TOOLS tuple + setup-time recursion-ban assert (layer 1 of EXPLORER-03 triple-defense) + EXPLORER_SYSTEM_PROMPT + _signature no-progress hash helper (EXPLORER-01, EXPLORER-02, EXPLORER-03)
+
+**Wave 1** *(blocked on Wave 0 — depends on every Plan 01 helper)*
+- [ ] 05-02-PLAN.md — sub_agent.py: run_explorer_sub_agent generator + _build_explorer_tool_set (EXPLORER-03 layer 2) + _dispatch_explorer_tool (EXPLORER-03 layer 3) + _extract_function_call/_extract_text/_truncate_args_for_sse helpers; bounded for-range loop with for-else MAX_TURNS exhaustion + wall-clock guard + no-progress detector + apply_12k_cap on tool results + final compact-summary streaming + @traceable(run_type='chain') (EXPLORER-01, EXPLORER-02, EXPLORER-03, EXPLORER-06)
+
+**Wave 2** *(blocked on Wave 1 — openai_client.py serialized to avoid cross-plan merge conflicts)*
+- [ ] 05-03-PLAN.md — openai_client.py: _build_explore_knowledge_base_tool factory + registration in if has_documents block + elif tool_name=='explore_knowledge_base' dispatch arm forwarding generator events + _build_system_prompt update with explore_knowledge_base bullet + disambiguation rule; TOOL-09 layered-fallback wrapper at L1070+L1146 UNCHANGED bit-identically (EXPLORER-01, EXPLORER-03)
+
+**Wave 3** *(parallel after Wave 2 — disjoint files: backend SSE generator vs. frontend wiring)*
+- [ ] 05-04-PLAN.md — messages.py: event_generator extended with TWO new arms (sub_agent_tool_start, sub_agent_tool_done) + dual-emit BOTH legacy AND generalized {type:sub_agent, agent_name, event, payload} envelope on ALL FIVE arms + tool_metadata accumulator refactored to ARRAY (tools_used[].tool_calls[]) + V8 300-char cap on result_preview/sub_agent_result; persistence path at L111-123 UNCHANGED (EXPLORER-04, EXPLORER-05)
+- [ ] 05-05-PLAN.md — frontend/src/lib/api.ts + frontend/src/pages/Chat.tsx: Message interface extended with question?/sub_agent_id?/tool_calls? optional fields + sendMessage signature gains onSubAgentToolStart/onSubAgentToolDone callbacks (positional-end for back-compat) + two new SSE branches (legacy channel only — Phase 6 owns the generalized envelope switch) + Chat.tsx wires callbacks into setToolSteps with isSubAgent=true marker; ToolStep type extended (EXPLORER-04 frontend half)
+
+**Wave 4** *(blocked on Waves 0-3 — integration suite tests against shipped code)*
+- [ ] 05-06-PLAN.md — backend/scripts/test_explorer_sub_agent.py NEW (~700 LOC, 10 sections) + register in test_all.py SUITES as ('Explorer', test_explorer_sub_agent) between Exploration and Backfill; covers EXPLORER-01..06 + Pitfall 8 carry-forward; canary precheck names missing Plan; per-id batched cleanup (CLAUDE.md mandatory) (EXPLORER-01..06, TEST-03)
+
+**Cross-cutting constraints** *(must_haves shared across multiple plans)*
+- Recommendation A LOCKED: extend sub_agent.py rather than create sub_agents/ package (research/ARCHITECTURE.md:175; revisit when third sub-agent appears) — Plans 01 + 02
+- LangSmith span auto-nesting: a SINGLE @traceable(run_type='chain') decorator on run_explorer_sub_agent + the EXISTING @traceable(run_type='tool') decorators on the 5 Phase 4 tools (verified at list_files.py:32, tree.py:34, glob_match.py:48, read_document.py:39, grep.py:46) — no manual with trace(...) blocks needed (EXPLORER-06) — Plan 02
+- TOOL-09 layered-fallback wrapper at openai_client.py:1068-1113 + 1144-1180 UNCHANGED bit-identically — verified post-Plan-03 by grep -c on the canary line returning 2 (Pitfall 8 carry-forward) — Plan 03
+- Dual-emit window LOCKED: Plan 04 emits BOTH legacy and generalized for ONE release; Phase 6 plan-checker enforces removal of LEGACY emissions when the frontend rewrite ships the generalized-only path (Pitfall 12 mitigation 1) — Plan 04 (writer) + Phase 6 (cleanup hook)
+- ZERO new SQL / migrations: messages.tool_metadata JSONB column already exists (Migration 010); schema is additive (new keys nested under existing ones) — Plan 04
+- ExplorerArgs single-arg v1 LOCKED: query: str = Field(..., min_length=1, max_length=2000) only; optional scope arg deferred to v2 (RESEARCH.md §Open Questions #6 [ASSUMED]) — Plan 01
+- No-progress hash policy LOCKED: hash args VERBATIM via json.dumps(..., sort_keys=True, default=str) — no value normalization (case sensitivity in regex/glob is real); Phase 4 normalize_path() at tool entry handles path whitespace already (RESEARCH.md §Open Questions #2) — Plan 01
+- sub_agent_id (server-generated UUID per sub_agent_start) is INDEPENDENT from LangSmith run_id — keep them separate to avoid LangSmith availability becoming a hard dependency for chat (RESEARCH.md §Open Questions #3) — Plan 04
+- SSE per-arg cap LOCKED at SSE_ARG_CAP=500 chars in sub_agent_tool_start payloads (matches Phase 4's 300-char result_preview discipline) — Plans 01 + 02
+- Module-top import of run_explorer_sub_agent in test_explorer_sub_agent.py surfaces EXPLORER-03 layer 1 setup-time AssertionError in CI before any chat triggers it — Plan 06
+
 **Threats / pitfalls**: Pitfall 7 (Explorer infinite-loop — RANK 5: hard `for`-loop bound, wall-clock timeout, no-progress detector, aggressive in-sub-agent result truncation, system prompt states budget); Pitfall 12 (SSE protocol fork: generalize event payload at the second sub-agent — pay the small cost now, not the larger cost later; emit both old and new event names for one release if frontend backwards-compat matters); Pitfall 8 (empty-response: Explorer's compact summary still flows through layered-fallback wrapper).
 
 ### Phase 6: File-Explorer UI Cluster
@@ -184,7 +214,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
 | 4. Five Exploration Tools + search_documents Extension | 9/9 | Complete    | 2026-05-09 |
-| 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
+| 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/6 | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
 
 ## Critical Path & Parallelization
