@@ -111,8 +111,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 9 plans in 7 waves
 
 **Wave 1** *(parallel — disjoint files; both blocking foundation)*
-- [ ] 04-01-PLAN.md — Migration 020: grep_documents RPC + extend match_document_chunks_with_filters/hybrid with match_folder_path/match_scope (NULL defaults) + apply via run_migrations.py [BLOCKING] (TOOL-03 backend, SEARCH-02)
-- [ ] 04-02-PLAN.md — exploration_tools/ package: schemas.py (5 Pydantic v2 BaseModels) + _truncate.py (apply_12k_cap) + _scope_tag.py (ensure_scope_tag) (TOOL-06, TOOL-07, TOOL-08)
+- [x] 04-01-PLAN.md — Migration 020: grep_documents RPC + extend match_document_chunks_with_filters/hybrid with match_folder_path/match_scope (NULL defaults) + apply via run_migrations.py [BLOCKING] (TOOL-03 backend, SEARCH-02)
+- [x] 04-02-PLAN.md — exploration_tools/ package: schemas.py (5 Pydantic v2 BaseModels) + _truncate.py (apply_12k_cap) + _scope_tag.py (ensure_scope_tag) (TOOL-06, TOOL-07, TOOL-08)
 
 **Wave 2** *(blocked on Wave 1; locks the dispatch-arm template Plans 04-07 mirror)*
 - [ ] 04-03-PLAN.md — list_files tool + openai_client.py _build_list_files_tool factory + dispatch arm (TOOL-04 + TOOL-06/07/08/09/10 cross-cutting)
@@ -183,7 +183,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
-| 4. Five Exploration Tools + search_documents Extension | 0/9 | Not started | - |
+| 4. Five Exploration Tools + search_documents Extension | 2/9 | In Progress|  |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
 
