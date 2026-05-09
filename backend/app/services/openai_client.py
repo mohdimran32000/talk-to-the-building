@@ -220,6 +220,47 @@ def _build_list_files_tool() -> "types.FunctionDeclaration":
     )
 
 
+def _build_tree_tool() -> "types.FunctionDeclaration":
+    """Phase 4 / TOOL-01: tree tool definition.
+
+    Multi-level folder structure with depth and entry-budget caps. Use when the
+    user wants an overview of the knowledge base shape (e.g., 'show me the
+    folder structure'). For a single-level listing use `list_files`; for name
+    patterns use `glob`.
+    """
+    from google.genai import types
+    return types.FunctionDeclaration(
+        name="tree",
+        description=(
+            "Show a nested folder + document tree at a given path with a configurable "
+            "depth limit. Returns folders and docs grouped by parent, with "
+            "'[N more folders, M more docs]' summaries when the depth or 500-entry "
+            "budget is hit. Each row carries 'scope' ('user' for private, 'global' "
+            "for shared). Use when the user asks for an overview ('show me the structure'); "
+            "for a single folder one level deep use `list_files`; for name patterns use `glob`."
+        ),
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "path": types.Schema(
+                    type="STRING",
+                    description="Canonical folder path (must start with '/'; '/' for root).",
+                ),
+                "max_depth": types.Schema(
+                    type="INTEGER",
+                    description="Recursion depth (1-4; default 2; server-capped at 4).",
+                ),
+                "scope": types.Schema(
+                    type="STRING",
+                    enum=["user", "global", "both"],
+                    description="'user' for private docs, 'global' for shared, 'both' (default) for union.",
+                ),
+            },
+            required=[],
+        ),
+    )
+
+
 def _sanitize_keyword_query(q: str) -> str:
     """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
     A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
@@ -384,6 +425,10 @@ Document excerpts:
             function_declarations.append(_build_list_files_tool())
         except Exception as e:
             logger.warning(f"Failed to build list_files tool (non-fatal): {e}")
+        try:
+            function_declarations.append(_build_tree_tool())
+        except Exception as e:
+            logger.warning(f"Failed to build tree tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
             function_declarations.append(_build_sql_tool())
@@ -619,6 +664,35 @@ Document excerpts:
                 yield ("tool_done", json.dumps({
                     "tool": tool_name,
                     "detail": f"{total} entries at {parsed_args.path}",
+                }))
+
+        elif tool_name == "tree":
+            from app.services.exploration_tools.tree import tree as _tree
+            from app.services.exploration_tools.schemas import TreeArgs
+            try:
+                parsed_args = TreeArgs(**args)
+            except Exception as e:
+                result_text = json.dumps({
+                    "tool": "tree",
+                    "error": "INVALID_ARGS",
+                    "message": str(e),
+                })
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": "Invalid arguments",
+                }))
+            else:
+                tool_result = _tree(parsed_args, user_id, supabase_client)
+                result_text = json.dumps(tool_result)
+                if isinstance(tool_result, dict):
+                    tf = tool_result.get("total_folders", 0)
+                    td = tool_result.get("total_docs", 0)
+                    detail = f"{tf} folders, {td} docs"
+                else:
+                    detail = "tree complete"
+                yield ("tool_done", json.dumps({
+                    "tool": tool_name,
+                    "detail": detail,
                 }))
 
         else:
