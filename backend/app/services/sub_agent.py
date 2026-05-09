@@ -340,3 +340,209 @@ def run_sub_agent(
             full_result = f"Sub-agent analysis failed: {e}"
 
     yield ("sub_agent_done", full_result)
+
+
+@traceable(name="explore_knowledge_base", run_type="chain")
+def run_explorer_sub_agent(
+    query: str,
+    user_id: str,
+    supabase_client,
+) -> Generator[tuple[str, str], None, None]:
+    """EXPLORER-01..06: bounded multi-turn loop over the 5 Phase 4 precision tools.
+
+    Yields (event_type, data) tuples consumed by openai_client.stream_response()
+    which forwards them through messages.event_generator (Plan 04) to the SSE
+    wire. The contract is identical to run_sub_agent's three-event vocabulary
+    plus two NEW event types for inner tool dispatch:
+
+        ("sub_agent_start",      json)  — emitted ONCE at entry
+        ("sub_agent_tool_start", json)  — per inner tool call (NEW Phase 5)
+        ("sub_agent_tool_done",  json)  — per inner tool result (NEW Phase 5)
+        ("sub_agent_token",      text)  — per token of compact summary
+        ("sub_agent_done",       text)  — emitted ONCE at exit
+
+    Bounds (EXPLORER-01 / EXPLORER-02):
+      - MAX_TURNS=8 hard `for...range` ceiling (Pitfall 7 mitigation 1)
+      - WALL_CLOCK_BUDGET_S=60.0 polled at top of each turn
+      - No-progress detector via _signature(tool_name, args) — short-circuits
+        on consecutive duplicate signatures
+      - In-loop tool result truncation via apply_12k_cap(..., RESULT_CHAR_CAP)
+
+    Recursive sub-agents (EXPLORER-03): the toolset built by
+    _build_explorer_tool_set() does NOT include analyze_document. Module-level
+    assert (Plan 01) + tool-set assert + dispatch-time guard provide three
+    layers of defense.
+
+    LangSmith (EXPLORER-06): the `@traceable(run_type="chain")` decorator
+    creates a chain span; Phase 4 tool functions decorated with
+    `@traceable(run_type="tool")` auto-nest as children via contextvars.
+    No manual `with trace(...)` block needed.
+    """
+    # EXPLORER-04: emit start event with agent_name (Plan 04 routes this).
+    yield ("sub_agent_start", json.dumps({
+        "agent_name": "explore_knowledge_base",
+        "question": query,
+    }))
+
+    start_time = time.monotonic()
+    last_signature = ""
+    short_circuit_reason: str | None = None
+
+    try:
+        client = _get_client()
+        model = get_llm_model()
+    except Exception as e:
+        logger.error(f"Explorer client init failed: {e}", exc_info=True)
+        yield ("sub_agent_done", f"Exploration unavailable: client init failed ({e})")
+        return
+
+    contents = [types.Content(role="user", parts=[types.Part(text=query)])]
+
+    try:
+        tools = _build_explorer_tool_set()
+    except AssertionError as e:
+        # EXPLORER-03 setup-time / build-time assert fired. Surface as a
+        # graceful error rather than corrupting the SSE stream.
+        logger.error(f"Explorer tool-set assertion failed: {e}", exc_info=True)
+        yield ("sub_agent_done", f"Exploration unavailable: {e}")
+        return
+
+    # EXPLORER-01: hard `for ... in range(MAX_TURNS)` bound. NEVER use `while`.
+    for turn in range(MAX_TURNS):
+        # EXPLORER-02: wall-clock timeout at the top of each turn.
+        if time.monotonic() - start_time > WALL_CLOCK_BUDGET_S:
+            short_circuit_reason = "wall_clock_timeout"
+            logger.info(f"Explorer wall-clock timeout at turn {turn}")
+            break
+
+        # Gemini call (non-streaming — we need the full function_call payload).
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=EXPLORER_SYSTEM_PROMPT,
+                    tools=tools,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                ),
+            )
+        except Exception as e:
+            logger.error(f"Explorer Gemini call failed at turn {turn}: {e}", exc_info=True)
+            short_circuit_reason = "gemini_error"
+            break
+
+        fc = _extract_function_call(response)
+        if fc is None:
+            # Natural finish — Gemini emitted plain text, not a tool call.
+            # Use the response text as the summary directly (no second call needed).
+            summary = _extract_text(response) or "Exploration complete (no findings)."
+            # Stream a coarse approximation of tokens (no-tool stream-finish path).
+            # We forgo a second streaming call here because we already have the
+            # full text; just emit it as a single sub_agent_token then done.
+            if summary:
+                yield ("sub_agent_token", summary)
+            yield ("sub_agent_done", summary)
+            return
+
+        # EXPLORER-02: no-progress detector.
+        args_dict = dict(fc.args) if fc.args else {}
+        sig = _signature(fc.name, args_dict)
+        if sig == last_signature:
+            short_circuit_reason = "no_progress"
+            logger.info(
+                f"Explorer no-progress at turn {turn}: repeated {fc.name} "
+                f"with same args"
+            )
+            break
+        last_signature = sig
+
+        # NEW Phase 5 event: emit tool_start BEFORE dispatch.
+        yield ("sub_agent_tool_start", json.dumps({
+            "tool": fc.name,
+            "args": _truncate_args_for_sse(args_dict),
+            "turn": turn,
+        }))
+
+        # Dispatch (EXPLORER-03 layer 3 enforced inside).
+        try:
+            result_dict = _dispatch_explorer_tool(
+                fc.name, args_dict, user_id, supabase_client,
+            )
+        except Exception as e:
+            # _dispatch_explorer_tool already catches its own exceptions and
+            # returns an error dict, but be defensive — generator must not raise.
+            logger.error(
+                f"Explorer dispatch raised at turn {turn} for {fc.name}: {e}",
+                exc_info=True,
+            )
+            result_dict = {"error": "DISPATCH_FAILED", "tool": fc.name, "detail": str(e)}
+
+        # In-sub-agent 12K cap (Pitfall 7 mitigation 3 — tighter than main agent's 16K).
+        truncated_dict = apply_12k_cap(result_dict, char_cap=RESULT_CHAR_CAP)
+        truncated_text = json.dumps(truncated_dict, default=str)
+
+        # NEW Phase 5 event: emit tool_done AFTER truncation.
+        yield ("sub_agent_tool_done", json.dumps({
+            "tool": fc.name,
+            "result_preview": truncated_text[:300],
+            "turn": turn,
+        }))
+
+        # Append the model's tool-call message + the tool's response to contents
+        # for the next turn. This is the standard manual-loop idiom (Phase 1-4).
+        try:
+            contents.append(response.candidates[0].content)  # model's tool-call
+        except (AttributeError, IndexError) as e:
+            logger.error(f"Explorer contents.append failed at turn {turn}: {e}")
+            short_circuit_reason = "contents_append_error"
+            break
+
+        contents.append(types.Content(
+            role="user",
+            parts=[types.Part(function_response=types.FunctionResponse(
+                name=fc.name,
+                response={"result": truncated_text},
+            ))],
+        ))
+    else:
+        # Python for-else: fires when the `for` loop exhausts naturally
+        # (i.e., MAX_TURNS hit without `break`). Mark the reason for the
+        # compact-summary prompt to mention "hit turn budget" if relevant.
+        short_circuit_reason = "max_turns"
+        logger.info(f"Explorer hit MAX_TURNS={MAX_TURNS}")
+
+    # Compact-summary streaming call (NO tools registered; system prompt
+    # mentions short_circuit_reason if present).
+    summary_system = (
+        f"{EXPLORER_SYSTEM_PROMPT}\n\n"
+        f"Status: {short_circuit_reason or 'complete'}.\n"
+        f"Now synthesize a COMPACT summary (<= 8 sentences) of what you found. "
+        f"Cite folder paths and document names with their scope tag (user|global). "
+        f"Do not echo raw tool output. "
+    )
+    if short_circuit_reason:
+        summary_system += (
+            f"You stopped early ({short_circuit_reason}); state that explicitly "
+            f"in the summary."
+        )
+
+    full_summary = ""
+    try:
+        for chunk in client.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=types.GenerateContentConfig(system_instruction=summary_system),
+        ):
+            if chunk.text:
+                full_summary += chunk.text
+                yield ("sub_agent_token", chunk.text)
+    except Exception as e:
+        logger.error(f"Explorer summary streaming failed: {e}", exc_info=True)
+        if not full_summary:
+            full_summary = (
+                f"Exploration ended ({short_circuit_reason or 'complete'}); "
+                f"summary unavailable due to streaming error."
+            )
+
+    # V7 generator-never-raises: ALWAYS emit done, even on errors above.
+    yield ("sub_agent_done", full_summary)
