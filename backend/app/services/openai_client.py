@@ -56,6 +56,32 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
     if has_documents:
         parts.append("- ALWAYS use analyze_document when the user asks to summarize, analyze, review, or extract key findings from a specific document by name. This tool loads the FULL document — search_documents only returns a few snippets and cannot produce a real summary.")
         parts.append("- Use search_documents ONLY for finding specific facts, quotes, or snippets across multiple documents (e.g. 'what does the contract say about payment terms?').")
+        # SEARCH-03 NEW: self-scope hint — teach the LLM to pass folder_path / scope
+        # on search_documents when the user's question is clearly narrowed to a
+        # folder or a scope (private vs shared knowledge base).
+        parts.append(
+            "- When the user's question is clearly scoped to a folder, pass `folder_path` "
+            "to search_documents to narrow the search (e.g. 'in /projects/2026'). When "
+            "the question is about admin-curated shared content vs. the user's private "
+            "docs, pass `scope='global'` or `scope='user'`. Otherwise leave both unset."
+        )
+        # Phase 4 NEW: precision-tools overview — introduce the 5 exploration tools
+        # so the LLM knows when to prefer them over search_documents.
+        parts.append(
+            "- For codebase-style precision: use `tree` to see the folder structure, "
+            "`glob` to find files by name pattern (e.g. '**/*.pdf'), `grep` to search "
+            "inside document text by regex, `list_files` to see one folder's contents, "
+            "and `read_document` to read specific lines of a doc. Prefer these over "
+            "search_documents when the user asks 'where is X' or 'show me all PDFs in "
+            "/projects'."
+        )
+        # Phase 4 NEW: scope disambiguation in citations (TOOL-07 invariant /
+        # Pitfall 11 mitigation — every tool result row carries a scope field).
+        parts.append(
+            "- Tool results carry a 'scope' field on every row. When citing a result, "
+            "mention whether it came from the user's private docs (scope='user') or the "
+            "shared knowledge base (scope='global'). Don't conflate the two."
+        )
     if has_structured_data:
         parts.append("- For quantitative questions about tabular data (numbers, totals, averages), use query_structured_data.")
     if web_search_enabled:
@@ -111,6 +137,30 @@ def _build_search_tool() -> types.Tool:
                     description="A SHORT, focused search query (under 50 words). Extract specific identifiers (codes, model numbers, names) and the core question. Do NOT include email headers, greetings, or background context.",
                 ),
                 **filter_properties,
+                # SEARCH-01 NEW: optional narrowing args. NULL defaults preserve
+                # pre-Phase-4 behavior bit-for-bit when omitted (Migration 020's
+                # match_folder_path/match_scope DEFAULT NULL no-op the predicates).
+                "folder_path": types.Schema(
+                    type="STRING",
+                    description=(
+                        "OPTIONAL prefix filter. Only documents under this canonical "
+                        "path are searched. Use when the user's question is clearly "
+                        "scoped to a specific area of the knowledge base (e.g., "
+                        "'in /projects/2026'). Default: null (no narrowing). "
+                        "Path must start with '/'. The 5 precision tools (tree, glob, "
+                        "grep, list_files, read_document) accept the same path shape."
+                    ),
+                ),
+                "scope": types.Schema(
+                    type="STRING",
+                    enum=["user", "global", "both"],
+                    description=(
+                        "OPTIONAL. Restrict search to user-private docs ('user'), "
+                        "global shared docs ('global'), or both ('both'). When omitted "
+                        "(default), no narrowing is applied — the result includes "
+                        "whatever RLS allows the caller to see (private + global)."
+                    ),
+                ),
             },
             required=["query"],
         ),
@@ -429,9 +479,23 @@ def _sanitize_keyword_query(q: str) -> str:
     return q
 
 
-def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, metadata_filter: Optional[dict] = None) -> List[dict]:
+def retrieve_chunks(
+    query: str,
+    user_id: str,
+    supabase_client,
+    top_k: int = 5,
+    metadata_filter: Optional[dict] = None,
+    folder_path: Optional[str] = None,
+    scope: Optional[str] = None,
+) -> List[dict]:
     """Embed query and search via hybrid (vector + keyword RRF) or vector-only RPC.
-    Returns list of dicts with keys: content, document_id, file_name."""
+    Returns list of dicts with keys: content, document_id, file_name.
+
+    SEARCH-01/02: `folder_path` and `scope` are optional narrowing args forwarded to
+    Migration 020's `match_folder_path` and `match_scope` RPC params. Both default
+    to None — Migration 020's NULL defaults preserve Phase 1/2/3 behavior bit-for-bit
+    when omitted.
+    """
     from app.services.ingestion import embed_text
     from app.services.settings import get_hybrid_search_enabled, get_reranking_enabled
 
@@ -447,6 +511,9 @@ def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, m
             "match_user_id": user_id,
             "match_count": fetch_count,
             "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
+            # SEARCH-02: forward optional narrowing args (NULL = no narrowing).
+            "match_folder_path": folder_path,
+            "match_scope": scope,
         }).execute()
     else:
         result = supabase_client.rpc("match_document_chunks_with_filters", {
@@ -454,6 +521,9 @@ def retrieve_chunks(query: str, user_id: str, supabase_client, top_k: int = 5, m
             "match_user_id": user_id,
             "match_count": top_k,
             "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
+            # SEARCH-02: forward optional narrowing args (NULL = no narrowing).
+            "match_folder_path": folder_path,
+            "match_scope": scope,
         }).execute()
 
     rows = result.data or []
@@ -486,8 +556,16 @@ def _execute_search_documents(
     metadata_filter: Optional[dict],
     user_id: Optional[str],
     supabase_client=None,
+    folder_path: Optional[str] = None,
+    scope: Optional[str] = None,
 ) -> List[dict]:
-    """Execute the search_documents tool call — traced as a tool in LangSmith."""
+    """Execute the search_documents tool call — traced as a tool in LangSmith.
+
+    SEARCH-01/02: `folder_path` and `scope` are optional LLM-driven narrowing args
+    forwarded into `retrieve_chunks` → match_document_chunks_* RPCs. Both default
+    to None which preserves pre-Phase-4 behavior bit-for-bit (Migration 020 NULL
+    defaults short-circuit the predicates).
+    """
     if not supabase_client or not user_id:
         return []
     try:
@@ -497,6 +575,8 @@ def _execute_search_documents(
             supabase_client=supabase_client,
             top_k=10,
             metadata_filter=metadata_filter,
+            folder_path=folder_path,
+            scope=scope,
         )
     except Exception as e:
         logger.warning(f"Tool retrieval failed: {e}")
@@ -721,12 +801,36 @@ Document excerpts:
         # Dispatch to the correct tool executor
         if tool_name == "search_documents":
             search_query = args.pop("query", "")
+            # SEARCH-01: extract optional narrowing args BEFORE metadata_filter
+            # assembly so they don't leak into the metadata_filter dict (which
+            # would be sent to the RPC as JSON garbage).
+            folder_path_arg = args.pop("folder_path", None)
+            if folder_path_arg:
+                try:
+                    from app.services.folder_service import normalize_path as _np
+                    # Pitfall 4 chokepoint: the LLM is an untrusted source for
+                    # paths; canonicalize before forwarding to the RPC.
+                    folder_path_arg = _np(folder_path_arg)
+                except ValueError:
+                    # Non-canonical path (e.g., '..' segment) — fall back to no
+                    # narrowing rather than fail the whole search; the LLM may
+                    # have hallucinated the path shape.
+                    folder_path_arg = None
+            scope_arg = args.pop("scope", None)
+            if scope_arg not in ("user", "global", "both", None):
+                scope_arg = None
+            # 'both' is semantically equivalent to no narrowing on scope; the
+            # RPC interprets None as "no narrowing" (d.scope = 'both' is never
+            # true since the documents.scope CHECK only allows 'user'|'global').
+            rpc_scope = None if scope_arg in ("both", None) else scope_arg
             metadata_filter = {k: v for k, v in args.items() if v is not None} or None
             chunks = _execute_search_documents(
                 search_query=search_query,
                 metadata_filter=metadata_filter,
                 user_id=user_id,
                 supabase_client=supabase_client,
+                folder_path=folder_path_arg,
+                scope=rpc_scope,
             )
             if chunks:
                 from collections import Counter
