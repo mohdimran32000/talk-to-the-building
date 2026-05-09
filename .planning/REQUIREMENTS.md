@@ -39,22 +39,22 @@
 
 ### Exploration Tools
 
-- [ ] **TOOL-01**: `tree` tool — args `path`, `max_depth` (server-capped 4–6), `scope`; returns nested structure with `[N more folders, M more docs]` count summaries; max 500 entries with truncation marker
-- [ ] **TOOL-02**: `glob` tool — args `pattern` (`**` and `*` semantics), `path`, `type` (file/folder/both), `scope`; matches against `folder_path` + `file_name`
-- [ ] **TOOL-03**: `grep` tool — args `pattern`, `path`, `case_insensitive`, `multiline`, `output_mode` (content/files_with_matches/count), `-A`/`-B`/`-C` context, `scope`; max 50 hits with `±2` line context; statement timeout `5s`; rejects pathological regexes
-- [ ] **TOOL-04**: `list_files` tool — args `path`, `scope`; single-level listing, folders-then-files-alpha order
-- [ ] **TOOL-05**: `read_document` tool — args `document_id` OR `path`, `offset` (1-based), `limit` (default 2000, hard cap 5000); returns arrow-form `{n}→{content}`; CRLF normalized; UTF-8 codepoint-safe; line-by-line slicing
-- [ ] **TOOL-06**: All tools use Pydantic v2 BaseModel for arg validation (`Literal["user","global","both"]` for scope, `Field(..., ge=, le=)` for numeric bounds, regex pattern for path)
-- [ ] **TOOL-07**: Every tool result row carries `scope: 'user' | 'global'` (no exceptions)
-- [ ] **TOOL-08**: Hard 12K-char cap per tool result with explicit `[...truncated, N more]` marker
-- [ ] **TOOL-09**: Every new tool routed through Episode 1's layered-fallback empty-response wrapper in `openai_client.py`
-- [ ] **TOOL-10**: LangSmith `@traceable(run_type="tool")` on each tool function
+- [x] **TOOL-01**: `tree` tool — args `path`, `max_depth` (server-capped 4–6), `scope`; returns nested structure with `[N more folders, M more docs]` count summaries; max 500 entries with truncation marker
+- [x] **TOOL-02**: `glob` tool — args `pattern` (`**` and `*` semantics), `path`, `type` (file/folder/both), `scope`; matches against `folder_path` + `file_name`
+- [x] **TOOL-03**: `grep` tool — args `pattern`, `path`, `case_insensitive`, `multiline`, `output_mode` (content/files_with_matches/count), `-A`/`-B`/`-C` context, `scope`; max 50 hits with `±2` line context; statement timeout `5s`; rejects pathological regexes
+- [x] **TOOL-04**: `list_files` tool — args `path`, `scope`; single-level listing, folders-then-files-alpha order
+- [x] **TOOL-05**: `read_document` tool — args `document_id` OR `path`, `offset` (1-based), `limit` (default 2000, hard cap 5000); returns arrow-form `{n}→{content}`; CRLF normalized; UTF-8 codepoint-safe; line-by-line slicing
+- [x] **TOOL-06**: All tools use Pydantic v2 BaseModel for arg validation (`Literal["user","global","both"]` for scope, `Field(..., ge=, le=)` for numeric bounds, regex pattern for path)
+- [x] **TOOL-07**: Every tool result row carries `scope: 'user' | 'global'` (no exceptions)
+- [x] **TOOL-08**: Hard 12K-char cap per tool result with explicit `[...truncated, N more]` marker
+- [x] **TOOL-09**: Every new tool routed through Episode 1's layered-fallback empty-response wrapper in `openai_client.py`
+- [x] **TOOL-10**: LangSmith `@traceable(run_type="tool")` on each tool function
 
 ### Search Documents Extension
 
-- [ ] **SEARCH-01**: `search_documents` tool schema extended with optional `folder_path` (prefix filter) and `scope` parameters; defaults preserve existing behavior
-- [ ] **SEARCH-02**: `match_document_chunks_with_filters` and `match_document_chunks_hybrid` RPCs gain `match_folder_path` and `match_scope` parameters (NULL defaults)
-- [ ] **SEARCH-03**: System prompt updated to describe when LLM should self-scope via folder_path/scope args
+- [x] **SEARCH-01**: `search_documents` tool schema extended with optional `folder_path` (prefix filter) and `scope` parameters; defaults preserve existing behavior
+- [x] **SEARCH-02**: `match_document_chunks_with_filters` and `match_document_chunks_hybrid` RPCs gain `match_folder_path` and `match_scope` parameters (NULL defaults)
+- [x] **SEARCH-03**: System prompt updated to describe when LLM should self-scope via folder_path/scope args
 
 ### Explorer Sub-Agent
 
@@ -82,7 +82,7 @@
 ### Tests
 
 - [x] **TEST-01**: `test_folders.py` — folder CRUD, transactional rename, non-empty-delete rejection, concurrent-upload-no-orphan
-- [ ] **TEST-02**: `test_exploration_tools.py` — 200-folder fixture for tree truncation, 5000-doc fixture for grep perf (assert Bitmap Index Scan in EXPLAIN), CRLF/Unicode/single-long-line/mixed-ending fixtures for read_document, adversarial-payload fixtures for empty-response guard
+- [x] **TEST-02**: `test_exploration_tools.py` — 200-folder fixture for tree truncation, 5000-doc fixture for grep perf (assert Bitmap Index Scan in EXPLAIN), CRLF/Unicode/single-long-line/mixed-ending fixtures for read_document, adversarial-payload fixtures for empty-response guard
 - [ ] **TEST-03**: `test_explorer_sub_agent.py` — MAX_TURNS bound, timeout, no-progress detector, recursive-sub-agent rejection
 - [ ] **TEST-04**: `test_two_scope_rls.py` — full cross-user × cross-scope matrix
 - [ ] **TEST-05**: Frontend Playwright additions in `e2e/full-suite.spec.ts` for folder tree, drag-move, sub-agent activity card
@@ -162,19 +162,19 @@
 | FOLDER-05 | Phase 3 | ✅ Complete (Plan 03-03, commit c86711a) |
 | FOLDER-06 | Phase 3 | ✅ Complete (Plan 03-04, commits 6049e0e + 3828e49) |
 | FOLDER-07 | Phase 3 | ✅ Complete (Plan 03-05, commits 6fdbdef + 60da21c) |
-| TOOL-01 | Phase 4 | Pending |
-| TOOL-02 | Phase 4 | Pending |
-| TOOL-03 | Phase 4 | Pending |
-| TOOL-04 | Phase 4 | Pending |
-| TOOL-05 | Phase 4 | Pending |
-| TOOL-06 | Phase 4 | Pending |
-| TOOL-07 | Phase 4 | Pending |
-| TOOL-08 | Phase 4 | Pending |
-| TOOL-09 | Phase 4 | Pending |
-| TOOL-10 | Phase 4 | Pending |
-| SEARCH-01 | Phase 4 | Pending |
-| SEARCH-02 | Phase 4 | Pending |
-| SEARCH-03 | Phase 4 | Pending |
+| TOOL-01 | Phase 4 | Complete |
+| TOOL-02 | Phase 4 | Complete |
+| TOOL-03 | Phase 4 | Complete |
+| TOOL-04 | Phase 4 | Complete |
+| TOOL-05 | Phase 4 | Complete |
+| TOOL-06 | Phase 4 | Complete |
+| TOOL-07 | Phase 4 | Complete |
+| TOOL-08 | Phase 4 | Complete |
+| TOOL-09 | Phase 4 | Complete |
+| TOOL-10 | Phase 4 | Complete |
+| SEARCH-01 | Phase 4 | Complete |
+| SEARCH-02 | Phase 4 | Complete |
+| SEARCH-03 | Phase 4 | Complete |
 | EXPLORER-01 | Phase 5 | Pending |
 | EXPLORER-02 | Phase 5 | Pending |
 | EXPLORER-03 | Phase 5 | Pending |
@@ -193,7 +193,7 @@
 | UI-10 | Phase 6 | Pending |
 | UI-11 | Phase 6 | Pending |
 | TEST-01 | Phase 3 | Complete |
-| TEST-02 | Phase 4 | Pending |
+| TEST-02 | Phase 4 | Complete |
 | TEST-03 | Phase 5 | Pending |
 | TEST-04 | Phase 1 | Pending |
 | TEST-05 | Phase 6 | Pending |

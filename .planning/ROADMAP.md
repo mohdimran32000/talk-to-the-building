@@ -183,7 +183,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
-| 4. Five Exploration Tools + search_documents Extension | 9/9 | Complete   | 2026-05-09 |
+| 4. Five Exploration Tools + search_documents Extension | 9/9 | Complete    | 2026-05-09 |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
 

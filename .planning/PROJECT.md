@@ -36,14 +36,14 @@ The agent can locate the *right* piece of information in a large, organized know
 - [x] Path-based folder model: `documents.folder_path` TEXT + thin `folders` table for empty/named folders — validated in Phase 01 schema + Phase 03 service layer
 - [x] Canonical full-document markdown stored alongside chunks (`documents.content_markdown`) for grep/read tools — validated in Phase 02 backfill
 - [ ] File explorer UI with two top-level sections ("Shared" + "My Files"), expandable tree, breadcrumbs, folder CRUD, upload-into-folder, drag-move documents, rename document
-- [ ] `tree` tool — returns nested folder structure with `path` + `max_depth` args, count-summary at deeper levels, hard token-budget truncation note
-- [ ] `glob` tool — file-pattern matching against `folder_path` + `file_name` (e.g. `**/*.pdf`, `projects/**/floor-plans/*`)
-- [ ] `grep` tool — regex/keyword search across `documents.content_markdown` with `path` scope filter
-- [ ] `list_files` tool — list files (and subfolders) within a given folder path
-- [ ] `read_document` tool — line-numbered slice of `content_markdown` with `offset`/`limit` args, newline-boundary clamping
+- [x] `tree` tool — returns nested folder structure with `path` + `max_depth` args, count-summary at deeper levels, hard token-budget truncation note — validated in Phase 04 (iterative-BFS, 500-entry budget, max_depth Pydantic-clamped to ≤4)
+- [x] `glob` tool — file-pattern matching against `folder_path` + `file_name` (e.g. `**/*.pdf`, `projects/**/floor-plans/*`) — validated in Phase 04 (pure-Python glob→regex, PostgREST .like()/.match() pushes filter to DB)
+- [x] `grep` tool — regex/keyword search across `documents.content_markdown` with `path` scope filter — validated in Phase 04 (Migration 020 grep_documents RPC + 5s statement_timeout + ILIKE pre-filter + pathological-regex Python blocklist; median 213ms p95 < 500ms)
+- [x] `list_files` tool — list files (and subfolders) within a given folder path — validated in Phase 04 (delegates to folder_service.list_folder, folders-then-files-alpha ordering)
+- [x] `read_document` tool — line-numbered slice of `content_markdown` with `offset`/`limit` args, newline-boundary clamping — validated in Phase 04 (arrow-form rendering, splitlines for CRLF/LF/CR stability, UTF-8 codepoint-safe truncation)
 - [ ] `explore_knowledge_base` sub-agent — isolated-context investigator that combines tree/glob/grep/read for multi-step exploration, returns compact summary
-- [ ] `search_documents` tool extended with `folder_path` prefix filter so the LLM can scope vector search when useful
-- [ ] Tools default to searching `global ∪ user` scopes, with optional `scope` arg ('user' | 'global' | 'both') for narrowing
+- [x] `search_documents` tool extended with `folder_path` prefix filter so the LLM can scope vector search when useful — validated in Phase 04 (Migration 020 extends both match_document_chunks_with_filters and _hybrid with NULL-default tail params; backwards-compat preserved bit-for-bit)
+- [x] Tools default to searching `global ∪ user` scopes, with optional `scope` arg ('user' | 'global' | 'both') for narrowing — validated in Phase 04 (every tool's GrepArgs/TreeArgs/etc. has Literal['user','global','both'] scope field; ensure_scope_tag enforces every result row carries scope)
 - [ ] Admin-only writes to global tree (reuses existing admin role); all authenticated users can read global
 - [ ] Backfill migration: existing Episode 1 documents land at root `/`
 - [ ] LangSmith traces for new tools + Explorer sub-agent
@@ -124,4 +124,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-07 after Phase 03 (folder service + routers + dedup extension) completion*
+*Last updated: 2026-05-09 after Phase 04 (five exploration tools + search_documents extension) completion*
