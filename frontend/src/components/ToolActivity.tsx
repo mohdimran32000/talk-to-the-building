@@ -5,6 +5,8 @@ export interface ToolStep {
   args?: Record<string, any>
   detail?: string
   status: 'running' | 'done'
+  isSubAgent?: boolean   // Phase 5 NEW — true when this step came from a sub-agent's inner tool dispatch
+  turn?: number          // Phase 5 NEW — Explorer turn index (0..7)
 }
 
 interface ToolActivityProps {

@@ -228,10 +228,13 @@ export default function Chat() {
         },
         controller.signal,
         Object.keys(metadataFilters).length > 0 ? metadataFilters : undefined,
-        // Sub-agent callbacks
+        // Sub-agent callbacks (Phase 5: extended to handle BOTH analyze_document
+        // payload — has document_name — AND explore_knowledge_base payload —
+        // has question. The state slot subAgentDocName now holds whichever is
+        // present; Phase 6 will refactor to a typed discriminator.)
         (data) => {
           setIsSubAgentActive(true)
-          setSubAgentDocName(data.document_name)
+          setSubAgentDocName(data.document_name || data.question || '')
           setSubAgentContent('')
         },
         (token) => {
@@ -254,6 +257,34 @@ export default function Chat() {
             prev.map((s) =>
               s.tool === data.tool && s.status === 'running'
                 ? { ...s, status: 'done', detail: data.detail }
+                : s
+            )
+          )
+        },
+        // Phase 5 NEW — onSubAgentToolStart: Explorer's per-turn inner tool dispatch.
+        // Append a tool step with isSubAgent flag so Phase 6's UI-10 can render
+        // these nested under the active sub-agent banner. For Phase 5 minimum-viable,
+        // they appear in the same toolSteps array as main-agent tools (Phase 6
+        // separates them visually).
+        (data) => {
+          setToolSteps((prev) => [...prev, {
+            tool: data.tool,
+            args: data.args,
+            status: 'running' as const,
+            isSubAgent: true,
+            turn: data.turn,
+          }])
+        },
+        // Phase 5 NEW — onSubAgentToolDone: flip the matching in-flight sub-agent
+        // tool step to 'done' with result_preview as detail. Match by (isSubAgent
+        // AND tool name AND status === 'running' AND same turn) to disambiguate
+        // when multiple sub-agent tool calls are in flight (which the loop's
+        // single-turn-at-a-time discipline shouldn't allow, but defense in depth).
+        (data) => {
+          setToolSteps((prev) =>
+            prev.map((s) =>
+              s.isSubAgent && s.tool === data.tool && s.status === 'running' && s.turn === data.turn
+                ? { ...s, status: 'done' as const, detail: data.result_preview }
                 : s
             )
           )
