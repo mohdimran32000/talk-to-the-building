@@ -46,6 +46,7 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
     if has_documents:
         parts.append("- analyze_document: Summarize, review, or analyze a specific document in depth. Loads the FULL document. MUST be used for any summarization request.")
         parts.append("- search_documents: Find specific facts or snippets across documents. Only returns a few excerpts — NOT for summarization.")
+        parts.append("- explore_knowledge_base: Open-ended exploration that spawns a sub-agent which iteratively uses tree/glob/grep/list_files/read_document over up to 8 turns and returns a compact summary. Use when the user asks 'where is X', 'find everything about Y', or 'what does the KB say about Z' and the answer requires multi-step exploration to even find what to read.")
     if has_structured_data:
         parts.append("- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons).")
     if web_search_enabled:
@@ -74,6 +75,19 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
             "and `read_document` to read specific lines of a doc. Prefer these over "
             "search_documents when the user asks 'where is X' or 'show me all PDFs in "
             "/projects'."
+        )
+        # Phase 5 NEW: explore_knowledge_base disambiguation — distinguishes
+        # the three closest tools (analyze_document = specific named doc;
+        # search_documents = single-shot snippet retrieval; explore_knowledge_base
+        # = multi-step iterative exploration that delegates to the precision tools).
+        parts.append(
+            "- For OPEN-ENDED exploration that needs multiple steps, use "
+            "`explore_knowledge_base`. It runs a sub-agent that calls "
+            "tree/glob/grep/list_files/read_document iteratively and returns a "
+            "compact summary. Use `analyze_document` for a specific NAMED "
+            "document, `search_documents` for one-shot snippet retrieval, and "
+            "`explore_knowledge_base` when the user's question requires multiple "
+            "steps to even locate what to read."
         )
         # Phase 4 NEW: scope disambiguation in citations (TOOL-07 invariant /
         # Pitfall 11 mitigation — every tool result row carries a scope field).
