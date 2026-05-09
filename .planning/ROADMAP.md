@@ -130,7 +130,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 04-07-PLAN.md — grep tool with pathological-regex blocklist + literal-hint extraction + ±A/B/C context + openai_client.py extension (TOOL-03 + cross-cutting)
 
 **Wave 7** *(parallel — Plan 08 finishes openai_client.py edits; Plan 09 tests everything end-to-end)*
-- [ ] 04-08-PLAN.md — search_documents extension: _build_search_tool gains folder_path + scope properties; dispatch passes match_folder_path/match_scope to RPCs; system prompt updated (SEARCH-01, SEARCH-03)
+- [x] 04-08-PLAN.md — search_documents extension: _build_search_tool gains folder_path + scope properties; dispatch passes match_folder_path/match_scope to RPCs; system prompt updated (SEARCH-01, SEARCH-03)
 - [ ] 04-09-PLAN.md — test_exploration_tools.py: 600+ line integration suite covering TOOL-01..10 + SEARCH-01..03 + Phase 4 SC1..5; register in test_all.py SUITES (TEST-02)
 
 **Cross-cutting constraints** *(must_haves shared across multiple plans)*
@@ -183,7 +183,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
-| 4. Five Exploration Tools + search_documents Extension | 7/9 | In Progress|  |
+| 4. Five Exploration Tools + search_documents Extension | 8/9 | In Progress|  |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
 
