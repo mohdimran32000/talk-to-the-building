@@ -124,7 +124,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 04-05-PLAN.md — glob tool with glob→regex translator + type=file/folder/both branches + openai_client.py extension (TOOL-02 + cross-cutting)
 
 **Wave 5** *(blocked on Wave 4)*
-- [ ] 04-06-PLAN.md — read_document tool with arrow-form rendering + CRLF normalization + UTF-8-safe truncation + openai_client.py extension (TOOL-05 + cross-cutting)
+- [x] 04-06-PLAN.md — read_document tool with arrow-form rendering + CRLF normalization + UTF-8-safe truncation + openai_client.py extension (TOOL-05 + cross-cutting)
 
 **Wave 6** *(blocked on Wave 5 + depends on Wave 1 RPC)*
 - [ ] 04-07-PLAN.md — grep tool with pathological-regex blocklist + literal-hint extraction + ±A/B/C context + openai_client.py extension (TOOL-03 + cross-cutting)
@@ -183,7 +183,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Schema Foundation + Two-Scope RLS + Path Normalizer | 8/8 | Complete | 2026-05-04 |
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
-| 4. Five Exploration Tools + search_documents Extension | 5/9 | In Progress|  |
+| 4. Five Exploration Tools + search_documents Extension | 6/9 | In Progress|  |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/TBD | Not started | - |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
 
