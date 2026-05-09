@@ -1104,6 +1104,27 @@ Document excerpts:
                     "detail": detail,
                 }))
 
+        elif tool_name == "explore_knowledge_base":
+            # Phase 5: forward generator events from run_explorer_sub_agent and
+            # capture the compact summary as result_text. Lazy import avoids the
+            # openai_client.py <-> sub_agent.py circular cycle (Pitfall 1).
+            from app.services.sub_agent import run_explorer_sub_agent
+
+            query_arg = args.get("query", "")
+            if not query_arg or not query_arg.strip():
+                result_text = "explore_knowledge_base called with empty query."
+            else:
+                sub_agent_result = ""
+                for evt_type, evt_data in run_explorer_sub_agent(
+                    query_arg, user_id, supabase_client,
+                ):
+                    yield (evt_type, evt_data)
+                    if evt_type == "sub_agent_done":
+                        sub_agent_result = evt_data
+                result_text = sub_agent_result or (
+                    "Exploration completed without a summary."
+                )
+
         else:
             logger.warning(f"Unknown tool: {tool_name}")
             result_text = f"Unknown tool: {tool_name}"
