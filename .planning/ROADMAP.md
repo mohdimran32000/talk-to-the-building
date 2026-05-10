@@ -202,26 +202,27 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Single-document drag-move works with a shadcn-style drop indicator (horizontal line for "between", folder-highlight for "into"); cross-scope moves trigger a confirmation modal; document rename works in place; uploads default into the current folder context with a fallback to root.
   4. `MessageList` `SubAgentSection` is extended (recursively, not forked) to render `sub_agent_tool_start`/`sub_agent_tool_done` events as nested rows under the parent Explorer card, with per-tool icons (folder, file, magnifying glass, eye); reloading an old chat that used Explorer shows the nested trace correctly from `messages.tool_metadata`.
   5. Keyboard navigation works (arrow keys for tree expand/collapse, matching VS Code/Finder conventions); Playwright additions in `e2e/full-suite.spec.ts` cover folder tree navigation, drag-move, sub-agent activity card, and scope visibility (admin can write global, regular user cannot).
-**Plans**: 11 plans in 4 waves
+**Plans**: 12 plans in 4 waves (revised 2026-05-10 — added Plan 06-12 for D-06 folder-id resolution per checker BLOCKER #1)
 
-**Wave 0** *(parallel-safe foundation — no inter-deps)*
+**Wave 0** *(parallel-safe foundation — no inter-deps; 5 plans)*
 - [ ] 06-01-PLAN.md — Extend DocumentResponse with content_markdown_status (D-03 backend Pydantic add) (UI-08)
 - [ ] 06-02-PLAN.md — Provision admin@test.com via seed script + migration 021 (D-02) (UI-11, TEST-05)
 - [ ] 06-03-PLAN.md — Install @dnd-kit + 6 shadcn primitives (UI-04, UI-06, UI-08)
 - [ ] 06-04-PLAN.md — Close Phase 5 dual-emit window: delete 5 backend yields + 5 frontend SSE branches; add 1 generalized branch (UI-10)
+- [ ] 06-12-PLAN.md — Extend GET /api/folders subfolders → Array<{id, path}> (D-06 / checker BLOCKER #1) + FolderRef + FolderListResponse Pydantic models + pytest (FOLDER-04, FOLDER-06, UI-04, UI-07)
 
-**Wave 1** *(blocked on Wave 0 — depends on backend types + new deps + closed SSE window)*
-- [ ] 06-05-PLAN.md — api.ts folder/document CRUD methods + Pitfall 5 typed deleteFolder (UI-04, UI-05, UI-06, UI-07, UI-08)
-- [ ] 06-06-PLAN.md — Tree primitives: FolderNode/FolderTree/RootSection/DocumentRow + Scope/StatusBadge + useOpenFoldersStorage hook (UI-02, UI-03, UI-08, UI-09)
+**Wave 1** *(blocked on Wave 0 — depends on backend types + new deps + closed SSE window + D-06 folder-id contract)*
+- [ ] 06-05-PLAN.md — api.ts folder/document CRUD methods + Pitfall 5 typed deleteFolder + D-06 typed FolderRef + ListFolderResponse (depends_on: 06-01, 06-04, **06-12**) (UI-04, UI-05, UI-06, UI-07, UI-08)
+- [ ] 06-06-PLAN.md — Tree primitives: FolderNode/FolderTree/RootSection/DocumentRow + Scope/StatusBadge + useOpenFoldersStorage hook + D-04 keyboard set + D-06 folderId thread (UI-02, UI-03, UI-08, UI-09)
 - [ ] 06-07-PLAN.md — SubAgentSection recursive extension (Pitfall 12) + ToolCallRow extract + Chat.tsx liveSubAgentTrace migration (UI-10)
 
 **Wave 2** *(blocked on Wave 1 — composition + interaction wiring)*
-- [ ] 06-08-PLAN.md — FileExplorerPanel composition + Breadcrumbs + Chat.tsx mount swap; delete FileUploadPanel.tsx (UI-01, UI-02, UI-03, UI-05, UI-08)
-- [ ] 06-09-PLAN.md — Folder CRUD UI: ContextMenu + CreateFolderDialog + DeleteFolderDialog (Pitfall 5 surface) + inline rename + admin gating (UI-04, UI-07, UI-11)
+- [ ] 06-08-PLAN.md — FileExplorerPanel composition + Breadcrumbs + Chat.tsx mount swap + LOCKED 4-arg handleStatusUpdate signature; delete FileUploadPanel.tsx (UI-01, UI-02, UI-03, UI-05, UI-08)
+- [ ] 06-09-PLAN.md — Folder CRUD UI: ContextMenu + CreateFolderDialog + DeleteFolderDialog (Pitfall 5 surface) + inline rename + D-05 inline `+`/`⋯` buttons + D-06 direct UUID calls + admin gating; depends_on: 06-12, 06-03, 06-05, 06-06, 06-08 (UI-04, UI-07, UI-11)
 - [ ] 06-10-PLAN.md — DnD wiring with @dnd-kit + same-scope move + cross-scope BLOCK modal (D-01, Pitfall 11) (UI-06)
 
 **Wave 3** *(blocked on Wave 2 — e2e gate)*
-- [ ] 06-11-PLAN.md — Playwright @phase6 spec block: 12+ tests covering UI-01..UI-11 + TEST-05 + Pitfall 12 grep assertion + D-01 cross-scope block test (TEST-05)
+- [ ] 06-11-PLAN.md — Playwright @phase6 spec block: 12+ tests covering UI-01..UI-11 + TEST-05 + Pitfall 12 grep assertion + D-01 cross-scope block test + apiPost/apiDelete fixture helpers (TEST-05)
 **UI hint**: yes
 **Threats / pitfalls**: Pitfall 11 (scope confusion: scope badges + distinct visual treatment for shared vs private; cross-scope move confirmation modal); Pitfall 5 (folder delete UX: confirmation modal shows actual document/subfolder count from server's structured error, not a guessed number); Pitfall 12 (UI rendering: `SubAgentSection` extended recursively — same component renders both `analyze_document` and Explorer; no `if (agentType === 'explorer')` branch).
 
@@ -237,7 +238,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
 | 4. Five Exploration Tools + search_documents Extension | 9/9 | Complete    | 2026-05-09 |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 7/7 | Complete    | 2026-05-10 |
-| 6. File-Explorer UI Cluster | 0/11 | Planned | - |
+| 6. File-Explorer UI Cluster | 0/12 | Planned (revised 2026-05-10) | - |
 
 ## Critical Path & Parallelization
 
@@ -261,3 +262,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 ---
 
 *Roadmap created: 2026-05-01*
+*Phase 6 plans revised: 2026-05-10 (added Plan 06-12 for D-06; split Plan 06-09 Task 3 into 4 subtasks; locked handleStatusUpdate signature; populated VALIDATION.md per-task map)*
