@@ -1,10 +1,12 @@
 ---
 phase: 05-explorer-sub-agent-sse-protocol-generalization
-verified: 2026-05-09T23:30:00Z
-status: human_needed
-score: 4/4 success criteria verified (static); runtime gate awaits operator-run TEST-03 suite
+verified: 2026-05-10T00:05:00Z
+status: gaps_found
+score: 3/4 success criteria fully verified; SC1 no-progress detector regressed at runtime (TEST-03 Section 4)
 overrides_applied: 0
 re_verification: false
+runtime_gap: |
+  TEST-03 ran 21 passed / 1 failed. SC1 (Success Criterion #1 — "tool-name+args-hash repeat → short-circuit") is statically wired in code but the no-progress detector does NOT short-circuit on the first repeat: the test observed 4 sub_agent_tool_start events before the loop exited, instead of the required 1. Investigation needed in backend/app/services/sub_agent.py around lines 447-457 (`_signature` invocation + `last_signature` update). Phase 4 regression clean (78/0). Module 8 regression has 2 failures that look environmental (Docling-pending upload).
 human_verification:
   - test: "Run TEST-03 integration suite end-to-end"
     expected: "cd backend && venv/Scripts/python scripts/test_explorer_sub_agent.py reports `Results: N passed, 0 failed` for N >= ~25"
