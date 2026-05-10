@@ -79,6 +79,24 @@ Phase 6 replaces the flat `FileUploadPanel` with a recursive two-scope file-expl
 - These are deleted in the same release that switches to the generalized `parsed.type === 'sub_agent'` envelope from Phase 5.
 - Researcher flagged this — accepted as in-scope for Phase 6 to avoid leaving dead code.
 
+### D-04: Keyboard navigation scope = full WAI-ARIA treeview
+- Implement `Right` (expand or move into first child), `Left` (collapse or move to parent), `Up`/`Down` (move to prev/next visible node), `Enter`/`Space` (activate / toggle selection).
+- Matches VS Code/Finder convention referenced in success criterion #5; UI-09 verbatim asks "arrow keys for tree expand/collapse" — full set is a strict superset and more usable.
+- **Why:** Researcher Q1 recommended this scope; locking it here so Plan 06-06's implementation choice is documented.
+
+### D-05: Inline create/menu buttons composition = both `+` and `⋯`
+- Each folder row shows a `+` button (create child folder, hover-revealed) and a `⋯` button (open context menu via keyboard / mouse-equivalent).
+- Right-click on the row opens the same context menu as `⋯`.
+- **Why:** Researcher Q5 recommended both; right-click alone is undiscoverable for new users; `⋯` button matches shadcn/Radix `DropdownMenu` patterns elsewhere in the codebase.
+
+### D-06: Folder-id resolution = extend GET /api/folders response shape
+- `GET /api/folders?scope=...` is changed (Wave-0 backend plan) to return `subfolders` as `Array<{id: string, path: string}>` instead of `string[]`.
+- Same change applies recursively at every nesting level the folder service returns.
+- Frontend `api.ts` `ListFolderResponse` type updates to match; `FolderNode` recursion threads `folderId` (UUID) alongside `path`.
+- **Why:** D-01 / D-04 / Pitfall-5 all depend on FolderNode being able to call `DELETE /api/folders/{id}` and `PATCH /api/folders/{id}` for any folder loaded from the tree. The existing path-only response makes rename/delete impossible for pre-existing folders. Cleanest contract: one round-trip, no path→id lookup endpoint.
+- Backend touches: `backend/app/routers/folders.py` response model + `backend/app/services/folder_service.py` (or wherever the list query lives — planner identifies via grep).
+- Plan 06-05 (`api.ts` folder methods) blocks on this Wave-0 plan; FolderNode/RootSection/FileExplorerPanel consume the new typed shape.
+
 ### Claude's Discretion
 - Exact shadcn primitive composition (Dialog vs AlertDialog for delete confirm — planner picks based on convention)
 - State management approach (TanStack Query vs raw fetch+useState — planner reads existing Chat.tsx pattern and matches)

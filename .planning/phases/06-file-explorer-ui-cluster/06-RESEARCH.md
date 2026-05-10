@@ -743,30 +743,21 @@ function SubAgentSection({ tool, isLive }: { tool: ToolUsedEntry; isLive?: boole
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Q1 (UI-09 keyboard nav scope): Does "arrow keys for tree expand/collapse" mean ONLY ArrowRight/ArrowLeft on the focused folder, or full WAI-ARIA treeview navigation (Up/Down between visible nodes, Home/End to first/last, Enter/Space to toggle)?**
-   - What we know: ROADMAP.md success criterion 5 says "matching VS Code/Finder conventions" — both have full Up/Down navigation.
-   - What's unclear: scope of v1 keyboard support. Minimum is Right/Left expand/collapse (per UI-09 verbatim); maximum is full WAI-ARIA treeview.
-   - **Recommendation:** ship Right/Left + Up/Down + Enter/Space in v1 (covers 95% of use); defer Home/End/typeahead to v2. Confirm with user during plan review.
+> All five questions resolved on 2026-05-10. CONTEXT.md decisions D-01..D-06 are the authoritative locks.
 
-2. **Q2 (Pitfall 11 cross-scope semantics): What is the spec for "cross-scope drag-move"?**
-   - What we know: ROADMAP.md success criterion 3 says "cross-scope moves trigger a confirmation modal". REQUIREMENTS.md UI-06 says "drag-move single document with shadcn-style drop indicator; confirm-on-cross-scope move modal". PROJECT.md Out-of-Scope says "in-place scope promotion (private → global) — Security risk; promotion is delete + admin re-upload". Migration 015 trigger blocks scope mutation at DB.
-   - What's unclear: the requirement says "modal", PROJECT.md says "not supported". These contradict.
-   - **Recommendation:** modal exists, but the action it confirms is "I understand this is not supported in v1; you'll need to delete and re-upload to the target scope" — i.e., the modal is informational + redirects to the right workflow. Alternative: modal triggers a backend "delete + re-upload" macro. Discussion with user is essential here. **HIGHEST-IMPACT OPEN QUESTION.**
+1. **Q1 (UI-09 keyboard nav scope) — RESOLVED:** Locked to full WAI-ARIA treeview subset (Right/Left/Up/Down/Enter/Space). Home/End/typeahead deferred to v2. See CONTEXT.md **D-04**.
 
-3. **Q3 (TEST-05 admin account): Is a second admin Supabase user already provisioned for e2e testing?**
-   - What we know: `frontend/e2e/full-suite.spec.ts` only references `test@test.com` (non-admin per the `Settings link not visible for non-admin user` test at L324).
-   - What's unclear: whether admin test credentials exist or need to be created.
-   - **Recommendation:** Add a Wave 0 task to either (a) create `admin@test.com` via SQL or (b) document existing admin credentials in `frontend/e2e/full-suite.spec.ts`. Confirm with user.
+2. **Q2 (Pitfall 11 cross-scope semantics) — RESOLVED:** Modal blocks the action and redirects to the supported "delete + admin re-upload" path. NO new backend endpoint. See CONTEXT.md **D-01**.
 
-4. **Q4 (UI-08 re-index status visibility): Is `content_markdown_status` already returned by `GET /api/files` and `GET /api/folders`?**
-   - What we know: Migration 014 added `content_markdown_status` enum to `documents` table. The `DocumentResponse` Pydantic model does NOT explicitly declare this field. supabase-py's `.select("*")` returns all columns; the FastAPI auto-serialize via `response_model=DocumentResponse` would silently STRIP fields not declared in the model.
-   - What's unclear: whether the field is already in the wire response or silently dropped.
-   - **Recommendation:** The planner should run `curl -H "Authorization: Bearer $JWT" http://localhost:8001/api/files | jq '.[0]'` once during research-phase verification to confirm. If absent, add a tiny "extend DocumentResponse" plan as Wave 0. Also extend the frontend `Document` interface in `api.ts:154-167`.
+3. **Q3 (TEST-05 admin account) — RESOLVED:** Provision `admin@test.com` in Phase 6 via Python seed script (Supabase Auth admin API) + SQL migration (`UPDATE profiles SET is_admin = true`). See CONTEXT.md **D-02**.
 
-5. **Q5 (Inline buttons vs. ContextMenu — UI-04 redundancy):** UI-04 says folder CRUD via right-click ContextMenu AND inline buttons. Concretely: which inline buttons? "+" to create child, "⋯" to open the same menu, or both?
-   - **Recommendation:** ship both — `+` (Create) on hover for affordance discoverability + `⋯` (kebab menu) for everything else. Right-click is a power-user shortcut.
+4. **Q4 (UI-08 re-index status visibility) — RESOLVED:** Pattern mapper confirmed `content_markdown_status` is missing from `DocumentResponse` (`backend/app/models/schemas.py:32-46`). Wave-0 backend plan extends it. See CONTEXT.md **D-03**.
+
+5. **Q5 (Inline buttons vs. ContextMenu — UI-04 redundancy) — RESOLVED:** Ship both `+` (create child, hover-revealed) and `⋯` (open context menu). Right-click on the row opens the same menu. See CONTEXT.md **D-05**.
+
+**Additionally:** A blocker surfaced during plan-checker review — `GET /api/folders` returns subfolders as `string[]`, but `DELETE`/`PATCH` need UUIDs. **RESOLVED** by extending the folder-list response shape to `Array<{id, path}>`. See CONTEXT.md **D-06** (Wave-0 backend plan).
 
 ---
 
