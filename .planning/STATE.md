@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: "Phase 3 / Plan 06 CODE-COMPLETE — both code tasks shipped with verifier gates green; Task 3 focused-suite run BLOCKED on operator stale-backend pre-req (canary correctly caught it). Task 1 (commit d0a446e): backend/scripts/test_folders.py created with 591 lines, 10 named h.section() groups, and 36 h.test() assertions (vs. 350-line / 25-assertion / 8-section minimums). Module structure: stdlib imports (concurrent.futures, os, sys, uuid) -> third-party (requests) -> two-step sys.path bootstrap -> import test_helpers as h + from app.services.folder_service import normalize_path + from supabase import create_client. Module-level _tracked_documents + _tracked_folders + _tracked_storage_paths lists; CAPYBARA_TEXT fixture; STORAGE_BUCKET literal "documents"; helpers _service_role_client (mirrors auth.py:8-12), _track_doc, _track_folder, _raises (substring-checked exception assertion), _verify_phase3_setup (canary: rpc('rename_folder_prefix', ...) probe + GET /api/folders 401 probe with [FATAL] messages naming the responsible plan), _cleanup (per-id .delete().eq() in finally; defense-in-depth two-step chunks-then-document; storage paths via service-role .remove([...]) — CLAUDE.md cleanup discipline preserved verbatim). 10 sections: FOLDER-02 service surface (5 import smokes for list_folder/create_folder/move_document/rename_folder/delete_folder); FOLDER-06 router CRUD (POST + GET + auth check); FOLDER-06 admin gate (non-admin POST scope=global -> 403, admin POST scope=global -> 200 + user_id IS NULL); FOLDER-03 atomic rename (insert via service-role at /rename-src + POST /api/folders + PATCH to /rename-dst + folder_path readback); FOLDER-03 transactional rollback (psycopg2 connection autocommit=True + CREATE OR REPLACE FUNCTION public.test_rename_folder_prefix_fails_midway with the same signature as the real RPC + sb_admin.rpc invocation + assert raises + assert folder_path UNCHANGED + DROP FUNCTION IF EXISTS in finally — gracefully SKIPs without DATABASE_URL); FOLDER-04 non-empty rejected (insert doc + POST folder + DELETE -> 409 + assert error=FOLDER_NOT_EMPTY + document_count >= 1 + no-orphan readback); FOLDER-05 dedup key (upload F at /a -> action='created'; same F at /a -> 'skipped'; same F at /b -> 'created' — FOLDER-05 acceptance contract empirically locked end-to-end via the upload path); FOLDER-07 files router extensions (upload?folder_path/scope -> 200 with folder_path+scope set; PATCH file_name -> 200; PATCH folder_path -> 200; PATCH {} -> 400; PATCH scope+file_name -> 200 with scope unchanged — three-layer scope-immutability defense empirically locked at the API surface); Cross-user isolation (user A POST private folder + service-role insert at user A's UUID + user B GET -> 0 docs — first codebase instance of testing the doc-side RLS filter from the API surface); Pitfall 10 concurrent upload no-orphan (concurrent.futures.ThreadPoolExecutor max_workers=10 + 10 parallel POST /api/files/upload to /test-race-{uuid} + assert all 200 + assert SELECT id FROM folders WHERE path=race_path returns 0 rows — Strategy B locked empirically). One Rule-1 deviation: docstring rephrase from 'no TRUNCATE' to 'no whole-table wipes' to satisfy case-insensitive `'TRUNCATE' not in body.upper()` verifier gate (same Docstring-content discipline pattern Plan 04 established for Depends(get_admin_user) collisions; third instance in the codebase). Task 2 (commit 2b4c315): backend/scripts/test_all.py modified with two single-line edits — `import test_folders         # NEW (Phase 3)` between import test_files and import test_backfill; `("Folders", test_folders),       # NEW (Phase 3 — folders is logically a Files extension)` between ("Files", test_files) and ("Backfill", test_backfill); SUITES count grows 14 -> 15; verifier gates assert import order AND SUITES tuple order both contiguous (Files->Folders->Backfill). Task 3 BLOCKED on operator stale-backend pre-req: probe of localhost:8001/openapi.json at execution time showed 10 routes mounted (no folder routes; no PATCH /api/files/{file_id}) — the running uvicorn process predates Plans 04+05 and has stale module imports; main.py source code at HEAD is correct (folders.router registered at L23 alongside threads/messages/files/settings). Per checkpoint_handling instructions in the executor prompt ("if red, save an [issues] section in SUMMARY.md and STOP — do not run the full sweep, do not auto-fix") the orchestrator did NOT kill+restart the backend; documented in SUMMARY § Issues Encountered with operator-action steps + verification command (curl /openapi.json -> expect 23 routes including /api/folders + PATCH /api/files/{file_id}). This is the same outcome Phase 2 / Plan 04 documented (operator-pre-req runbook gap discovered) — the canary did its job by surfacing the gap with maximum signal-to-noise (single FAIL h.test + actionable [FATAL] message naming both `from app.routers import folders` AND `app.include_router(folders.router)` in main.py + a uvicorn restart command). Phase 3 progress: 6/6 plans CODE-COMPLETE; Phase 3 verification gate (focused suite green) is gated on operator backend restart."
-last_updated: "2026-05-09T18:27:48.037Z"
-last_activity: 2026-05-09 -- Phase 05 execution started
+last_updated: "2026-05-10T07:23:39.615Z"
+last_activity: 2026-05-10 -- Phase 5 planning complete
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 33
-  completed_plans: 27
-  percent: 82
+  total_plans: 34
+  completed_plans: 33
+  percent: 97
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 
 Phase: 05 (explorer-sub-agent-sse-protocol-generalization) — EXECUTING
 Plan: 1 of 6
-Status: Executing Phase 05
-Last activity: 2026-05-09 -- Phase 05 execution started
+Status: Ready to execute
+Last activity: 2026-05-10 -- Phase 5 planning complete
 
 Progress: [██████████] 100% (18/18 plans complete: Phase 1 = 8/8, Phase 2 = 4/4, Phase 3 = 6/6); Project: 33% (2/6 phases complete; Phase 3 code-complete pending verification)
 

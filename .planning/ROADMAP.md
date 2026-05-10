@@ -74,7 +74,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. `DELETE /api/folders/{id}` on a non-empty folder returns a structured `{error: "FOLDER_NOT_EMPTY", document_count, subfolder_count}` instead of cascading; `test_folders.py` confirms no documents are deleted on rejected calls.
   4. `record_manager` dedup key is `(scope, user_id, folder_path, file_name, hash)` — uploading the same file to two different folders succeeds (creates two rows); uploading the same file to the same folder is deduped.
   5. `POST /api/files/upload` accepts `folder_path` and `scope` query args; `PATCH /api/files/{id}` supports rename and folder move; concurrent-upload-no-orphan test (10 parallel uploads to a brand-new path) produces exactly one (or zero) `folders` row.
-**Plans**: 6 plans in 4 waves
+**Plans**: 7 plans in 5 waves
 
 **Wave 1** *(blocking — Migration 019 RPCs needed by Wave 2+)*
 - [x] 01-PLAN.md — Migration 019 (rename_folder_prefix + delete_folder_if_empty + create_folder_if_not_exists RPCs) + apply via Supabase MCP apply_migration (DATABASE_URL fallback) + Pydantic schemas (FolderResponse, FolderCreate, FolderPatch, FilePatch + DocumentResponse extensions) (FOLDER-03, FOLDER-04) ✅ 2026-05-07
@@ -157,7 +157,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. `analyze_document` is hard-excluded from Explorer's toolset (no recursive sub-agents); attempting to register it raises a setup-time error.
   3. The SSE event protocol is generalized to `{type: 'sub_agent', agent_name, event, payload}` with new `sub_agent_tool_start`/`sub_agent_tool_done` events forwarded by `messages.py:event_generator`; both `analyze_document` and `explore_knowledge_base` flows render correctly in the same conversation, and `messages.tool_metadata` JSONB persists Explorer traces so old chats render correctly on reload.
   4. LangSmith shows Explorer as a `chain` span with its tool calls as nested children (not flat siblings); a CI assertion confirms Explorer spans never exceed 8 tool-call children and tool-result size stays under 12K chars.
-**Plans**: 6 plans in 4 waves
+**Plans**: 7 plans in 5 waves
 
 **Wave 0** *(foundation — constants/helpers/types ABOVE the existing run_sub_agent)*
 - [x] 05-01-PLAN.md — sub_agent.py extension: ExplorerArgs Pydantic v2 model + 4 budget constants (MAX_TURNS=8, WALL_CLOCK_BUDGET_S=60, RESULT_CHAR_CAP=12_000, SSE_ARG_CAP=500) + EXPLORER_ALLOWED_TOOLS tuple + setup-time recursion-ban assert (layer 1 of EXPLORER-03 triple-defense) + EXPLORER_SYSTEM_PROMPT + _signature no-progress hash helper (EXPLORER-01, EXPLORER-02, EXPLORER-03)
@@ -174,6 +174,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 4** *(blocked on Waves 0-3 — integration suite tests against shipped code)*
 - [x] 05-06-PLAN.md — backend/scripts/test_explorer_sub_agent.py NEW (~700 LOC, 10 sections) + register in test_all.py SUITES as ('Explorer', test_explorer_sub_agent) between Exploration and Backfill; covers EXPLORER-01..06 + Pitfall 8 carry-forward; canary precheck names missing Plan; per-id batched cleanup (CLAUDE.md mandatory) (EXPLORER-01..06, TEST-03)
+
+**Wave 5** *(gap-closure — added post-verification; closes SC1 runtime regression caught by TEST-03 Section 4)*
+- [ ] 05-07-PLAN.md — backend/app/services/sub_agent.py: lazy-bind `_get_client` (change `from app.services.openai_client import _get_client` to `from app.services import openai_client as _openai_client`; update both call sites in `run_sub_agent` and `run_explorer_sub_agent` to `_openai_client._get_client()`) so test stubs at `oc._get_client = lambda: stub_client` reach Explorer's call site; closes the no-progress detector regression (SC1 runtime gate); operator-run TEST-03 rerun verifies Section 4 flips to PASS; updates 05-HUMAN-UAT.md with closure record (EXPLORER-02, TEST-03)
 
 **Cross-cutting constraints** *(must_haves shared across multiple plans)*
 - Recommendation A LOCKED: extend sub_agent.py rather than create sub_agents/ package (research/ARCHITECTURE.md:175; revisit when third sub-agent appears) — Plans 01 + 02
