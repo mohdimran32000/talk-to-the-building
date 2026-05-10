@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Folder Service + Routers + Dedup Extension** — Pure CRUD layer: `folder_service.py`, `folders` router, extended `files` router (upload-into-folder, rename, move), `record_manager` dedup key extended. ✅ 2026-05-09
 - [x] **Phase 4: Five Exploration Tools + search_documents Extension** — `tree`, `glob`, `grep`, `list_files`, `read_document` with Pydantic v2 arg validation, hard token-budget caps, scope-tagged result rows; `search_documents` extended with `folder_path`/`scope` filters.
  (completed 2026-05-09)
-- [ ] **Phase 5: Explorer Sub-Agent + SSE Protocol Generalization** — `run_explorer_sub_agent` with `MAX_TURNS=8`, wall-clock timeout, no-progress detector; SSE sub-agent event protocol generalized; `messages.tool_metadata` persistence.
+- [x] **Phase 5: Explorer Sub-Agent + SSE Protocol Generalization** — `run_explorer_sub_agent` with `MAX_TURNS=8`, wall-clock timeout, no-progress detector; SSE sub-agent event protocol generalized; `messages.tool_metadata` persistence. ✅ 2026-05-10
 - [ ] **Phase 6: File-Explorer UI Cluster** — `FileExplorerPanel` cluster (two-section tree, folder CRUD, drag-move, breadcrumbs, scope badges, Explorer activity card); replaces `FileUploadPanel`; Playwright e2e additions.
 
 ## Phase Details
@@ -176,7 +176,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 05-06-PLAN.md — backend/scripts/test_explorer_sub_agent.py NEW (~700 LOC, 10 sections) + register in test_all.py SUITES as ('Explorer', test_explorer_sub_agent) between Exploration and Backfill; covers EXPLORER-01..06 + Pitfall 8 carry-forward; canary precheck names missing Plan; per-id batched cleanup (CLAUDE.md mandatory) (EXPLORER-01..06, TEST-03)
 
 **Wave 5** *(gap-closure — added post-verification; closes SC1 runtime regression caught by TEST-03 Section 4)*
-- [ ] 05-07-PLAN.md — backend/app/services/sub_agent.py: lazy-bind `_get_client` (change `from app.services.openai_client import _get_client` to `from app.services import openai_client as _openai_client`; update both call sites in `run_sub_agent` and `run_explorer_sub_agent` to `_openai_client._get_client()`) so test stubs at `oc._get_client = lambda: stub_client` reach Explorer's call site; closes the no-progress detector regression (SC1 runtime gate); operator-run TEST-03 rerun verifies Section 4 flips to PASS; updates 05-HUMAN-UAT.md with closure record (EXPLORER-02, TEST-03)
+- [x] 05-07-PLAN.md — backend/app/services/sub_agent.py: lazy-bind `_get_client` (change `from app.services.openai_client import _get_client` to `from app.services import openai_client as _openai_client`; update both call sites in `run_sub_agent` and `run_explorer_sub_agent` to `_openai_client._get_client()`) so test stubs at `oc._get_client = lambda: stub_client` reach Explorer's call site; closes the no-progress detector regression (SC1 runtime gate); operator-run TEST-03 rerun verifies Section 4 flips to PASS; updates 05-HUMAN-UAT.md with closure record (EXPLORER-02, TEST-03) ✅ 2026-05-10 — operator-confirmed `Results: 27 passed, 0 failed` with verbatim Section 4 PASS line; commit b9f69ba; SUMMARY at 05-07-SUMMARY.md
 
 **Cross-cutting constraints** *(must_haves shared across multiple plans)*
 - Recommendation A LOCKED: extend sub_agent.py rather than create sub_agents/ package (research/ARCHITECTURE.md:175; revisit when third sub-agent appears) — Plans 01 + 02
@@ -217,7 +217,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. content_markdown Backfill (Gated) | 4/4 | Complete | 2026-05-04 |
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
 | 4. Five Exploration Tools + search_documents Extension | 9/9 | Complete    | 2026-05-09 |
-| 5. Explorer Sub-Agent + SSE Protocol Generalization | 0/6 | Not started | - |
+| 5. Explorer Sub-Agent + SSE Protocol Generalization | 7/7 | Complete    | 2026-05-10 |
 | 6. File-Explorer UI Cluster | 0/TBD | Not started | - |
 
 ## Critical Path & Parallelization

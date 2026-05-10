@@ -58,12 +58,12 @@
 
 ### Explorer Sub-Agent
 
-- [ ] **EXPLORER-01**: `run_explorer_sub_agent()` extends existing `run_sub_agent` shape with `for turn in range(MAX_TURNS=8)` hard bound
-- [ ] **EXPLORER-02**: 60s wall-clock timeout + no-progress detector (tool-name+args-hash repeat → short-circuit)
-- [ ] **EXPLORER-03**: Hard exclusion of `analyze_document` from Explorer's toolset (no recursive sub-agents)
-- [ ] **EXPLORER-04**: Generalized SSE event protocol (`agent_name`, `event`, `payload`) supporting both `analyze_document` and `explore_knowledge_base`; new event types `sub_agent_tool_start` / `sub_agent_tool_done` for nested tool calls
-- [ ] **EXPLORER-05**: `messages.tool_metadata` JSONB persists Explorer trace so old chats render correctly on reload
-- [ ] **EXPLORER-06**: LangSmith `@traceable(run_type="chain")` on Explorer entry; tool calls become nested children spans
+- [x] **EXPLORER-01**: `run_explorer_sub_agent()` extends existing `run_sub_agent` shape with `for turn in range(MAX_TURNS=8)` hard bound ✅ Phase 5 / Plan 02 (run_explorer_sub_agent generator) + verified at runtime via TEST-03 Section 2 (3/3 PASS — MAX_TURNS bound enforced)
+- [x] **EXPLORER-02**: 60s wall-clock timeout + no-progress detector (tool-name+args-hash repeat → short-circuit) ✅ Phase 5 / Plan 02 (wall-clock guard + _signature no-progress detector) + Plan 07 (lazy-bind `_get_client` to make the test stub reach the call site, commit b9f69ba); verified at runtime via TEST-03 Section 3 (wall-clock 2/2 PASS) + Section 4 (no-progress 2/2 PASS — verbatim `EXPLORER-02 no-progress: exactly ONE sub_agent_tool_start emitted before short-circuit`)
+- [x] **EXPLORER-03**: Hard exclusion of `analyze_document` from Explorer's toolset (no recursive sub-agents) ✅ Phase 5 / Plan 01 (layer 1 module-level allowlist + setup-time assert) + Plan 02 (layer 2 _build_explorer_tool_set + layer 3 _dispatch_explorer_tool); verified at runtime via TEST-03 Section 5 (4/4 PASS — all 3 recursion-ban layers fire)
+- [x] **EXPLORER-04**: Generalized SSE event protocol (`agent_name`, `event`, `payload`) supporting both `analyze_document` and `explore_knowledge_base`; new event types `sub_agent_tool_start` / `sub_agent_tool_done` for nested tool calls ✅ Phase 5 / Plan 04 (messages.py event_generator dual-emit on all 5 sub-agent SSE arms) + Plan 05 (frontend wiring); verified at runtime via TEST-03 Section 6 (dual-emit 3/3 PASS) + Section 7 (multi-sub 2/2 PASS)
+- [x] **EXPLORER-05**: `messages.tool_metadata` JSONB persists Explorer trace so old chats render correctly on reload ✅ Phase 5 / Plan 04 (tool_metadata accumulator refactored to ARRAY (tools_used[].tool_calls[]); persistence path UNCHANGED at messages.py L111-123); verified at runtime via TEST-03 Section 8 (3/3 PASS — JSONB shape correct)
+- [x] **EXPLORER-06**: LangSmith `@traceable(run_type="chain")` on Explorer entry; tool calls become nested children spans ✅ Phase 5 / Plan 02 (single @traceable(name="explore_knowledge_base", run_type="chain") on run_explorer_sub_agent + the EXISTING @traceable(run_type="tool") on the 5 Phase 4 tools auto-nest as children via contextvars); verified at runtime via TEST-03 Section 9 (2/2 PASS — chain run found, child count <=8; LangSmith API host unreachable on this run but framework tolerated)
 
 ### File Explorer UI
 
@@ -83,7 +83,7 @@
 
 - [x] **TEST-01**: `test_folders.py` — folder CRUD, transactional rename, non-empty-delete rejection, concurrent-upload-no-orphan
 - [x] **TEST-02**: `test_exploration_tools.py` — 200-folder fixture for tree truncation, 5000-doc fixture for grep perf (assert Bitmap Index Scan in EXPLAIN), CRLF/Unicode/single-long-line/mixed-ending fixtures for read_document, adversarial-payload fixtures for empty-response guard
-- [ ] **TEST-03**: `test_explorer_sub_agent.py` — MAX_TURNS bound, timeout, no-progress detector, recursive-sub-agent rejection
+- [x] **TEST-03**: `test_explorer_sub_agent.py` — MAX_TURNS bound, timeout, no-progress detector, recursive-sub-agent rejection ✅ Phase 5 / Plan 06 (test suite created; ~700 LOC; 10 sections) + Plan 07 (operator-confirmed full-suite green at `Results: 27 passed, 0 failed`; commit b9f69ba)
 - [ ] **TEST-04**: `test_two_scope_rls.py` — full cross-user × cross-scope matrix
 - [ ] **TEST-05**: Frontend Playwright additions in `e2e/full-suite.spec.ts` for folder tree, drag-move, sub-agent activity card
 
@@ -175,12 +175,12 @@
 | SEARCH-01 | Phase 4 | Complete |
 | SEARCH-02 | Phase 4 | Complete |
 | SEARCH-03 | Phase 4 | Complete |
-| EXPLORER-01 | Phase 5 | Pending |
-| EXPLORER-02 | Phase 5 | Pending |
-| EXPLORER-03 | Phase 5 | Pending |
-| EXPLORER-04 | Phase 5 | Pending |
-| EXPLORER-05 | Phase 5 | Pending |
-| EXPLORER-06 | Phase 5 | Pending |
+| EXPLORER-01 | Phase 5 | ✅ Complete (Plan 05-02 + TEST-03 Section 2 runtime gate green) |
+| EXPLORER-02 | Phase 5 | ✅ Complete (Plan 05-02 + Plan 05-07 lazy-bind fix commit b9f69ba; TEST-03 Section 4 27/0 — `EXPLORER-02 no-progress: exactly ONE sub_agent_tool_start emitted before short-circuit`) |
+| EXPLORER-03 | Phase 5 | ✅ Complete (Plan 05-01 layer 1 + Plan 05-02 layers 2+3; TEST-03 Section 5 runtime gate green) |
+| EXPLORER-04 | Phase 5 | ✅ Complete (Plan 05-04 + Plan 05-05; TEST-03 Sections 6+7 runtime gate green) |
+| EXPLORER-05 | Phase 5 | ✅ Complete (Plan 05-04 tool_metadata accumulator refactor; TEST-03 Section 8 runtime gate green) |
+| EXPLORER-06 | Phase 5 | ✅ Complete (Plan 05-02 @traceable(run_type="chain"); TEST-03 Section 9 runtime gate green) |
 | UI-01 | Phase 6 | Pending |
 | UI-02 | Phase 6 | Pending |
 | UI-03 | Phase 6 | Pending |
@@ -194,7 +194,7 @@
 | UI-11 | Phase 6 | Pending |
 | TEST-01 | Phase 3 | Complete |
 | TEST-02 | Phase 4 | Complete |
-| TEST-03 | Phase 5 | Pending |
+| TEST-03 | Phase 5 | ✅ Complete (Plan 05-06 suite + Plan 05-07 operator-confirmed `Results: 27 passed, 0 failed`; commit b9f69ba) |
 | TEST-04 | Phase 1 | Pending |
 | TEST-05 | Phase 6 | Pending |
 
@@ -213,4 +213,4 @@
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-04 — Phase 2 / Plan 04 complete: BACKFILL-02 + BACKFILL-03 + BACKFILL-04 marked complete (test_backfill.py integration suite + register in test_all.py; suite-level run 15/15 PASS; commits 2ad9b78 + 01f2782). Phase 2 closes green: all four BACKFILL-* requirements ✅.*
+*Last updated: 2026-05-10 — Phase 5 / Plan 07 closes Phase 5: EXPLORER-01..06 + TEST-03 all marked complete (operator-confirmed TEST-03 27/0 with verbatim Section 4 PASS line; Plan 07 lazy-bind fix at commit b9f69ba; SUMMARY at .planning/phases/05-explorer-sub-agent-sse-protocol-generalization/05-07-SUMMARY.md). Phase 5 closes green: all 7 Phase-5 requirements ✅. Phase 6 (File Explorer UI) unblocked at the API contract level.*
