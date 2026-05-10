@@ -11,7 +11,8 @@ from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from app.services.exploration_tools._truncate import apply_12k_cap
-from app.services.openai_client import _get_client
+# Phase 5 / Plan 07 gap-closure: lazy-bind for test patchability (no production behavior change)
+from app.services import openai_client as _openai_client
 from app.services.settings import get_llm_model
 
 logger = logging.getLogger(__name__)
@@ -316,7 +317,7 @@ def run_sub_agent(
     )
 
     # 6. Single streaming Gemini call (no tools needed)
-    client = _get_client()
+    client = _openai_client._get_client()
     model = get_llm_model()
 
     contents = [types.Content(role="user", parts=[types.Part(text=question)])]
@@ -389,7 +390,7 @@ def run_explorer_sub_agent(
     short_circuit_reason: str | None = None
 
     try:
-        client = _get_client()
+        client = _openai_client._get_client()
         model = get_llm_model()
     except Exception as e:
         logger.error(f"Explorer client init failed: {e}", exc_info=True)
