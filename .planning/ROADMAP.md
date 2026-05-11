@@ -218,7 +218,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Wave 2** *(blocked on Wave 1 — composition + interaction wiring)*
 - [x] 06-08-PLAN.md — FileExplorerPanel composition + Breadcrumbs + Chat.tsx mount swap + LOCKED 4-arg handleStatusUpdate signature; delete FileUploadPanel.tsx (UI-01, UI-02, UI-03, UI-05, UI-08)
-- [ ] 06-09-PLAN.md — Folder CRUD UI: ContextMenu + CreateFolderDialog + DeleteFolderDialog (Pitfall 5 surface) + inline rename + D-05 inline `+`/`⋯` buttons + D-06 direct UUID calls + admin gating; depends_on: 06-12, 06-03, 06-05, 06-06, 06-08 (UI-04, UI-07, UI-11)
+- [x] 06-09-PLAN.md — Folder CRUD UI: ContextMenu + CreateFolderDialog + DeleteFolderDialog (Pitfall 5 surface) + inline rename + D-05 inline `+`/`⋯` buttons + D-06 direct UUID calls + admin gating; depends_on: 06-12, 06-03, 06-05, 06-06, 06-08 (UI-04, UI-07, UI-11)
 - [ ] 06-10-PLAN.md — DnD wiring with @dnd-kit + same-scope move + cross-scope BLOCK modal (D-01, Pitfall 11) (UI-06)
 
 **Wave 3** *(blocked on Wave 2 — e2e gate)*

@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Completed_06-02-PLAN.md
-last_updated: "2026-05-11T06:30:02.345Z"
+last_updated: "2026-05-11T06:39:24.295Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 46
-  completed_plans: 43
-  percent: 93
+  completed_plans: 44
+  percent: 96
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 06 (file-explorer-ui-cluster) — EXECUTING
-Plan: 10 of 12
+Plan: 11 of 12
 Status: Ready to execute
 Last activity: 2026-05-11
 
-Progress: [█████████░] 93%
+Progress: [██████████] 96%
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Progress: [█████████░] 93%
 | Phase 06 P07 | 5min | 3 tasks | 3 files |
 | Phase 06 P02 | 3min | 2 tasks | 2 files |
 | Phase 06 P08 | 4 | 3 tasks | 4 files |
+| Phase 06 P09 | 8 | 6 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -190,6 +191,11 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 6 / Plan 02: Migration 021 uses UPDATE-then-INSERT...ON CONFLICT DO UPDATE for defense-in-depth profile promotion — covers both trigger-fired and trigger-skipped paths (e.g., Admin-API users in some envs).
 - [Phase ?]: Phase 6 / Plan 02: Verbatim-substring grep-acceptance gates need the literal substring somewhere in the file — an inline comment containing the verbatim token is the cheapest fix; extends Phase 3 / Plans 04 + 06 docstring-discipline pattern to seed scripts.
 - [Phase ?]: Phase 6 / Plan 08: Atomic UI-01 commit (mount swap + FileUploadPanel.tsx delete in dab3064) satisfies verifier-gate; LOCKED 4-arg handleStatusUpdate signature propagates content_markdown_status end-to-end (D-03 / checker WARNING #3)
+- [Phase ?]: Phase 6 / Plan 06-09: D-06 strategy is props-thread plus null-gate — DeleteFolderDialog requires folderId string (not optional); callers guard mount via folderId && DeleteFolderDialog; renameFolder(folderId, newPath) called directly with UUID from FolderNode props; zero path-to-id resolution round-trips
+- [Phase ?]: Phase 6 / Plan 06-09: Pitfall 5 surface uses local 'blocking' state in DeleteFolderDialog with wrapper handleOpenChange that resets blocking to null on close — re-open after a 409 shows fresh confirm view (not stale error banner with non-clickable Delete button). New convention for any future structured-409 dialog.
+- [Phase ?]: Phase 6 / Plan 06-09: D-05 hover-reveal inline buttons use Tailwind 'group' + 'group-hover:opacity-100' — same idiom as Plan 06-06 RootSection chrome. '+' always rendered when canWrite; '⋯' rendered only when hasFolderId. Inline buttons + right-click ContextMenu coexist (D-05 LOCKED dual affordance).
+- [Phase ?]: Phase 6 / Plan 06-09: Pitfall 11 / UI-11 structural admin gate — canWrite = (scope === 'user' || isAdmin) is the SINGLE gate. Non-admins on global scope see ONLY a disabled 'Read-only (admin required)' item (gives discoverability without affording action). NEVER conditional-render between scopes.
+- [Phase ?]: Phase 6 / Plan 06-09: FolderTree refetch via key={refetchCounter} force-remount of the ROOT FolderNode — simpler than recursive cache invalidation; pays cheap re-render cost on mutation. Reusable pattern for any component with internal lazy-load state that needs parent-triggered refresh.
 
 ### Pending Todos
 
@@ -216,7 +222,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-11T06:29:36.623Z
+Last session: 2026-05-11T06:37:58.029Z
 Stopped at: Completed_06-02-PLAN.md
 
 Earlier session: 2026-05-07 (Phase 3 / Plan 06 executed — code-complete; verification gate awaits operator backend restart)
