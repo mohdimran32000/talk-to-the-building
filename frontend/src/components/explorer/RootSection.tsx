@@ -10,9 +10,15 @@ interface RootSectionProps {
   // CRUD callbacks wired in Plan 06-09; this component composes the tree with section chrome
   onDeleteDocument?: (id: string) => void
   onRenameDocument?: (id: string, newName: string) => void
+  // External refresh signal (Phase 6 fix): when the panel uploads a document
+  // it bumps this counter so the FolderTree remounts and re-fetches contents.
+  // FolderNode caches listFolder() results per-mount, so without this signal
+  // the new document does not appear in its target folder until the user
+  // collapses + re-expands the folder.
+  externalRefreshKey?: number
 }
 
-export function RootSection({ scope, onDeleteDocument, onRenameDocument }: RootSectionProps) {
+export function RootSection({ scope, onDeleteDocument, onRenameDocument, externalRefreshKey = 0 }: RootSectionProps) {
   const { isAdmin } = useAuth()
   // UI-11 / Pitfall 11: the global-scope inline-create button is gated structurally —
   // canCreate = scope === 'user' || isAdmin. Non-admins on Shared see no Create affordance.
@@ -58,7 +64,7 @@ export function RootSection({ scope, onDeleteDocument, onRenameDocument }: RootS
       </header>
       <div role="tree" aria-label={`${label} tree`}>
         <FolderTree
-          key={refreshKey}
+          key={`${refreshKey}:${externalRefreshKey}`}
           scope={scope}
           rootPath="/"
           onDeleteDocument={onDeleteDocument}

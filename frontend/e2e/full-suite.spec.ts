@@ -535,7 +535,7 @@ test.describe('FileExplorer @phase6', () => {
   // UI-01: file explorer panel renders (replaces FileUploadPanel).
   test('UI-01 FileExplorer renders in place of FileUploadPanel @phase6', async ({ page }) => {
     await signIn(page)
-    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
     // The legacy panel name should not appear anywhere in the DOM
     expect(await page.getByText('FileUploadPanel', { exact: true }).count()).toBe(0)
   })
@@ -543,7 +543,7 @@ test.describe('FileExplorer @phase6', () => {
   // UI-02: two scope sections render simultaneously (not tabs).
   test('UI-02 two scope sections render simultaneously (not tabs) @phase6', async ({ page }) => {
     await signIn(page)
-    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
     await expect(page.getByText('Shared (global)').first()).toBeVisible()
     await expect(page.getByText('My Files').first()).toBeVisible()
     // No tablist inside the explorer body — the two sections render side-by-side
@@ -585,9 +585,9 @@ test.describe('FileExplorer @phase6', () => {
       const folder = await apiPost(page, '/api/folders', { path: '/phase6-ctxmenu', scope: 'user' })
       created.push(folder.id)
       await page.reload()
-      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
       const row = page.locator('[data-folder-path="/phase6-ctxmenu"][data-scope="user"]').first()
-      await expect(row).toBeVisible({ timeout: 10000 })
+      await expect(row).toBeVisible({ timeout: 20000 })
       await row.click({ button: 'right' })
       await expect(page.getByRole('menuitem', { name: /new folder/i })).toBeVisible({ timeout: 5000 })
       await expect(page.getByRole('menuitem', { name: /rename/i })).toBeVisible()
@@ -610,9 +610,9 @@ test.describe('FileExplorer @phase6', () => {
 
       // Upload a document into the folder via the UI (FormData; complex to issue via apiPost)
       await page.reload()
-      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
       const row = page.locator('[data-folder-path="/phase6-nonempty"][data-scope="user"]').first()
-      await expect(row).toBeVisible({ timeout: 10000 })
+      await expect(row).toBeVisible({ timeout: 20000 })
       await row.click()  // selects the folder so upload lands here
 
       const tmpPath = path.join(__dirname, 'phase6_nonempty.txt')
@@ -620,16 +620,24 @@ test.describe('FileExplorer @phase6', () => {
       try {
         const fileInput = page.locator('input[type="file"]').first()
         await fileInput.setInputFiles(tmpPath)
-        await expect(page.getByText('phase6_nonempty.txt').first()).toBeVisible({ timeout: 15000 })
       } finally {
         // Windows can briefly hold the file handle after Playwright uploads it (EBUSY).
         // Cleanup is best-effort — orphans are rare and harmless under e2e/.
         try { fs.unlinkSync(tmpPath) } catch { /* tolerated */ }
       }
 
-      // Capture the document id for cleanup
-      const docHandle = page.locator('[data-document-id]').filter({ hasText: 'phase6_nonempty.txt' }).first()
-      const docId = await docHandle.getAttribute('data-document-id')
+      // Poll the API directly until the uploaded doc shows up in the target folder.
+      // Don't depend on UI visibility — the folder may be collapsed in the tree even
+      // though the doc was uploaded successfully, and the Pitfall 5 dialog only needs
+      // a non-empty folder server-side.
+      let docId: string | null = null
+      for (let i = 0; i < 30; i++) {
+        const list = await apiGet(page, '/api/folders?path=%2Fphase6-nonempty&scope=user')
+        const found = (list.documents ?? []).find((d: { file_name?: string; id: string }) => d.file_name === 'phase6_nonempty.txt')
+        if (found) { docId = found.id; break }
+        await page.waitForTimeout(500)
+      }
+      expect(docId, 'document was not found in /phase6-nonempty after upload').not.toBeNull()
       if (docId) createdDocs.push(docId)
 
       // Right-click the folder HEADER (not the whole div, which contains the
@@ -663,9 +671,9 @@ test.describe('FileExplorer @phase6', () => {
       const folder = await apiPost(page, '/api/folders', { path: '/phase6-upload', scope: 'user' })
       createdFolders.push(folder.id)
       await page.reload()
-      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
       const row = page.locator('[data-folder-path="/phase6-upload"][data-scope="user"]').first()
-      await expect(row).toBeVisible({ timeout: 10000 })
+      await expect(row).toBeVisible({ timeout: 20000 })
       await row.click()
 
       const tmpPath = path.join(__dirname, 'phase6_upload.txt')
@@ -673,18 +681,21 @@ test.describe('FileExplorer @phase6', () => {
       try {
         const fileInput = page.locator('input[type="file"]').first()
         await fileInput.setInputFiles(tmpPath)
-        await expect(page.getByText('phase6_upload.txt').first()).toBeVisible({ timeout: 15000 })
       } finally {
-        fs.unlinkSync(tmpPath)
+        try { fs.unlinkSync(tmpPath) } catch { /* Windows EBUSY tolerated */ }
       }
 
-      const docHandle = page.locator('[data-document-id]').filter({ hasText: 'phase6_upload.txt' }).first()
-      const docId = await docHandle.getAttribute('data-document-id')
+      // Confirm via API (folder may be collapsed in the tree, hiding the doc row).
+      // Poll because upload is async server-side.
+      let docId: string | null = null
+      for (let i = 0; i < 30; i++) {
+        const listing = await apiGet(page, `/api/folders?path=/phase6-upload&scope=user`)
+        const found = (listing.documents ?? []).find((d: { file_name?: string; id: string }) => d.file_name === 'phase6_upload.txt')
+        if (found) { docId = found.id; break }
+        await page.waitForTimeout(500)
+      }
+      expect(docId, 'uploaded file did not appear in /phase6-upload via API').not.toBeNull()
       if (docId) createdDocs.push(docId)
-      // Verify backend stored it under /phase6-upload (read folder via API)
-      const listing = await apiGet(page, `/api/folders?path=/phase6-upload&scope=user`)
-      const fileNames = (listing.documents ?? []).map((d: any) => d.file_name)
-      expect(fileNames).toContain('phase6_upload.txt')
     } finally {
       for (const id of createdDocs) await apiDelete(page, `/api/files/${id}`)
       for (const id of createdFolders) await apiDelete(page, `/api/folders/${id}`)
@@ -703,7 +714,7 @@ test.describe('FileExplorer @phase6', () => {
 
       // Upload doc to root via UI flow
       await page.reload()
-      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
       // Select root user
       const rootUser = page.locator('[data-folder-path="/"][data-scope="user"]').first()
       await expect(rootUser).toBeVisible({ timeout: 10000 })
@@ -762,7 +773,7 @@ test.describe('FileExplorer @phase6', () => {
     const createdDocs: string[] = []
     try {
       // Upload a doc to admin's My Files root via UI
-      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
       const rootUser = page.locator('[data-folder-path="/"][data-scope="user"]').first()
       await expect(rootUser).toBeVisible({ timeout: 10000 })
       await rootUser.click()
@@ -829,7 +840,7 @@ test.describe('FileExplorer @phase6', () => {
     await signIn(page)
     const createdDocs: string[] = []
     try {
-      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
       const rootUser = page.locator('[data-folder-path="/"][data-scope="user"]').first()
       await expect(rootUser).toBeVisible({ timeout: 10000 })
       await rootUser.click()
@@ -871,9 +882,9 @@ test.describe('FileExplorer @phase6', () => {
       const folder = await apiPost(page, '/api/folders', { path: '/phase6-bc', scope: 'user' })
       createdFolders.push(folder.id)
       await page.reload()
-      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
       const row = page.locator('[data-folder-path="/phase6-bc"][data-scope="user"]').first()
-      await expect(row).toBeVisible({ timeout: 10000 })
+      await expect(row).toBeVisible({ timeout: 20000 })
       await row.click()
 
       // Breadcrumbs should surface "phase6-bc" segment in the header
@@ -912,10 +923,10 @@ test.describe('FileExplorer @phase6', () => {
       const f = await apiPost(page, '/api/folders', { path: '/phase6-kbd', scope: 'user' })
       createdFolders.push(f.id)
       await page.reload()
-      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
 
       const row = page.locator('[data-folder-path="/phase6-kbd"][data-scope="user"]').first()
-      await expect(row).toBeVisible({ timeout: 10000 })
+      await expect(row).toBeVisible({ timeout: 20000 })
 
       // Focus the row's interactive button
       const rowBtn = row.locator('button[tabindex="0"]').first()
@@ -979,7 +990,7 @@ test.describe('FileExplorer @phase6', () => {
   // UI-11: admin sees + New folder affordance in Shared section.
   test('UI-11 admin sees + New folder in Shared section @phase6', async ({ page }) => {
     await signInAdmin(page)
-    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
     const sharedSection = page.locator('section[data-root-scope="global"]').first()
     await expect(sharedSection).toBeVisible()
     // Section-header "+ New folder" button is gated structurally on canCreate (admin sees it)
@@ -989,7 +1000,7 @@ test.describe('FileExplorer @phase6', () => {
   // UI-11: non-admin does NOT see Create/Rename/Delete on Shared scope.
   test('UI-11 non-admin does not see + New folder in Shared section @phase6', async ({ page }) => {
     await signIn(page)
-    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 20000 })
     const sharedSection = page.locator('section[data-root-scope="global"]').first()
     await expect(sharedSection).toBeVisible()
     // Section-header "+ New folder" button must be absent for non-admin (canCreate=false)

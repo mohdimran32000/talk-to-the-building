@@ -40,7 +40,7 @@ export default function FileExplorerPanel({
   onStatusUpdate,
   metadataSchema: _metadataSchema,
 }: FileExplorerPanelProps) {
-  const { isAdmin } = useAuth()
+  const { isAdmin, user } = useAuth()
   const inputRef = useRef<HTMLInputElement>(null)
   const [selectedFolder, setSelectedFolder] = useState<SelectedFolder>({ scope: 'user', path: '/' })
 
@@ -125,6 +125,12 @@ export default function FileExplorerPanel({
     return () => clearInterval(interval)
   }, [files, onStatusUpdate])
 
+  // Phase 6 fix: bump on every upload so RootSection remounts FolderTree and
+  // re-fetches contents. Without this, FolderNode's cached listFolder() result
+  // hides the newly-uploaded doc until the user manually collapses + re-expands
+  // the target folder.
+  const [uploadRefreshKey, setUploadRefreshKey] = useState(0)
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
@@ -134,7 +140,26 @@ export default function FileExplorerPanel({
       const targetPath = selectedFolder.path
       const safeScope = targetScope === 'global' && !isAdmin ? 'user' : targetScope
       const safePath = safeScope === targetScope ? targetPath : '/'
+
+      // Auto-open the target folder before remounting the tree, so the user sees
+      // the new file land. Writes directly to the useOpenFoldersStorage key
+      // (`fileExplorer:open:{userId}`); the next FolderTree mount reads it.
+      if (user?.id && safePath !== '/') {
+        try {
+          const key = `fileExplorer:open:${user.id}`
+          const raw = window.localStorage.getItem(key)
+          const parsed = raw ? JSON.parse(raw) : { user: [], global: [] }
+          const list: string[] = Array.isArray(parsed[safeScope]) ? parsed[safeScope] : []
+          if (!list.includes(safePath)) {
+            list.push(safePath)
+            parsed[safeScope] = list
+            window.localStorage.setItem(key, JSON.stringify(parsed))
+          }
+        } catch { /* localStorage disabled — non-fatal */ }
+      }
+
       onUpload(file, safePath, safeScope)
+      setUploadRefreshKey((k) => k + 1)
       e.target.value = ''
     }
   }
@@ -174,11 +199,13 @@ export default function FileExplorerPanel({
             scope="global"
             onDeleteDocument={onDelete}
             onRenameDocument={onRename}
+            externalRefreshKey={uploadRefreshKey}
           />
           <RootSection
             scope="user"
             onDeleteDocument={onDelete}
             onRenameDocument={onRename}
+            externalRefreshKey={uploadRefreshKey}
           />
         </div>
       </DndContext>
