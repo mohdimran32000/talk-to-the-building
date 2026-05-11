@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Phase 6 / Plan 01 COMPLETE — DocumentResponse.content_markdown_status field added to backend/app/models/schemas.py (commit 8009e97; 1 file / 1 insertion / 0 deletions); UI-08 backend prerequisite closed; SUMMARY at .planning/phases/06-file-explorer-ui-cluster/06-01-SUMMARY.md; Plan 06-02 (admin@test.com seed) next in Wave 0; Phase 6: 1/12 plans complete."
-last_updated: "2026-05-11T05:07:50.440Z"
+stopped_at: Completed 06-03-PLAN.md (deps + 6 shadcn primitives); next is 06-02 (admin@test.com seed) to close Wave 0
+last_updated: "2026-05-11T05:35:49.655Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 46
-  completed_plans: 35
-  percent: 76
+  completed_plans: 36
+  percent: 78
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 06 (file-explorer-ui-cluster) — EXECUTING
-Plan: 2 of 12
-Status: Plan 06-01 complete; Plan 06-02 next (Wave 0)
-Last activity: 2026-05-11 -- Phase 6 / Plan 01 complete (DocumentResponse.content_markdown_status; commit 8009e97)
+Plan: 3 of 12
+Status: Ready to execute
+Last activity: 2026-05-11
 
-Progress: [████████░░] 76% (35/46 plans complete; Phase 6: 1/12)
+Progress: [████████░░] 78%
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Progress: [████████░░] 76% (35/46 plans complete; Phase 6: 1
 
 *Updated after each plan completion*
 | Phase 06 P01 | 1min | 1 tasks | 1 files |
+| Phase 06 P03 | 9min | - tasks | - files |
 
 ## Accumulated Context
 
@@ -163,6 +164,9 @@ Recent decisions affecting current work:
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
 - [Phase 06]: Phase 6 / Plan 01: DocumentResponse.content_markdown_status added as Optional[str] = None — Pydantic stays permissive (no Literal/enum) so legacy NULL rows pass through and Migration 014 CHECK remains the single source of truth for the vocabulary — Decouples wire-response model from DB-level CHECK so future DROP/ADD CONSTRAINT changes do not require a coordinated backend release
 - [Phase 06]: Phase 6 / Plan 01: Zero-router-code-change minimal-diff repair — adding a Pydantic field to a FastAPI response_model alone flips a previously-stripped DB column to wire-serialized, provided the router constructs the response via row-spread or select-star auto-serialization (D-03 verified by PATTERNS.md). Diff stat: 1 file, 1 insertion, 0 deletions — When DB column exists but wire response strips it, the bug is at the Pydantic layer — fix it there, not in routers; canonical minimal-diff pattern for this class of bug
+- [Phase ?]: Phase 6 / Plan 03: --save-exact for @dnd-kit/core@6.3.1 + @dnd-kit/sortable@10.0.0 — researcher-verified React-19 compat; pin prevents minor-drift regressions on the load-bearing DnD layer for Plan 06-10
+- [Phase ?]: Phase 6 / Plan 03: This codebase uses the radix-ui umbrella package (^1.4.3), NOT individual @radix-ui/react-* subpackages — shadcn-generated primitives import from 'radix-ui' umbrella. Future plans must not try to install the per-primitive subpackages
+- [Phase ?]: Phase 6 / Plan 03: shadcn@3.8.4 add ... --yes does NOT auto-decline per-file overwrite prompts; workaround is to pipe printf-n into stdin OR scope each call to primitives not yet on disk — established as the CLI handling pattern for shadcn additions in this project
 
 ### Pending Todos
 
@@ -189,8 +193,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-11T05:07:50.434Z
-Stopped at: Phase 5 / Plan 07 CLOSED — operator-confirmed TEST-03 27/0 with verbatim Section 4 PASS line; SUMMARY.md at .planning/phases/05-explorer-sub-agent-sse-protocol-generalization/05-07-SUMMARY.md; 05-HUMAN-UAT.md updated (status partial -> passed; ## Closed Gaps section with Gap 1 closure record + commit b9f69ba); STATE/ROADMAP/REQUIREMENTS updated. Phase 6 (File-Explorer UI Cluster) unblocked at the API contract level. Module 8 Gap 2 (Docling-pending environmental — out of scope) and UAT Tests 2+5 (browser + LangSmith UI — operator-pending) remain tracked but do not gate Phase 6.
+Last session: 2026-05-11T05:35:49.639Z
+Stopped at: Completed 06-03-PLAN.md (deps + 6 shadcn primitives); next is 06-02 (admin@test.com seed) to close Wave 0
 
 Earlier session: 2026-05-07 (Phase 3 / Plan 06 executed — code-complete; verification gate awaits operator backend restart)
 Earlier stopped at: Phase 3 / Plan 06 CODE-COMPLETE — both code tasks shipped with verifier gates green; Task 3 focused-suite run BLOCKED on operator stale-backend pre-req (canary correctly caught it). Task 1 (commit d0a446e): backend/scripts/test_folders.py created with 591 lines, 10 named h.section() groups, and 36 h.test() assertions (vs. 350-line / 25-assertion / 8-section minimums). Module structure: stdlib imports (concurrent.futures, os, sys, uuid) -> third-party (requests) -> two-step sys.path bootstrap -> import test_helpers as h + from app.services.folder_service import normalize_path + from supabase import create_client. Module-level _tracked_documents + _tracked_folders + _tracked_storage_paths lists; CAPYBARA_TEXT fixture; STORAGE_BUCKET literal "documents"; helpers _service_role_client (mirrors auth.py:8-12), _track_doc, _track_folder, _raises (substring-checked exception assertion), _verify_phase3_setup (canary: rpc('rename_folder_prefix', ...) probe + GET /api/folders 401 probe with [FATAL] messages naming the responsible plan), _cleanup (per-id .delete().eq() in finally; defense-in-depth two-step chunks-then-document; storage paths via service-role .remove([...]) — CLAUDE.md cleanup discipline preserved verbatim). 10 sections: FOLDER-02 service surface (5 import smokes for list_folder/create_folder/move_document/rename_folder/delete_folder); FOLDER-06 router CRUD (POST + GET + auth check); FOLDER-06 admin gate (non-admin POST scope=global -> 403, admin POST scope=global -> 200 + user_id IS NULL); FOLDER-03 atomic rename (insert via service-role at /rename-src + POST /api/folders + PATCH to /rename-dst + folder_path readback); FOLDER-03 transactional rollback (psycopg2 connection autocommit=True + CREATE OR REPLACE FUNCTION public.test_rename_folder_prefix_fails_midway with the same signature as the real RPC + sb_admin.rpc invocation + assert raises + assert folder_path UNCHANGED + DROP FUNCTION IF EXISTS in finally — gracefully SKIPs without DATABASE_URL); FOLDER-04 non-empty rejected (insert doc + POST folder + DELETE -> 409 + assert error=FOLDER_NOT_EMPTY + document_count >= 1 + no-orphan readback); FOLDER-05 dedup key (upload F at /a -> action='created'; same F at /a -> 'skipped'; same F at /b -> 'created' — FOLDER-05 acceptance contract empirically locked end-to-end via the upload path); FOLDER-07 files router extensions (upload?folder_path/scope -> 200 with folder_path+scope set; PATCH file_name -> 200; PATCH folder_path -> 200; PATCH {} -> 400; PATCH scope+file_name -> 200 with scope unchanged — three-layer scope-immutability defense empirically locked at the API surface); Cross-user isolation (user A POST private folder + service-role insert at user A's UUID + user B GET -> 0 docs — first codebase instance of testing the doc-side RLS filter from the API surface); Pitfall 10 concurrent upload no-orphan (concurrent.futures.ThreadPoolExecutor max_workers=10 + 10 parallel POST /api/files/upload to /test-race-{uuid} + assert all 200 + assert SELECT id FROM folders WHERE path=race_path returns 0 rows — Strategy B locked empirically). One Rule-1 deviation: docstring rephrase from 'no TRUNCATE' to 'no whole-table wipes' to satisfy case-insensitive `'TRUNCATE' not in body.upper()` verifier gate (same Docstring-content discipline pattern Plan 04 established for Depends(get_admin_user) collisions; third instance in the codebase). Task 2 (commit 2b4c315): backend/scripts/test_all.py modified with two single-line edits — `import test_folders         # NEW (Phase 3)` between import test_files and import test_backfill; `("Folders", test_folders),       # NEW (Phase 3 — folders is logically a Files extension)` between ("Files", test_files) and ("Backfill", test_backfill); SUITES count grows 14 -> 15; verifier gates assert import order AND SUITES tuple order both contiguous (Files->Folders->Backfill). Task 3 BLOCKED on operator stale-backend pre-req: probe of localhost:8001/openapi.json at execution time showed 10 routes mounted (no folder routes; no PATCH /api/files/{file_id}) — the running uvicorn process predates Plans 04+05 and has stale module imports; main.py source code at HEAD is correct (folders.router registered at L23 alongside threads/messages/files/settings). Per checkpoint_handling instructions in the executor prompt ("if red, save an [issues] section in SUMMARY.md and STOP — do not run the full sweep, do not auto-fix") the orchestrator did NOT kill+restart the backend; documented in SUMMARY § Issues Encountered with operator-action steps + verification command (curl /openapi.json -> expect 23 routes including /api/folders + PATCH /api/files/{file_id}). This is the same outcome Phase 2 / Plan 04 documented (operator-pre-req runbook gap discovered) — the canary did its job by surfacing the gap with maximum signal-to-noise (single FAIL h.test + actionable [FATAL] message naming both `from app.routers import folders` AND `app.include_router(folders.router)` in main.py + a uvicorn restart command). Phase 3 progress: 6/6 plans CODE-COMPLETE; Phase 3 verification gate (focused suite green) is gated on operator backend restart.

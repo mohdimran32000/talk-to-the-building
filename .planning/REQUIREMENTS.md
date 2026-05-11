@@ -70,11 +70,11 @@
 - [ ] **UI-01**: `FileExplorerPanel.tsx` replaces flat `FileUploadPanel.tsx` in `Chat.tsx`
 - [ ] **UI-02**: Two top-level sections rendered simultaneously ("Shared" + "My Files"), not tabs
 - [ ] **UI-03**: Recursive `FolderTree` with expand/collapse; open-folder state persisted in `localStorage` per user
-- [ ] **UI-04**: Folder CRUD via right-click `ContextMenu` (Create / Rename / Delete with confirm) and inline buttons
+- [ ] **UI-04**: Folder CRUD via right-click `ContextMenu` (Create / Rename / Delete with confirm) and inline buttons — *primitive installed Phase 6 / Plan 03 (shadcn ContextMenu); full UI wiring lands in Plan 06-09*
 - [ ] **UI-05**: Upload-into-folder (drop file onto folder, or pick folder before upload) — replaces flat upload
-- [ ] **UI-06**: Drag-move single document with shadcn-style drop indicator; confirm-on-cross-scope move modal
+- [ ] **UI-06**: Drag-move single document with shadcn-style drop indicator; confirm-on-cross-scope move modal — *dnd-kit packages + shadcn AlertDialog primitive installed Phase 6 / Plan 03; drag-move logic + BLOCK modal wiring lands in Plan 06-10*
 - [ ] **UI-07**: Document rename in place
-- [x] **UI-08**: Breadcrumbs, inline file count per folder, scope badges on documents, `content_markdown_status` badge for pending/failed re-index
+- [ ] **UI-08**: Breadcrumbs, inline file count per folder, scope badges on documents, `content_markdown_status` badge for pending/failed re-index — *backend status field landed Phase 6 / Plan 01; shadcn Badge primitive installed Phase 6 / Plan 03; UI placement of badges + breadcrumbs lands later in the phase*
 - [ ] **UI-09**: Keyboard navigation (arrow keys for tree expand/collapse)
 - [ ] **UI-10**: `MessageList` `SubAgentSection` extended (recursively, not forked) to render Explorer's nested tool rows
 - [ ] **UI-11**: Admin-only affordance for global-scope writes (visible only when `isAdmin === true`)
@@ -184,11 +184,11 @@
 | UI-01 | Phase 6 | Pending |
 | UI-02 | Phase 6 | Pending |
 | UI-03 | Phase 6 | Pending |
-| UI-04 | Phase 6 | Pending |
+| UI-04 | Phase 6 | Pending (Plan 06-03 installed ContextMenu primitive; wiring in Plan 06-09) |
 | UI-05 | Phase 6 | Pending |
-| UI-06 | Phase 6 | Pending |
+| UI-06 | Phase 6 | Pending (Plan 06-03 installed dnd-kit + AlertDialog primitive; wiring in Plan 06-10) |
 | UI-07 | Phase 6 | Pending |
-| UI-08 | Phase 6 | Complete |
+| UI-08 | Phase 6 | Pending (Plan 06-01 backend status field + Plan 06-03 Badge primitive; UI placement later in phase) |
 | UI-09 | Phase 6 | Pending |
 | UI-10 | Phase 6 | Pending |
 | UI-11 | Phase 6 | Pending |
@@ -213,4 +213,4 @@
 
 ---
 *Requirements defined: 2026-05-01*
-*Last updated: 2026-05-10 — Phase 5 / Plan 07 closes Phase 5: EXPLORER-01..06 + TEST-03 all marked complete (operator-confirmed TEST-03 27/0 with verbatim Section 4 PASS line; Plan 07 lazy-bind fix at commit b9f69ba; SUMMARY at .planning/phases/05-explorer-sub-agent-sse-protocol-generalization/05-07-SUMMARY.md). Phase 5 closes green: all 7 Phase-5 requirements ✅. Phase 6 (File Explorer UI) unblocked at the API contract level.*
+*Last updated: 2026-05-11 — Phase 6 / Plan 03 installs frontend dep foundation: @dnd-kit/core@6.3.1 + @dnd-kit/sortable@10.0.0 (exact pins), plus six shadcn primitives (context-menu, dialog, alert-dialog, badge, tooltip, separator) — un-edited CLI output. UI-04 / UI-06 / UI-08 remain PENDING because this plan only installs the primitives; the actual wiring lands in Plans 06-09 (ContextMenu CRUD), 06-10 (dnd-kit drag-move + cross-scope BLOCK modal), and later (badge placement). The Plan-03 frontmatter's `requirements: [UI-04, UI-06, UI-08]` declaration was over-claiming and is corrected here — those reqs are foundation-installed, not user-functional-complete.*

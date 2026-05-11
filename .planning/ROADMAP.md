@@ -207,7 +207,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 0** *(parallel-safe foundation — no inter-deps; 5 plans)*
 - [x] 06-01-PLAN.md — Extend DocumentResponse with content_markdown_status (D-03 backend Pydantic add) (UI-08)
 - [ ] 06-02-PLAN.md — Provision admin@test.com via seed script + migration 021 (D-02) (UI-11, TEST-05)
-- [ ] 06-03-PLAN.md — Install @dnd-kit + 6 shadcn primitives (UI-04, UI-06, UI-08)
+- [x] 06-03-PLAN.md — Install @dnd-kit + 6 shadcn primitives (UI-04, UI-06, UI-08)
 - [ ] 06-04-PLAN.md — Close Phase 5 dual-emit window: delete 5 backend yields + 5 frontend SSE branches; add 1 generalized branch (UI-10)
 - [ ] 06-12-PLAN.md — Extend GET /api/folders subfolders → Array<{id, path}> (D-06 / checker BLOCKER #1) + FolderRef + FolderListResponse Pydantic models + pytest (FOLDER-04, FOLDER-06, UI-04, UI-07)
 
@@ -238,7 +238,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
 | 4. Five Exploration Tools + search_documents Extension | 9/9 | Complete    | 2026-05-09 |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 7/7 | Complete    | 2026-05-10 |
-| 6. File-Explorer UI Cluster | 1/12 | In Progress|  |
+| 6. File-Explorer UI Cluster | 2/12 | In Progress|  |
 
 ## Critical Path & Parallelization
 
