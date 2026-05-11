@@ -48,19 +48,41 @@ export function useOpenFoldersStorage(userId: string | null) {
     setOpenFolders(readStorage(userId))
   }, [userId])
 
-  // Debounced persistence (250ms per CONTEXT.md / RESEARCH.md)
+  // Debounced persistence (250ms per CONTEXT.md / RESEARCH.md) +
+  // synchronous flush on pagehide so the write survives a navigation/reload
+  // that fires before the debounce timer (UI-03 persistence contract).
   useEffect(() => {
     if (!userId) return
-    if (writeTimer.current) clearTimeout(writeTimer.current)
-    writeTimer.current = setTimeout(() => {
+    const flush = () => {
       try {
         window.localStorage.setItem(storageKey(userId), JSON.stringify(openFolders))
       } catch {
         // Quota exceeded or storage disabled — non-fatal
       }
-    }, 250)
+    }
+    if (writeTimer.current) clearTimeout(writeTimer.current)
+    writeTimer.current = setTimeout(flush, 250)
+
+    const onPageHide = () => {
+      if (writeTimer.current) {
+        clearTimeout(writeTimer.current)
+        writeTimer.current = null
+      }
+      flush()
+    }
+    window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('beforeunload', onPageHide)
+
     return () => {
-      if (writeTimer.current) clearTimeout(writeTimer.current)
+      window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('beforeunload', onPageHide)
+      // Flush any pending debounced write so a remount within the same JS
+      // context (e.g. user-id change) does not drop the latest state.
+      if (writeTimer.current) {
+        clearTimeout(writeTimer.current)
+        writeTimer.current = null
+        flush()
+      }
     }
   }, [openFolders, userId])
 

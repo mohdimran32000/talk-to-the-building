@@ -511,7 +511,7 @@ test.describe('Console Errors', () => {
 // (folder ids, document ids) and deletes only those — NEVER blanket-delete user data.
 
 test.describe('FileExplorer @phase6', () => {
-  test.describe.configure({ mode: 'serial' })
+  test.describe.configure({ mode: 'serial', timeout: 60000 })
 
   /**
    * Pitfall 12 structural invariant: MessageList.tsx must NOT contain agent-type
@@ -553,6 +553,7 @@ test.describe('FileExplorer @phase6', () => {
 
   // UI-03: folder open state persists across reload (per useOpenFoldersStorage).
   test('UI-03 folder open state persists across reload @phase6', async ({ page }) => {
+    test.setTimeout(60000)
     await signIn(page)
     const created: string[] = []
     try {
@@ -560,15 +561,17 @@ test.describe('FileExplorer @phase6', () => {
       created.push(folder.id)
       await page.reload()
       await expect(page.getByRole('button', { name: '+ New Chat' })).toBeVisible({ timeout: 15000 })
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 15000 })
       // Find the row for the created folder (my-files scope) and toggle it open
       const row = page.locator('[data-folder-path="/phase6-persist"][data-scope="user"]').first()
-      await expect(row).toBeVisible({ timeout: 10000 })
+      await expect(row).toBeVisible({ timeout: 15000 })
       await row.locator('button[tabindex="0"]').first().click()
       await expect(row).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
       // Reload and verify aria-expanded persists
       await page.reload()
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 15000 })
       const rowAfter = page.locator('[data-folder-path="/phase6-persist"][data-scope="user"]').first()
-      await expect(rowAfter).toHaveAttribute('aria-expanded', 'true', { timeout: 10000 })
+      await expect(rowAfter).toHaveAttribute('aria-expanded', 'true', { timeout: 15000 })
     } finally {
       for (const id of created) await apiDelete(page, `/api/folders/${id}`)
     }
@@ -619,7 +622,9 @@ test.describe('FileExplorer @phase6', () => {
         await fileInput.setInputFiles(tmpPath)
         await expect(page.getByText('phase6_nonempty.txt').first()).toBeVisible({ timeout: 15000 })
       } finally {
-        fs.unlinkSync(tmpPath)
+        // Windows can briefly hold the file handle after Playwright uploads it (EBUSY).
+        // Cleanup is best-effort — orphans are rare and harmless under e2e/.
+        try { fs.unlinkSync(tmpPath) } catch { /* tolerated */ }
       }
 
       // Capture the document id for cleanup
@@ -627,9 +632,10 @@ test.describe('FileExplorer @phase6', () => {
       const docId = await docHandle.getAttribute('data-document-id')
       if (docId) createdDocs.push(docId)
 
-      // Right-click the folder row and select Delete; expect server-supplied counts.
-      await row.click({ button: 'right' })
-      await page.getByRole('menuitem', { name: /delete/i }).click()
+      // Right-click the folder HEADER (not the whole div, which contains the
+      // expanded child document row and would open the document's context menu).
+      await row.locator('button[tabindex="0"]').first().click({ button: 'right' })
+      await page.getByRole('menuitem', { name: /^delete$/i }).click()
       // Trigger the actual DELETE call via the dialog confirm button to fetch counts
       const confirmBtn = page.getByRole('button', { name: /^delete$/i })
       await expect(confirmBtn).toBeVisible({ timeout: 5000 })
