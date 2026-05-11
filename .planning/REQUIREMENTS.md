@@ -77,7 +77,7 @@
 - [x] **UI-08**: Breadcrumbs, inline file count per folder, scope badges on documents, `content_markdown_status` badge for pending/failed re-index — *backend status field landed Phase 6 / Plan 01; shadcn Badge primitive installed Phase 6 / Plan 03; UI placement of badges + breadcrumbs lands later in the phase*
 - [x] **UI-09**: Keyboard navigation (arrow keys for tree expand/collapse)
 - [x] **UI-10**: `MessageList` `SubAgentSection` extended (recursively, not forked) to render Explorer's nested tool rows
-- [ ] **UI-11**: Admin-only affordance for global-scope writes (visible only when `isAdmin === true`)
+- [x] **UI-11**: Admin-only affordance for global-scope writes (visible only when `isAdmin === true`)
 
 ### Tests
 
@@ -85,7 +85,7 @@
 - [x] **TEST-02**: `test_exploration_tools.py` — 200-folder fixture for tree truncation, 5000-doc fixture for grep perf (assert Bitmap Index Scan in EXPLAIN), CRLF/Unicode/single-long-line/mixed-ending fixtures for read_document, adversarial-payload fixtures for empty-response guard
 - [x] **TEST-03**: `test_explorer_sub_agent.py` — MAX_TURNS bound, timeout, no-progress detector, recursive-sub-agent rejection ✅ Phase 5 / Plan 06 (test suite created; ~700 LOC; 10 sections) + Plan 07 (operator-confirmed full-suite green at `Results: 27 passed, 0 failed`; commit b9f69ba)
 - [ ] **TEST-04**: `test_two_scope_rls.py` — full cross-user × cross-scope matrix
-- [ ] **TEST-05**: Frontend Playwright additions in `e2e/full-suite.spec.ts` for folder tree, drag-move, sub-agent activity card
+- [x] **TEST-05**: Frontend Playwright additions in `e2e/full-suite.spec.ts` for folder tree, drag-move, sub-agent activity card
 
 ## v2 Requirements
 
@@ -191,12 +191,12 @@
 | UI-08 | Phase 6 | Pending (Plan 06-01 backend status field + Plan 06-03 Badge primitive; UI placement later in phase) |
 | UI-09 | Phase 6 | Complete |
 | UI-10 | Phase 6 | Complete |
-| UI-11 | Phase 6 | Pending |
+| UI-11 | Phase 6 | Complete |
 | TEST-01 | Phase 3 | Complete |
 | TEST-02 | Phase 4 | Complete |
 | TEST-03 | Phase 5 | ✅ Complete (Plan 05-06 suite + Plan 05-07 operator-confirmed `Results: 27 passed, 0 failed`; commit b9f69ba) |
 | TEST-04 | Phase 1 | Pending |
-| TEST-05 | Phase 6 | Pending |
+| TEST-05 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 55 total
