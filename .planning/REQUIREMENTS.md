@@ -70,10 +70,10 @@
 - [ ] **UI-01**: `FileExplorerPanel.tsx` replaces flat `FileUploadPanel.tsx` in `Chat.tsx`
 - [ ] **UI-02**: Two top-level sections rendered simultaneously ("Shared" + "My Files"), not tabs
 - [ ] **UI-03**: Recursive `FolderTree` with expand/collapse; open-folder state persisted in `localStorage` per user
-- [ ] **UI-04**: Folder CRUD via right-click `ContextMenu` (Create / Rename / Delete with confirm) and inline buttons — *primitive installed Phase 6 / Plan 03 (shadcn ContextMenu); full UI wiring lands in Plan 06-09*
+- [x] **UI-04**: Folder CRUD via right-click `ContextMenu` (Create / Rename / Delete with confirm) and inline buttons — *primitive installed Phase 6 / Plan 03 (shadcn ContextMenu); full UI wiring lands in Plan 06-09*
 - [ ] **UI-05**: Upload-into-folder (drop file onto folder, or pick folder before upload) — replaces flat upload
 - [ ] **UI-06**: Drag-move single document with shadcn-style drop indicator; confirm-on-cross-scope move modal — *dnd-kit packages + shadcn AlertDialog primitive installed Phase 6 / Plan 03; drag-move logic + BLOCK modal wiring lands in Plan 06-10*
-- [ ] **UI-07**: Document rename in place
+- [x] **UI-07**: Document rename in place
 - [ ] **UI-08**: Breadcrumbs, inline file count per folder, scope badges on documents, `content_markdown_status` badge for pending/failed re-index — *backend status field landed Phase 6 / Plan 01; shadcn Badge primitive installed Phase 6 / Plan 03; UI placement of badges + breadcrumbs lands later in the phase*
 - [ ] **UI-09**: Keyboard navigation (arrow keys for tree expand/collapse)
 - [x] **UI-10**: `MessageList` `SubAgentSection` extended (recursively, not forked) to render Explorer's nested tool rows
@@ -187,7 +187,7 @@
 | UI-04 | Phase 6 | Pending (Plan 06-03 installed ContextMenu primitive; wiring in Plan 06-09) |
 | UI-05 | Phase 6 | Pending |
 | UI-06 | Phase 6 | Pending (Plan 06-03 installed dnd-kit + AlertDialog primitive; wiring in Plan 06-10) |
-| UI-07 | Phase 6 | Pending |
+| UI-07 | Phase 6 | Complete |
 | UI-08 | Phase 6 | Pending (Plan 06-01 backend status field + Plan 06-03 Badge primitive; UI placement later in phase) |
 | UI-09 | Phase 6 | Pending |
 | UI-10 | Phase 6 | Complete |

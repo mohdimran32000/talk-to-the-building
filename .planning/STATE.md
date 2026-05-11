@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-03-PLAN.md (deps + 6 shadcn primitives); next is 06-02 (admin@test.com seed) to close Wave 0
-last_updated: "2026-05-11T05:50:09.958Z"
+stopped_at: Completed 06-12-PLAN.md (D-06 folder-id wire contract — GET /api/folders subfolders[].id); Wave 0 D-06 blocker on Plan 06-09 closed end-to-end. Next is 06-05 / Wave 1 frontend pickups now that the backend wire shape carries UUIDs.
+last_updated: "2026-05-11T05:55:22.805Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 46
-  completed_plans: 37
-  percent: 80
+  completed_plans: 38
+  percent: 83
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 06 (file-explorer-ui-cluster) — EXECUTING
-Plan: 4 of 12
+Plan: 5 of 12
 Status: Ready to execute
 Last activity: 2026-05-11
 
-Progress: [████████░░] 80%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [████████░░] 80%
 | Phase 06 P01 | 1min | 1 tasks | 1 files |
 | Phase 06 P03 | 9min | - tasks | - files |
 | Phase 06 P04 | 6min | 2 tasks | 2 files |
+| Phase 06 P12 | 8 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -169,6 +170,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 6 / Plan 03: This codebase uses the radix-ui umbrella package (^1.4.3), NOT individual @radix-ui/react-* subpackages — shadcn-generated primitives import from 'radix-ui' umbrella. Future plans must not try to install the per-primitive subpackages
 - [Phase ?]: Phase 6 / Plan 03: shadcn@3.8.4 add ... --yes does NOT auto-decline per-file overwrite prompts; workaround is to pipe printf-n into stdin OR scope each call to primitives not yet on disk — established as the CLI handling pattern for shadcn additions in this project
 - [Phase ?]: Phase 6 / Plan 04: Closed Phase 5 dual-emit SSE window in single commit pair (messages.py + api.ts); generalized envelope is now the sole shape; switch-on-event consumer pattern replaces 5 parallel else-if branches
+- [Phase ?]: Phase 6 / Plan 12 (D-06): GET /api/folders subfolders[] returns Array<{id: UUID | null, path: string}> instead of bare strings. Inferred-only folders (folders row absent) carry id=null so frontend can disable rename/delete affordances; explicit folders carry their UUID for one-round-trip PATCH/DELETE wiring (closes Plan 06-09 blocker).
 
 ### Pending Todos
 
@@ -195,7 +197,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-11T05:49:51.505Z
+Last session: 2026-05-11T05:55:16.402Z
 Stopped at: Completed 06-03-PLAN.md (deps + 6 shadcn primitives); next is 06-02 (admin@test.com seed) to close Wave 0
 
 Earlier session: 2026-05-07 (Phase 3 / Plan 06 executed — code-complete; verification gate awaits operator backend restart)

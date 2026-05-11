@@ -209,7 +209,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] 06-02-PLAN.md — Provision admin@test.com via seed script + migration 021 (D-02) (UI-11, TEST-05)
 - [x] 06-03-PLAN.md — Install @dnd-kit + 6 shadcn primitives (UI-04, UI-06, UI-08)
 - [x] 06-04-PLAN.md — Close Phase 5 dual-emit window: delete 5 backend yields + 5 frontend SSE branches; add 1 generalized branch (UI-10)
-- [ ] 06-12-PLAN.md — Extend GET /api/folders subfolders → Array<{id, path}> (D-06 / checker BLOCKER #1) + FolderRef + FolderListResponse Pydantic models + pytest (FOLDER-04, FOLDER-06, UI-04, UI-07)
+- [x] 06-12-PLAN.md — Extend GET /api/folders subfolders → Array<{id, path}> (D-06 / checker BLOCKER #1) + FolderRef + FolderListResponse Pydantic models + pytest (FOLDER-04, FOLDER-06, UI-04, UI-07)
 
 **Wave 1** *(blocked on Wave 0 — depends on backend types + new deps + closed SSE window + D-06 folder-id contract)*
 - [ ] 06-05-PLAN.md — api.ts folder/document CRUD methods + Pitfall 5 typed deleteFolder + D-06 typed FolderRef + ListFolderResponse (depends_on: 06-01, 06-04, **06-12**) (UI-04, UI-05, UI-06, UI-07, UI-08)
