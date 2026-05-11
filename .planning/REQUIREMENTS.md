@@ -74,7 +74,7 @@
 - [ ] **UI-05**: Upload-into-folder (drop file onto folder, or pick folder before upload) — replaces flat upload
 - [ ] **UI-06**: Drag-move single document with shadcn-style drop indicator; confirm-on-cross-scope move modal
 - [ ] **UI-07**: Document rename in place
-- [ ] **UI-08**: Breadcrumbs, inline file count per folder, scope badges on documents, `content_markdown_status` badge for pending/failed re-index
+- [x] **UI-08**: Breadcrumbs, inline file count per folder, scope badges on documents, `content_markdown_status` badge for pending/failed re-index
 - [ ] **UI-09**: Keyboard navigation (arrow keys for tree expand/collapse)
 - [ ] **UI-10**: `MessageList` `SubAgentSection` extended (recursively, not forked) to render Explorer's nested tool rows
 - [ ] **UI-11**: Admin-only affordance for global-scope writes (visible only when `isAdmin === true`)
@@ -188,7 +188,7 @@
 | UI-05 | Phase 6 | Pending |
 | UI-06 | Phase 6 | Pending |
 | UI-07 | Phase 6 | Pending |
-| UI-08 | Phase 6 | Pending |
+| UI-08 | Phase 6 | Complete |
 | UI-09 | Phase 6 | Pending |
 | UI-10 | Phase 6 | Pending |
 | UI-11 | Phase 6 | Pending |

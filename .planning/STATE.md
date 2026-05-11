@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Phase 5 / Plan 07 CLOSED — operator-confirmed TEST-03 27/0 with verbatim Section 4 PASS line; SUMMARY.md at .planning/phases/05-explorer-sub-agent-sse-protocol-generalization/05-07-SUMMARY.md; 05-HUMAN-UAT.md updated (status partial -> passed; ## Closed Gaps section with Gap 1 closure record + commit b9f69ba); STATE/ROADMAP/REQUIREMENTS updated. Phase 6 (File-Explorer UI Cluster) unblocked at the API contract level. Module 8 Gap 2 (Docling-pending environmental — out of scope) and UAT Tests 2+5 (browser + LangSmith UI — operator-pending) remain tracked but do not gate Phase 6."
-last_updated: "2026-05-10T19:18:31.979Z"
-last_activity: 2026-05-10 -- Phase 6 planning complete
+stopped_at: "Phase 6 / Plan 01 COMPLETE — DocumentResponse.content_markdown_status field added to backend/app/models/schemas.py (commit 8009e97; 1 file / 1 insertion / 0 deletions); UI-08 backend prerequisite closed; SUMMARY at .planning/phases/06-file-explorer-ui-cluster/06-01-SUMMARY.md; Plan 06-02 (admin@test.com seed) next in Wave 0; Phase 6: 1/12 plans complete."
+last_updated: "2026-05-11T05:07:50.440Z"
+last_activity: 2026-05-11
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 46
-  completed_plans: 34
-  percent: 74
+  completed_plans: 35
+  percent: 76
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-01)
 
 **Core value:** The agent can locate the *right* piece of information in a large, organized knowledge base — using semantic search when meaning matters and codebase-style traversal (tree/glob/grep/read) when precision matters — without hallucinating across unrelated material.
-**Current focus:** Phase 05 — explorer-sub-agent-sse-protocol-generalization
+**Current focus:** Phase 06 — file-explorer-ui-cluster
 
 ## Current Position
 
-Phase: 6
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-05-10 -- Phase 6 planning complete
+Phase: 06 (file-explorer-ui-cluster) — EXECUTING
+Plan: 2 of 12
+Status: Plan 06-01 complete; Plan 06-02 next (Wave 0)
+Last activity: 2026-05-11 -- Phase 6 / Plan 01 complete (DocumentResponse.content_markdown_status; commit 8009e97)
 
-Progress: [██████████] 100% (18/18 plans complete: Phase 1 = 8/8, Phase 2 = 4/4, Phase 3 = 6/6); Project: 33% (2/6 phases complete; Phase 3 code-complete pending verification)
+Progress: [████████░░] 76% (35/46 plans complete; Phase 6: 1/12)
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [██████████] 100% (18/18 plans complete: Phase 1 =
 - Trend: ✅ on-spec; Phase 3 Wave 4 done (test_folders.py + SUITES registration). New patterns documented this plan: deliberate-fail PL/pgSQL fixture lifecycle inside a single test (CREATE OR REPLACE in setup, DROP FUNCTION IF EXISTS in finally — psycopg2 connection with autocommit=True for the DDL; reusable for any future transactional-contract test); ThreadPoolExecutor(max_workers=10) parallel-upload fixture for Pitfall 10 / Strategy B locking (10 brand-new path uploads -> all 200 + zero folders rows asserted via service-role SELECT — empirically locks Strategy B); RuntimeResponse stub pattern for capturing exceptions in concurrent worker fns without losing the test fixture (sentinel object with status_code=0 lets assertion code use one getattr idiom across real + sentinel results); test-level RLS isolation check from the API surface (insert via service-role at user A's UUID, then GET as user B via JWT — assert empty documents list; first codebase instance of testing the doc-side RLS filter from the API surface — test_two_scope_rls.py tests it at the Supabase-client level only); Docstring-content discipline pattern extended to a third file in the codebase (test_folders.py docstring rephrase to avoid TRUNCATE token; Plan 04 established the pattern for forbidden-token verifier gates; Plan 06 reused). Phase 3 closes pending operator backend restart + focused-suite green run.
 
 *Updated after each plan completion*
+| Phase 06 P01 | 1min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -160,6 +161,8 @@ Recent decisions affecting current work:
 - Phase 5 / Plan 07 (executed): **Lazy-bind import pattern for test patchability is now codebase convention** — when a downstream test must monkeypatch a factory function on a source module (e.g. `oc._get_client = lambda: stub_client`) AND a sibling module needs to consume that factory, the sibling MUST resolve the symbol via attribute access on the source module (not a re-bound local name): `from app.services import openai_client as _openai_client; ... _openai_client._get_client()`. The `from X import Y` form binds the symbol into the importer's namespace at import time, defeating the monkeypatch. Codified in sub_agent.py:13-15 with a grep-able `Phase 5 / Plan 07 gap-closure` marker comment. Zero production behavior delta — live `_get_client()` factory still returns the same client instance — but the test stub at `oc._get_client = lambda: stub_client` now reaches Explorer's call site. Pattern reusable for any future test that needs to stub a factory function consumed by a sibling module. Plan 07 fix commit b9f69ba; TEST-03 27/0; Section 4 verbatim PASS: `EXPLORER-02 no-progress: exactly ONE sub_agent_tool_start emitted before short-circuit`
 - Phase 5 / Plan 07 (executed): **Method-A-only diagnostic discipline for import-binding bugs** — Python's `from X import Y` semantics are deterministic; a code-read of (a) the import line in the consumer module, (b) the call-site line in the consumer module, and (c) the test patch line on the source module is sufficient evidence. Method B (instrumentation) is reserved for cases where the import semantics are non-deterministic (e.g., star imports, runtime `__import__` calls, conditional imports). Plan 07 Task 1 used Method A only; no `[diag]` line was ever added to the file (`grep -c "diag-plan-07\|\[diag\]" backend/app/services/sub_agent.py` returns 0). Convention extends to any future "test stub doesn't reach the production code path" diagnostic
 - Phase 6: Drag-drop uses native HTML5 (no `react-arborist` / `dnd-kit` / `react-dnd`)
+- [Phase 06]: Phase 6 / Plan 01: DocumentResponse.content_markdown_status added as Optional[str] = None — Pydantic stays permissive (no Literal/enum) so legacy NULL rows pass through and Migration 014 CHECK remains the single source of truth for the vocabulary — Decouples wire-response model from DB-level CHECK so future DROP/ADD CONSTRAINT changes do not require a coordinated backend release
+- [Phase 06]: Phase 6 / Plan 01: Zero-router-code-change minimal-diff repair — adding a Pydantic field to a FastAPI response_model alone flips a previously-stripped DB column to wire-serialized, provided the router constructs the response via row-spread or select-star auto-serialization (D-03 verified by PATTERNS.md). Diff stat: 1 file, 1 insertion, 0 deletions — When DB column exists but wire response strips it, the bug is at the Pydantic layer — fix it there, not in routers; canonical minimal-diff pattern for this class of bug
 
 ### Pending Todos
 
@@ -186,7 +189,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-10 (Phase 5 / Plan 07 closed — gap-closure complete; SC1 runtime gate green; Phase 5 closes)
+Last session: 2026-05-11T05:07:50.434Z
 Stopped at: Phase 5 / Plan 07 CLOSED — operator-confirmed TEST-03 27/0 with verbatim Section 4 PASS line; SUMMARY.md at .planning/phases/05-explorer-sub-agent-sse-protocol-generalization/05-07-SUMMARY.md; 05-HUMAN-UAT.md updated (status partial -> passed; ## Closed Gaps section with Gap 1 closure record + commit b9f69ba); STATE/ROADMAP/REQUIREMENTS updated. Phase 6 (File-Explorer UI Cluster) unblocked at the API contract level. Module 8 Gap 2 (Docling-pending environmental — out of scope) and UAT Tests 2+5 (browser + LangSmith UI — operator-pending) remain tracked but do not gate Phase 6.
 
 Earlier session: 2026-05-07 (Phase 3 / Plan 06 executed — code-complete; verification gate awaits operator backend restart)
@@ -212,7 +215,7 @@ Apply-path note: Migration 019 was applied via Supabase MCP `apply_migration` in
 
 Carry-forward from Phase 1: still pending — commit 017.sql; align Episode-1 test_settings/test_hybrid/test_tools admin assumption (the 23 FAILs in the cross-suite sweep result; tracked but out of scope for Phases 2/3+). The 017.sql carry-forward is a documentation/migration-naming follow-up, not a missing plan.
 
-Resume file: Phase 3 verification gate — operator must (1) stop the stale backend on localhost:8001, (2) restart `cd backend && venv\Scripts\python -m uvicorn app.main:app --reload --port 8001`, (3) verify `curl /openapi.json` shows 23 routes (including /api/folders + /api/folders/{folder_id} + PATCH /api/files/{file_id}), (4) optionally export DATABASE_URL so the FOLDER-03 transactional rollback test runs (gracefully SKIPs without it), (5) run `cd backend && venv\Scripts\python scripts\test_folders.py` — expected `Results: 36 passed, 0 failed` (35 if DATABASE_URL not set, with the rollback SKIP counting as a PASS). Once the focused suite is green, Phase 3 closes and Phase 4 (tools — list_folder + atomic-rename + dedup-key contracts now empirically validated) is unblocked at the contract level. The Phase-1 carry-forward 23 FAILs in test_all.py remain out of scope for Phase 3.
+Resume file: None
 
 Phase 5 (complete) recap:
 
