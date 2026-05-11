@@ -1,49 +1,80 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { Message } from '@/lib/api'
-import ToolActivity, { type ToolStep } from './ToolActivity'
+import type { Message, ToolUsedEntry } from '@/lib/api'
+import ToolActivity, { type ToolStep, ToolCallRow } from './ToolActivity'
 
 interface MessageListProps {
   messages: Message[]
   streamingContent: string
   isStreaming: boolean
-  subAgentContent?: string
-  isSubAgentActive?: boolean
-  subAgentDocName?: string
+  liveSubAgentTrace?: ToolUsedEntry | null
   toolSteps?: ToolStep[]
   isToolThinking?: boolean
 }
 
-function SubAgentSection({
-  documentName,
-  content,
-  isActive,
-  defaultExpanded = false,
-}: {
-  documentName: string
-  content?: string
-  isActive?: boolean
+// Phase 6 / Plan 06-07 — Pitfall 12 compliant SubAgentSection.
+// ONE component for BOTH analyze_document and explore_knowledge_base.
+// Agent-type strings appear ONLY inside `label` useMemo (presentation-string
+// formatting). The recursion seam is `tool.tool_calls?.map(...)` — same shape
+// for both agent types: empty array for analyze_document, populated for Explorer.
+interface SubAgentSectionProps {
+  tool: ToolUsedEntry
+  isLive?: boolean
   defaultExpanded?: boolean
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded)
+}
+
+function SubAgentSection({ tool, isLive, defaultExpanded = false }: SubAgentSectionProps) {
+  const [expanded, setExpanded] = useState(isLive ?? defaultExpanded)
+  // Presentation-only string formatting via lookup map (NOT a behavior fork —
+  // Pitfall 12 invariant: no if/ternary/switch on tool.tool gates JSX output.
+  // The label MAP-LOOKUP below produces presentation text only; the same JSX
+  // shape renders for every agent type.)
+  const label = useMemo(() => {
+    const LABELS: Record<string, { live: string; done: string }> = {
+      analyze_document: {
+        live: `Analyzing "${tool.document_name}"...`,
+        done: `Analyzed "${tool.document_name}"`,
+      },
+      explore_knowledge_base: {
+        live: `Exploring: ${tool.question}`,
+        done: `Explored: ${tool.question}`,
+      },
+    }
+    const entry = LABELS[tool.tool] ?? {
+      live: `Running ${tool.tool}`,
+      done: `Used ${tool.tool}`,
+    }
+    return isLive ? entry.live : entry.done
+  }, [tool, isLive])
 
   return (
     <div className="border-l-2 border-blue-400/50 pl-3 ml-1 my-2">
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
       >
         <span className="font-mono">{expanded ? '▼' : '▶'}</span>
-        <span>
-          {isActive ? `Analyzing "${documentName}"...` : `Used: analyze_document on "${documentName}"`}
-        </span>
-        {isActive && <span className="animate-pulse ml-1">●</span>}
+        <span>{label}</span>
+        {isLive && <span className="animate-pulse ml-1">●</span>}
       </button>
-      {expanded && content && (
-        <div className="mt-1 text-xs opacity-80">
-          <MarkdownContent content={content} />
-        </div>
+      {expanded && (
+        <>
+          {/* Recursion seam — empty array for analyze_document, populated for explore_knowledge_base. NO if-branch on agent type. */}
+          {tool.tool_calls && tool.tool_calls.length > 0 && (
+            <div className="mt-1 space-y-1">
+              {tool.tool_calls.map((call, i) => (
+                <ToolCallRow key={i} call={call} />
+              ))}
+            </div>
+          )}
+          {tool.sub_agent_result && (
+            <div className="mt-1 text-xs opacity-80">
+              <MarkdownContent content={tool.sub_agent_result} />
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -102,7 +133,7 @@ function MarkdownContent({ content }: { content: string }) {
 
 export default function MessageList({
   messages, streamingContent, isStreaming,
-  subAgentContent = '', isSubAgentActive = false, subAgentDocName = '',
+  liveSubAgentTrace = null,
   toolSteps = [], isToolThinking = false,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -136,11 +167,7 @@ export default function MessageList({
             {msg.role === 'assistant' && msg.tool_metadata?.tools_used?.length ? (
               <>
                 {msg.tool_metadata.tools_used.map((tool, i) => (
-                  <SubAgentSection
-                    key={i}
-                    documentName={tool.document_name || 'unknown'}
-                    content={tool.sub_agent_result}
-                  />
+                  <SubAgentSection key={i} tool={tool as ToolUsedEntry} />
                 ))}
                 <MarkdownContent content={msg.content} />
               </>
@@ -172,19 +199,14 @@ export default function MessageList({
             {toolSteps.length > 0 && (
               <ToolActivity steps={toolSteps} />
             )}
-            {(isSubAgentActive || subAgentContent) && subAgentDocName && (
-              <SubAgentSection
-                documentName={subAgentDocName}
-                content={subAgentContent}
-                isActive={isSubAgentActive}
-                defaultExpanded={true}
-              />
+            {liveSubAgentTrace && (
+              <SubAgentSection tool={liveSubAgentTrace} isLive defaultExpanded />
             )}
             {streamingContent ? (
               <MarkdownContent content={streamingContent} />
-            ) : !isToolThinking && !isSubAgentActive && !subAgentContent && toolSteps.length === 0 ? (
+            ) : !isToolThinking && !liveSubAgentTrace && toolSteps.length === 0 ? (
               <span className="text-muted-foreground animate-pulse">Thinking...</span>
-            ) : !streamingContent && toolSteps.length > 0 && toolSteps.every(s => s.status === 'done') && !isSubAgentActive ? (
+            ) : !streamingContent && toolSteps.length > 0 && toolSteps.every(s => s.status === 'done') && !liveSubAgentTrace ? (
               <span className="text-muted-foreground animate-pulse mt-1 block">Generating response...</span>
             ) : null}
           </div>
