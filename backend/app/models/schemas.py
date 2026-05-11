@@ -39,6 +39,7 @@ class DocumentResponse(BaseModel):
     error_message: Optional[str] = None
     content_hash: Optional[str] = None
     metadata: Optional[dict] = None
+    content_markdown_status: Optional[str] = None  # 'ready' | 'pending' | 'failed' | 'requires_user_reupload' (Migration 014; D-03)
     folder_path: str = "/"              # NEW (Phase 3 / FOLDER-07) — default preserves existing-row response shape
     scope: str = "user"                 # NEW (Phase 3 / FOLDER-07) — default preserves existing-row response shape
     action: Optional[str] = None  # "created" | "skipped" | "updated" (only on upload response)
