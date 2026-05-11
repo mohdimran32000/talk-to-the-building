@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import ThreadSidebar from '@/components/ThreadSidebar'
 import MessageList from '@/components/MessageList'
 import MessageInput from '@/components/MessageInput'
-import FileUploadPanel from '@/components/FileUploadPanel'
+import FileExplorerPanel from '@/components/FileExplorerPanel'
 import MetadataFilterBar from '@/components/MetadataFilterBar'
 import {
   getThreads,
@@ -63,10 +63,10 @@ export default function Chat() {
     }
   }, [])
 
-  const handleUploadFile = async (file: File) => {
+  const handleUploadFile = async (file: File, folder_path: string = '/', scope: 'user' | 'global' = 'user') => {
     setIsUploading(true)
     try {
-      const uploaded = await uploadFile(file)
+      const uploaded = await uploadFile(file, folder_path, scope)
 
       if (uploaded.action === 'skipped') {
         toast.info('File already uploaded with identical content — skipped')
@@ -92,9 +92,28 @@ export default function Chat() {
     }
   }
 
-  const handleStatusUpdate = useCallback((documentId: string, status: string, errorMessage?: string) => {
+  // Phase 6 / Plan 06-08 LOCKED signature (checker WARNING #3): fourth optional contentMarkdownStatus
+  // propagates content_markdown_status from FileExplorerPanel polling into the row.
+  const handleStatusUpdate = useCallback((
+    documentId: string,
+    status: string,
+    errorMessage?: string,
+    contentMarkdownStatus?: string,
+  ) => {
     setFiles((prev) =>
-      prev.map((f) => (f.id === documentId ? { ...f, status: status as UploadedFile['status'], error_message: errorMessage || f.error_message } : f))
+      prev.map((f) => {
+        if (f.id !== documentId) return f
+        return {
+          ...f,
+          status: status as UploadedFile['status'],
+          error_message: errorMessage ?? f.error_message,
+          // Only overwrite content_markdown_status if the polling callback supplied a non-null value
+          content_markdown_status:
+            contentMarkdownStatus !== undefined
+              ? (contentMarkdownStatus as UploadedFile['content_markdown_status'])
+              : f.content_markdown_status,
+        }
+      })
     )
     // Reload files when a document becomes ready to get its metadata
     if (status === 'ready') {
@@ -351,9 +370,8 @@ export default function Chat() {
           </div>
         ) : (
           <>
-            <FileUploadPanel
+            <FileExplorerPanel
               files={files}
-              isUploading={isUploading}
               onUpload={handleUploadFile}
               onDelete={handleDeleteFile}
               onStatusUpdate={handleStatusUpdate}

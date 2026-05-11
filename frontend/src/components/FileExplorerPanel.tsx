@@ -35,7 +35,7 @@ export default function FileExplorerPanel({
   const inputRef = useRef<HTMLInputElement>(null)
   const [selectedFolder, setSelectedFolder] = useState<SelectedFolder>({ scope: 'user', path: '/' })
 
-  // Polling pattern — verbatim from FileUploadPanel.tsx:60-85; ALSO poll content_markdown_status (D-03 / UI-08)
+  // Polling pattern — ALSO poll content_markdown_status (D-03 / UI-08)
   useEffect(() => {
     const hasPending = files.some(
       (f) => f.status === 'pending' || f.status === 'processing' || f.content_markdown_status === 'pending'
