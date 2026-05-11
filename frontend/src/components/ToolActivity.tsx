@@ -1,12 +1,57 @@
 import { useState } from 'react'
+import {
+  Folder,
+  FolderTree as FolderTreeIcon,
+  FileSearch,
+  Search as SearchIcon,
+  Eye,
+  FileText,
+} from 'lucide-react'
+import type { ToolCallEntry } from '@/lib/api'
 
 export interface ToolStep {
   tool: string
   args?: Record<string, any>
   detail?: string
   status: 'running' | 'done'
-  isSubAgent?: boolean   // Phase 5 NEW — true when this step came from a sub-agent's inner tool dispatch
-  turn?: number          // Phase 5 NEW — Explorer turn index (0..7)
+}
+
+// Phase 6 / Plan 06-07 — Explorer sub-agent inner-tool icon map.
+// Used by ToolCallRow (sibling of ToolStepRow) when rendering nested tool calls
+// under a SubAgentSection. Main-agent tools still flow through ToolStepRow.
+const EXPLORER_TOOL_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  tree: FolderTreeIcon,
+  list_files: Folder,
+  glob: FileSearch,
+  grep: SearchIcon,
+  read_document: Eye,
+  search_documents: SearchIcon,
+  analyze_document: FileText,
+}
+
+function summarizeArgs(args: Record<string, unknown> | undefined): string {
+  if (!args) return ''
+  const arg = (args.path ?? args.pattern ?? args.query ?? args.document_name ?? args.question) as string | undefined
+  return typeof arg === 'string' ? arg : ''
+}
+
+export interface ToolCallRowProps {
+  call: ToolCallEntry
+}
+
+export function ToolCallRow({ call }: ToolCallRowProps) {
+  const Icon = EXPLORER_TOOL_ICON[call.tool] ?? SearchIcon
+  const summary = summarizeArgs(call.args as Record<string, unknown> | undefined)
+  return (
+    <div className="ml-4 flex items-center gap-2 text-xs text-muted-foreground">
+      <Icon className="w-3 h-3 shrink-0" />
+      <span className="font-mono shrink-0">{call.tool}</span>
+      {summary && <span className="italic truncate" title={summary}>{summary}</span>}
+      {typeof call.turn === 'number' && (
+        <span className="ml-auto shrink-0 text-muted-foreground/60">turn {call.turn}</span>
+      )}
+    </div>
+  )
 }
 
 interface ToolActivityProps {
