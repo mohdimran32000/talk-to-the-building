@@ -135,7 +135,11 @@ def list_folder(
         {
           "path": str,                # normalized path
           "documents": list[dict],    # rows where folder_path == path (filtered by scope)
-          "subfolders": list[str],    # UNION of explicit folders rows + inferred from documents
+          "subfolders": list[dict],   # each item: {"id": str | None, "path": str}
+                                      # id is the folders-table UUID when an explicit row
+                                      # exists, None when the folder is inferred from
+                                      # documents only (D-06; consumed by Plan 06-05/06-06
+                                      # frontend to wire PATCH/DELETE /api/folders/{id}).
         }
 
     Subfolder discovery:
@@ -185,9 +189,12 @@ def list_folder(
     # Predicate "immediate child of norm":
     #   if norm == '/': path != '/' AND path NOT LIKE '/%/%'
     #   else:           path LIKE norm||'/%' AND path NOT LIKE norm||'/%/%'
-    explicit_subfolders: list[str] = []
+    # D-06: each item is {"id": <uuid str>, "path": <str>} so the GET /api/folders
+    # wire shape carries a UUID the frontend can use to call PATCH/DELETE
+    # /api/folders/{id} without a separate path->id lookup round-trip.
+    explicit_subfolders: list[dict] = []
     try:
-        f_q = supabase_client.table("folders").select("path")
+        f_q = supabase_client.table("folders").select("id, path")
         if scope == "user":
             f_q = f_q.eq("scope", "user").eq("user_id", user_id)
         elif scope == "global":
@@ -205,7 +212,10 @@ def list_folder(
             esc = _escape_like(norm)
             f_q = f_q.like("path", f"{esc}/%").not_.like("path", f"{esc}/%/%")
         f_resp = f_q.execute()
-        explicit_subfolders = [row["path"] for row in (f_resp.data or [])]
+        explicit_subfolders = [
+            {"id": row["id"], "path": row["path"]}
+            for row in (f_resp.data or [])
+        ]
     except Exception as e:
         # MD-03: log explicit-folders query failures (see comment on the
         # documents-query block above for rationale).
@@ -245,8 +255,15 @@ def list_folder(
         # MD-03: log inferred-subfolders query failures (see documents-query block above).
         logger.error(f"list_folder inferred-subfolders query failed for path={path!r} scope={scope!r}: {e}", exc_info=True)
 
-    # Union explicit + inferred; deduplicate; sort for deterministic output.
-    all_subfolders = sorted(set(explicit_subfolders) | inferred_subfolders)
+    # D-06: Union explicit + inferred as List[{id, path}].
+    # Explicit-folder paths carry their UUID; inferred-only paths carry id=None
+    # so the frontend can disable rename/delete affordances on them.
+    explicit_by_path: dict[str, str] = {f["path"]: f["id"] for f in explicit_subfolders}
+    all_paths = sorted(set(explicit_by_path.keys()) | inferred_subfolders)
+    all_subfolders = [
+        {"id": explicit_by_path.get(p), "path": p}
+        for p in all_paths
+    ]
 
     return {
         "path": norm,
