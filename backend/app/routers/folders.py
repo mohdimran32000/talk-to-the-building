@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from app.auth import get_current_user, get_user_profile, get_supabase_client
-from app.models.schemas import FolderResponse, FolderCreate, FolderPatch, RenameFolderResponse
+from app.models.schemas import (
+    FolderResponse,
+    FolderCreate,
+    FolderPatch,
+    RenameFolderResponse,
+    FolderListResponse,
+)
 from app.services.folder_service import (
     normalize_path,
     list_folder,
@@ -33,7 +39,7 @@ def _require_admin(user_id: str, action: str) -> None:
         )
 
 
-@router.get("")
+@router.get("", response_model=FolderListResponse)
 async def list_folders(
     path: str = Query("/", description="Canonical folder path to list"),
     scope: str = Query("both", regex="^(user|global|both)$",

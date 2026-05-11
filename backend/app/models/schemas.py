@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 
 class ThreadCreate(BaseModel):
@@ -70,6 +70,24 @@ class RenameFolderResponse(FolderResponse):
     # alone would silently drop them via FastAPI's response_model serialization.
     documents_updated: int = 0
     folders_updated: int = 0
+
+
+class FolderRef(BaseModel):
+    """Lightweight folder reference returned by GET /api/folders subfolders[].
+
+    `id` is the UUID of the explicit folders row when one exists; `None` when the
+    folder is inferred from documents only (no explicit folders row yet).
+    Frontend uses `id` to call PATCH/DELETE /api/folders/{id} (D-06).
+    """
+    id: Optional[str] = None
+    path: str
+
+
+class FolderListResponse(BaseModel):
+    """Response model for GET /api/folders (D-06: subfolders is List[FolderRef])."""
+    path: str
+    documents: List[DocumentResponse]
+    subfolders: List[FolderRef]
 
 
 class FilePatch(BaseModel):
