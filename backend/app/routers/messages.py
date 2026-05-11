@@ -115,10 +115,6 @@ async def send_message(
                     elif agent_name == "explore_knowledge_base":
                         slot["question"] = parsed.get("question", "")
                     tool_metadata["tools_used"].append(slot)
-                    # Dual-emit window (Phase 5 ONLY — removed in Phase 6 cleanup):
-                    # 1) LEGACY shape — kept for one release for frontend back-compat
-                    yield json.dumps({"type": "sub_agent_start", **parsed})
-                    # 2) GENERALIZED envelope — Phase 6 frontend consumes this
                     yield json.dumps({
                         "type": "sub_agent",
                         "agent_name": agent_name,
@@ -137,8 +133,6 @@ async def send_message(
                             "args": parsed.get("args", {}),
                             "turn": parsed.get("turn"),
                         })
-                    # Dual-emit:
-                    yield json.dumps({"type": "sub_agent_tool_start", **parsed})
                     yield json.dumps({
                         "type": "sub_agent",
                         "agent_name": "explore_knowledge_base",
@@ -156,8 +150,6 @@ async def send_message(
                             slot["tool_calls"][-1]["result_preview"] = (
                                 parsed.get("result_preview", "")[:300]
                             )
-                    # Dual-emit:
-                    yield json.dumps({"type": "sub_agent_tool_done", **parsed})
                     yield json.dumps({
                         "type": "sub_agent",
                         "agent_name": "explore_knowledge_base",
@@ -165,7 +157,7 @@ async def send_message(
                         "payload": parsed,
                     })
                 elif event_type == "sub_agent_token":
-                    # Dual-emit: token stream from the sub-agent's compact summary.
+                    # Token stream from the sub-agent's compact summary.
                     # Generalized envelope MUST carry agent_name (uniform contract
                     # across all 5 sub-agent events — Phase 6 frontend routes by
                     # agent_name to the correct sub-agent slot). Resolve from the
@@ -173,7 +165,6 @@ async def send_message(
                     agent_name = "analyze_document"  # legacy default
                     if tool_metadata and tool_metadata.get("tools_used"):
                         agent_name = tool_metadata["tools_used"][-1].get("tool", "analyze_document")
-                    yield json.dumps({"type": "sub_agent_token", "content": data})
                     yield json.dumps({
                         "type": "sub_agent",
                         "agent_name": agent_name,
@@ -194,8 +185,6 @@ async def send_message(
                         slot = tool_metadata["tools_used"][-1]
                         slot["sub_agent_result"] = data[:300]
                         agent_name = slot.get("tool", "analyze_document")
-                    # Dual-emit:
-                    yield json.dumps({"type": "sub_agent_done"})
                     yield json.dumps({
                         "type": "sub_agent",
                         "agent_name": agent_name,
