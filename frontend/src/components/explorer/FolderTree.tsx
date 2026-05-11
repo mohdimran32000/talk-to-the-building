@@ -1,4 +1,4 @@
-import { useCallback, useRef, createContext, useContext } from 'react'
+import { useCallback, useRef, useState, createContext, useContext } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { useOpenFoldersStorage, type Scope } from '@/hooks/useOpenFoldersStorage'
 import { FolderNode } from './FolderNode'
@@ -30,6 +30,13 @@ export function FolderTree({ scope, rootPath, onDeleteDocument, onRenameDocument
   const userId = user?.id ?? null
   const expansion = useOpenFoldersStorage(userId)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Plan 06-09 Task 3d: refetch counter. After any folder CRUD mutation,
+  // the root FolderNode is force-remounted via `key={refetchCounter}` so its
+  // internal `contents` state is dropped and lazy-load triggers a fresh
+  // listFolder() call. Drilled into recursive children as onAfterMutation.
+  const [refetchCounter, setRefetchCounter] = useState(0)
+  const onAfterMutation = useCallback(() => setRefetchCounter((c) => c + 1), [])
 
   // CONTEXT.md D-04 (LOCKED): keyboard nav implements EXACTLY these keys:
   //   Right     -> expand or move into first child
@@ -91,12 +98,14 @@ export function FolderTree({ scope, rootPath, onDeleteDocument, onRenameDocument
     <ExpansionContext.Provider value={expansion}>
       <div ref={containerRef} onKeyDown={onKeyDown}>
         <FolderNode
+          key={refetchCounter}
           scope={scope}
           folderId={null}                        /* root '/' has no folders-table row (D-06); rename/delete disabled */
           path={rootPath}
           depth={0}
           isOpen={expansion.isOpen(scope, rootPath) || rootPath === '/'}
           onToggle={expansion.toggle}
+          onAfterMutation={onAfterMutation}
           onDeleteDocument={onDeleteDocument}
           onRenameDocument={onRenameDocument}
         />
