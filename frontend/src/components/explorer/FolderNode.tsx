@@ -168,10 +168,22 @@ export function FolderNode({
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation()
-                      setRenameMode(true)
+                      // D-05: ⋯ opens the SAME ContextMenu as right-click (Create / Rename / Delete),
+                      // not a rename shortcut. Dispatch a synthetic contextmenu event on the trigger
+                      // so Radix's ContextMenuTrigger opens its menu.
+                      const target = e.currentTarget as HTMLElement
+                      const rect = target.getBoundingClientRect()
+                      target.dispatchEvent(
+                        new MouseEvent('contextmenu', {
+                          bubbles: true,
+                          cancelable: true,
+                          clientX: rect.left + rect.width / 2,
+                          clientY: rect.bottom,
+                        })
+                      )
                     }}
                     className="rounded p-0.5 hover:bg-muted text-muted-foreground hover:text-foreground"
-                    title="Rename / actions"
+                    title="Folder actions"
                     aria-label={`Open ${folderName} folder menu`}
                   >
                     <MoreVertical className="w-3 h-3" />
