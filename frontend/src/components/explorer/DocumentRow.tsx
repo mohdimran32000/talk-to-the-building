@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { File as FileIcon } from 'lucide-react'
 import { toast } from 'sonner'
+import { useDraggable } from '@dnd-kit/core'
 import { renameDocument, type UploadedFile } from '@/lib/api'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { ScopeBadge } from './ScopeBadge'
@@ -25,6 +26,15 @@ export function DocumentRow({ doc, depth, onDelete, onRename }: DocumentRowProps
   const [renameMode, setRenameMode] = useState(false)
   const [renameValue, setRenameValue] = useState(doc.file_name)
 
+  // Plan 06-10: register row as a @dnd-kit drag source. FileExplorerPanel reads
+  // `data.doc` on drag end to dispatch same-scope move vs. cross-scope dialog.
+  const dragId = `doc:${doc.id}`
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: dragId,
+    data: { type: 'document', doc },
+    disabled: renameMode,                          // don't fight the inline-rename input
+  })
+
   const submitRename = async () => {
     const trimmed = renameValue.trim()
     if (!trimmed || trimmed === doc.file_name) {
@@ -47,9 +57,13 @@ export function DocumentRow({ doc, depth, onDelete, onRename }: DocumentRowProps
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          ref={setNodeRef}
+          {...attributes}
+          {...listeners}
           data-document-id={doc.id}
           data-scope={doc.scope}
-          className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-1.5 text-sm"
+          data-dragging={isDragging || undefined}
+          className={`flex items-center justify-between rounded-md bg-muted/30 px-3 py-1.5 text-sm cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-50' : ''}`}
           style={{ marginLeft: `${depth * 16}px` }}
           role="treeitem"
           aria-level={depth + 1}

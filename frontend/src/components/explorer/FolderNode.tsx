@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ChevronRight, ChevronDown, Folder, FolderOpen, Plus, MoreVertical } from 'lucide-react'
 import { toast } from 'sonner'
+import { useDroppable } from '@dnd-kit/core'
 import { listFolder, renameFolder, type ListFolderResponse, type UploadedFile } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -54,6 +55,15 @@ export function FolderNode({
   const [renameMode, setRenameMode] = useState(false)
   const [renameValue, setRenameValue] = useState(folderName)
 
+  // Plan 06-10: register folder header as a @dnd-kit drop target. The "into-folder"
+  // highlight ring shows only while a document drag is hovering over us.
+  const dropId = `folder:${scope}:${path}`
+  const { setNodeRef: setDropRef, isOver, active } = useDroppable({
+    id: dropId,
+    data: { type: 'folder', scope, path },
+  })
+  const isHotTarget = isOver && (active?.data.current as { type?: string } | undefined)?.type === 'document'
+
   // Lazy-load children on first expand (per RESEARCH.md §FileExplorerPanel "lazy loading prevents loading the entire tree upfront for a 200-folder corpus")
   useEffect(() => {
     if (!isOpen || contents !== null || loading) return
@@ -95,13 +105,15 @@ export function FolderNode({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          ref={setDropRef}
           role="treeitem"
           aria-level={depth + 1}
           aria-expanded={isOpen}
           data-folder-path={path}
           data-folder-id={folderId ?? ''}
           data-scope={scope}
-          className="group"
+          data-drop-active={isHotTarget || undefined}
+          className={`group ${isHotTarget ? 'ring-1 ring-blue-400/40 bg-blue-400/10 rounded-md' : ''}`}
         >
           <button
             type="button"
