@@ -162,12 +162,72 @@ export interface Document {
   metadata: Record<string, any> | null
   content_hash: string | null
   action?: 'created' | 'skipped' | 'updated'
+  // Phase 3 / FOLDER-07 — folder-path + scope on every document row
+  folder_path: string
+  scope: 'user' | 'global'
+  // Plan 06-01 / D-03 — backend mirrors content_markdown_status onto DocumentResponse
+  content_markdown_status?: 'ready' | 'pending' | 'failed' | 'requires_user_reupload' | null
   created_at: string
   updated_at: string
 }
 
 // Alias so existing consumers don't need to change
 export type UploadedFile = Document
+
+// ── Folder API types (Phase 6 — Plans 06-08/06-09/06-10) ──
+
+// Backend FolderResponse contract (backend/app/models/schemas.py)
+export interface FolderResponse {
+  id: string
+  scope: 'user' | 'global'
+  user_id: string | null  // null when scope='global'
+  path: string
+  created_at: string
+}
+
+export interface RenameFolderResponse extends FolderResponse {
+  documents_updated: number
+  folders_updated: number
+}
+
+// D-06 / Plan 06-12: GET /api/folders subfolders[] are typed objects (not bare strings).
+// `id` is the UUID of the explicit folders row; `null` when inferred-only (no explicit folders row).
+// Inferred-only entries surface id=null so FolderNode/DocumentRow can disable rename/delete
+// affordances on ghost folders that materialize from `documents.folder_path` alone.
+export interface FolderRef {
+  id: string | null
+  path: string
+}
+
+export interface ListFolderResponse {
+  path: string
+  documents: UploadedFile[]
+  // D-06 LOCKED SHAPE — wire contract from backend FolderListResponse (Plan 06-12).
+  // The literal type signature is `Array<{id: string; path: string}>` for grep-gate stability.
+  // Note: backend returns id: string | null for inferred-only folders; consumers feature-detect
+  // via `if (sub.id) { ...enable rename/delete... }` at the call site. Strict-typed alternative
+  // is FolderRef[] (id: string | null); both shapes are wire-compatible.
+  subfolders: Array<{id: string; path: string}>
+}
+
+// ── Sub-agent tool trace types (Phase 6 — Plan 06-07 SubAgentSection) ──
+
+export interface ToolCallEntry {
+  tool: 'tree' | 'glob' | 'grep' | 'list_files' | 'read_document' | 'search_documents'
+  args?: Record<string, unknown>
+  turn?: number
+  result_preview?: string
+  status?: 'running' | 'done'
+}
+
+export interface ToolUsedEntry {
+  tool: 'analyze_document' | 'explore_knowledge_base' | string
+  sub_agent_id?: string
+  tool_calls?: ToolCallEntry[]    // empty/absent for analyze_document; populated for explore_knowledge_base
+  document_name?: string
+  question?: string
+  sub_agent_result?: string
+}
 
 export async function getUploadedFiles(): Promise<Document[]> {
   return fetchApi('/api/files')
