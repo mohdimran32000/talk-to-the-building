@@ -214,7 +214,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Wave 1** *(blocked on Wave 0 — depends on backend types + new deps + closed SSE window + D-06 folder-id contract)*
 - [x] 06-05-PLAN.md — api.ts folder/document CRUD methods + Pitfall 5 typed deleteFolder + D-06 typed FolderRef + ListFolderResponse (depends_on: 06-01, 06-04, **06-12**) (UI-04, UI-05, UI-06, UI-07, UI-08)
 - [x] 06-06-PLAN.md — Tree primitives: FolderNode/FolderTree/RootSection/DocumentRow + Scope/StatusBadge + useOpenFoldersStorage hook + D-04 keyboard set + D-06 folderId thread (UI-02, UI-03, UI-08, UI-09)
-- [ ] 06-07-PLAN.md — SubAgentSection recursive extension (Pitfall 12) + ToolCallRow extract + Chat.tsx liveSubAgentTrace migration (UI-10)
+- [x] 06-07-PLAN.md — SubAgentSection recursive extension (Pitfall 12) + ToolCallRow extract + Chat.tsx liveSubAgentTrace migration (UI-10)
 
 **Wave 2** *(blocked on Wave 1 — composition + interaction wiring)*
 - [ ] 06-08-PLAN.md — FileExplorerPanel composition + Breadcrumbs + Chat.tsx mount swap + LOCKED 4-arg handleStatusUpdate signature; delete FileUploadPanel.tsx (UI-01, UI-02, UI-03, UI-05, UI-08)
