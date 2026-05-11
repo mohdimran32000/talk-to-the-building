@@ -67,7 +67,7 @@
 
 ### File Explorer UI
 
-- [ ] **UI-01**: `FileExplorerPanel.tsx` replaces flat `FileUploadPanel.tsx` in `Chat.tsx`
+- [x] **UI-01**: `FileExplorerPanel.tsx` replaces flat `FileUploadPanel.tsx` in `Chat.tsx`
 - [x] **UI-02**: Two top-level sections rendered simultaneously ("Shared" + "My Files"), not tabs
 - [x] **UI-03**: Recursive `FolderTree` with expand/collapse; open-folder state persisted in `localStorage` per user
 - [x] **UI-04**: Folder CRUD via right-click `ContextMenu` (Create / Rename / Delete with confirm) and inline buttons — *primitive installed Phase 6 / Plan 03 (shadcn ContextMenu); full UI wiring lands in Plan 06-09*
@@ -181,7 +181,7 @@
 | EXPLORER-04 | Phase 5 | ✅ Complete (Plan 05-04 + Plan 05-05; TEST-03 Sections 6+7 runtime gate green) |
 | EXPLORER-05 | Phase 5 | ✅ Complete (Plan 05-04 tool_metadata accumulator refactor; TEST-03 Section 8 runtime gate green) |
 | EXPLORER-06 | Phase 5 | ✅ Complete (Plan 05-02 @traceable(run_type="chain"); TEST-03 Section 9 runtime gate green) |
-| UI-01 | Phase 6 | Pending |
+| UI-01 | Phase 6 | Complete |
 | UI-02 | Phase 6 | Complete |
 | UI-03 | Phase 6 | Complete |
 | UI-04 | Phase 6 | Pending (Plan 06-03 installed ContextMenu primitive; wiring in Plan 06-09) |
