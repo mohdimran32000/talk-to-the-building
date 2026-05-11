@@ -24,10 +24,6 @@ Decimal phases appear between their surrounding integers in numeric order.
  (completed 2026-05-09)
 - [x] **Phase 5: Explorer Sub-Agent + SSE Protocol Generalization** — `run_explorer_sub_agent` with `MAX_TURNS=8`, wall-clock timeout, no-progress detector; SSE sub-agent event protocol generalized; `messages.tool_metadata` persistence. ✅ 2026-05-10
 - [ ] **Phase 6: File-Explorer UI Cluster** — `FileExplorerPanel` cluster (two-section tree, folder CRUD, drag-move, breadcrumbs, scope badges, Explorer activity card); replaces `FileUploadPanel`; Playwright e2e additions.
-- [ ] **Phase 7: Scope-Wiring Defect Closure (WARN-01 + WARN-02)** — Propagate `documents.scope/user_id` onto `document_chunks` at ingest time; rewrite Migration 020 match RPC predicates to recognize globals; backfill existing global chunks; fix `GET /api/files` to surface globals to the polled-status pipeline. *(gap closure — audit v1.0)*
-- [ ] **Phase 8: Phase 6 Playwright Closure + Re-Verification** — Investigate and fix the residual `applied document count` `@phase6` Playwright failure; re-run full `@phase6` suite green; refresh Phase 6 VERIFICATION.md frontmatter post-fix-commits; update ROADMAP progress row. *(gap closure — audit v1.0)*
-- [ ] **Phase 9: Phase 1/2 Operator Artifacts + Test Triage** — Commit Migration 017 + `run_migrations.py`; add `setup_storage_bucket.py` runbook step; triage 5 Episode-1 admin-drift test failures; flip RLS-04 + TEST-04 REQUIREMENTS.md checkboxes. *(gap closure — audit v1.0)*
-- [ ] **Phase 10: VALIDATION.md / Nyquist Frontmatter Refresh** — Run `/gsd-validate-phase` against Phases 1–5 to refresh stale `nyquist_compliant` frontmatter and create the missing Phase 2 VALIDATION.md (tests already green; metadata never updated). *(gap closure — audit v1.0)*
 
 ## Phase Details
 
@@ -230,63 +226,6 @@ Decimal phases appear between their surrounding integers in numeric order.
 **UI hint**: yes
 **Threats / pitfalls**: Pitfall 11 (scope confusion: scope badges + distinct visual treatment for shared vs private; cross-scope move confirmation modal); Pitfall 5 (folder delete UX: confirmation modal shows actual document/subfolder count from server's structured error, not a guessed number); Pitfall 12 (UI rendering: `SubAgentSection` extended recursively — same component renders both `analyze_document` and Explorer; no `if (agentType === 'explorer')` branch).
 
-### Phase 7: Scope-Wiring Defect Closure (WARN-01 + WARN-02)
-**Goal**: Close the only functional defects flagged by the v1.0 milestone audit so the "shared knowledge base" promise of two-scope RLS holds end-to-end — non-admin users get RAG hits against `scope='global'` content, and `GET /api/files` surfaces globals to the polled-status pipeline.
-**Depends on**: Phase 1 (RLS + schema), Phase 4 (ingestion chunk path + match RPCs), Phase 3 (files router), Phase 6 (frontend polled-status consumer)
-**Requirements**: Closes functional gaps against already-satisfied requirements — SEARCH-01, SEARCH-02, RLS-02 (downstream effect), TOOL-07, FOLDER-07, UI-08 — no new REQ-IDs introduced.
-**Source**: `.planning/v1.0-MILESTONE-AUDIT.md` (WARN-01, WARN-02, Flow 5 PARTIAL)
-**Success Criteria** (what must be TRUE):
-  1. Every `document_chunks` row written by `ingestion.py` (initial create + `ingest_document_update`) carries the same `(scope, user_id)` tuple as its parent `documents` row — `scope='global'` chunks have `user_id IS NULL`; the column DEFAULT `'user'` never fires for global ingests.
-  2. Migration 021 rewrites `match_document_chunks_with_filters` and `match_document_chunks_hybrid` so the predicate is `(dc.user_id = match_user_id OR dc.scope = 'global')` (or drops `dc.user_id = match_user_id` entirely and relies on RLS); existing call sites and parameter signatures unchanged.
-  3. A backfill script `backend/scripts/backfill_global_chunk_scope.py` rewrites pre-existing `scope='global'` documents' chunk rows to `(scope='global', user_id=NULL)`; idempotent, dry-run flag, logs corrected/already-correct/error counts; safe against RLS via service-role.
-  4. `GET /api/files` (`backend/app/routers/files.py:191-194`) returns globals to non-admin users via `or_('and(scope.eq.user,user_id.eq.$1),scope.eq.global')` (mirror of `folder_service.list_folder()`); the polled-status pipeline + `hasReadyDocs` gate in `Chat.tsx` now reflect global document state for non-admins.
-  5. `test_two_scope_rls.py` adds a non-admin RAG-on-globals assertion: admin uploads `scope='global'` doc → non-admin's `search_documents` call returns at least one hit referencing that document; existing 49/0 matrix continues to pass. `test_folders.py` (or new `test_files_router.py`) confirms non-admin sees globals in `GET /api/files` response.
-  6. Audit flow 5 (Two-scope RLS isolation) moves from PARTIAL to WORKING; running `/gsd-audit-milestone` again shows `gaps.integration: []` and `gaps.flows: []`.
-**Plans**: TBD (set by `/gsd-plan-phase 7`)
-**Threats / pitfalls**: Backfill script must use service-role to bypass RLS but must NOT mutate `scope` itself (Migration 015 `forbid_scope_mutation` trigger would reject it anyway — confirm interaction); migration must preserve existing call-site arity to avoid breaking openai_client.py dispatch (Plans 04-08); files.py filter switch must mirror folder_service exactly to avoid yet another scope-filter drift in v1.1.
-
-### Phase 8: Phase 6 Playwright Closure + Re-Verification
-**Goal**: Close the one residual `@phase6` Playwright failure (`applied document count`) and refresh Phase 6 VERIFICATION.md frontmatter against the five fix commits (71ceab4 port, 642b93b D-05, 6feb599 reliability, 9ab8302 auto-open, 540efda backend fallout) that landed after the original verification was authored.
-**Depends on**: Phase 6 (codebase + Playwright suite), Phase 7 (re-run sequence executes against scope-wiring-fixed backend so flake risk is bounded)
-**Requirements**: Closes the residual TEST-05 assertion; touches UI-08 (status badge surface) indirectly via the `applied document count` test.
-**Source**: `.planning/v1.0-MILESTONE-AUDIT.md` (Phase 6 tech-debt items: 1 failed Playwright test + stale VERIFICATION.md)
-**Success Criteria** (what must be TRUE):
-  1. The `applied document count` `@phase6` test passes locally and in the full-suite run with both backend (8001) and frontend (5173) running; root cause is documented (timing? selector drift? badge math?) and fix committed atomically.
-  2. Full `cd frontend && npx playwright test e2e/full-suite.spec.ts --grep @phase6` reports 0 failures; the test-results artifact directory for the failed run is removed.
-  3. Phase 6 VERIFICATION.md frontmatter `status` flips from `human_needed` to `passed`; the document references the five fix commits and Phase 7 closure (if landed) explicitly.
-  4. ROADMAP Progress table row for Phase 6 updates to `12/12 Complete` with completion date.
-  5. `/gsd-audit-milestone` re-run shows Phase 6 verification roll-up status = `passed` and the Playwright failure no longer appears in tech debt.
-**Plans**: TBD (set by `/gsd-plan-phase 8`)
-**Threats / pitfalls**: Live-run flakiness (mitigated by Phase 7 scope-wiring fix removing one source of non-determinism); only update VERIFICATION.md frontmatter after a green run, never speculatively.
-
-### Phase 9: Phase 1/2 Operator Artifacts + Test Triage
-**Goal**: Eliminate the operator-deferred artifacts that block a clean fresh-checkout reproduction of v1.0 (Migration 017 not committed, `run_migrations.py` untracked, Storage bucket setup undocumented) and triage the 5 pre-existing Episode-1 admin-drift test failures so the test_all.py baseline is interpretable for v1.1.
-**Depends on**: Phase 1 (Migration 017 lives here), Phase 2 (Storage bucket runbook)
-**Requirements**: Closes REQUIREMENTS.md checkbox sync (RLS-04 + TEST-04 flip from `[ ]` to `[x]`) flagged in the audit; no new REQ-IDs introduced.
-**Source**: `.planning/v1.0-MILESTONE-AUDIT.md` (Phase 01 + Phase 02 tech-debt sections)
-**Success Criteria** (what must be TRUE):
-  1. Migration 017 is committed as `backend/migrations/017_profiles_admin_policy_use_is_admin_helper.sql`, matches what was applied via MCP (idempotent, IF EXISTS guards, uses `is_admin()` helper); a fresh `python backend/scripts/run_migrations.py` against a blank DB applies through 021 without SQLSTATE 42P17.
-  2. `backend/scripts/run_migrations.py` is committed and matches Phase 1 / Plan 07's canonical apply path; CI or operator runbook references it as the canonical migration entrypoint.
-  3. `backend/scripts/setup_storage_bucket.py` is added (or documented in `backend/scripts/README.md` / operator runbook) so the `documents` Storage bucket can be created without service-role programmatic detection.
-  4. The 5 Episode-1 admin-assumption test failures (Hybrid 8/2, Tools 12/2, Sub-Agents 0/1, plus the 2 carry-forward) are triaged: either `TEST_USER_A.is_admin` is flipped to `true` consistent with Episode-2 conventions, OR affected tests are rewired to use `TEST_USER_ADMIN`; `cd backend && venv/Scripts/python scripts/test_all.py` reports the new baseline with rationale documented.
-  5. REQUIREMENTS.md checkboxes flip: RLS-04 `[ ]` → `[x]`, TEST-04 `[ ]` → `[x]`; traceability table rows update from Pending to Complete with a reference to the audit's verification (test_two_scope_rls.py 49/0); coverage paragraph at the bottom remains 55/55 mapped, 0 unmapped.
-**Plans**: TBD (set by `/gsd-plan-phase 9`)
-**Threats / pitfalls**: Migration 017 .sql file must be byte-equivalent to what's already applied — diff against current DB before committing to avoid double-application drift; test triage must NOT mask real regressions — document every flip with a one-liner rationale.
-
-### Phase 10: VALIDATION.md / Nyquist Frontmatter Refresh
-**Goal**: Bring Phase 1–5 VALIDATION.md frontmatter and Phase 2's missing VALIDATION.md up to date with the already-green test suites — close the audit's `nyquist.partial_phases: 4` and `nyquist.missing_phases: 1` findings without re-running any test work that already passes.
-**Depends on**: Phase 9 (test triage; ensures any flip is reflected in metadata)
-**Requirements**: No new REQ-IDs; closes the audit's nyquist compliance roll-up.
-**Source**: `.planning/v1.0-MILESTONE-AUDIT.md` (Nyquist Compliance table)
-**Success Criteria** (what must be TRUE):
-  1. `/gsd-validate-phase 01` runs successfully — Phase 1 VALIDATION.md `nyquist_compliant` flips from `false` to `true`, `wave_0_complete` to `true`; `test_two_scope_rls.py` is recorded as the gating suite (49/0).
-  2. Phase 2 gains a `02-VALIDATION.md` authored by `/gsd-validate-phase 02`; records `test_backfill.py` 15/15 PASS as the gating suite.
-  3. `/gsd-validate-phase 03` flips Phase 3 frontmatter to `nyquist_compliant: true` after the operator green TEST-01 run (test_folders.py 33/33 or refreshed count); references the FOLDER-03 transactional-rollback skip as gated-by-DATABASE_URL, not a regression.
-  4. `/gsd-validate-phase 04` and `/gsd-validate-phase 05` refresh metadata to reflect the 78/0 and 27/0 operator-confirmed runs; no test re-implementation, frontmatter-only changes.
-  5. `/gsd-audit-milestone` re-run shows `nyquist.compliant_phases: 6 / partial_phases: 0 / missing_phases: 0 / overall: compliant`.
-**Plans**: TBD (set by `/gsd-plan-phase 10`; this phase is mostly tooling-driven — Plans may collapse to a single coordination plan invoking the per-phase validate helpers)
-**Threats / pitfalls**: Frontmatter-only churn — do not modify SUMMARY.md or VERIFICATION.md prose; if any per-phase validate helper re-runs the test suite and finds a new failure, that's a real regression — pause and route to debug rather than absorbing it silently.
-
 ## Progress
 
 **Execution Order:**
@@ -299,11 +238,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Folder Service + Routers + Dedup Extension | 6/6 | Complete    | 2026-05-09 |
 | 4. Five Exploration Tools + search_documents Extension | 9/9 | Complete    | 2026-05-09 |
 | 5. Explorer Sub-Agent + SSE Protocol Generalization | 7/7 | Complete    | 2026-05-10 |
-| 6. File-Explorer UI Cluster | 12/12 | Verification Pending (Phase 8) |  |
-| 7. Scope-Wiring Defect Closure (WARN-01 + WARN-02) | 0/TBD | Pending |  |
-| 8. Phase 6 Playwright Closure + Re-Verification | 0/TBD | Pending |  |
-| 9. Phase 1/2 Operator Artifacts + Test Triage | 0/TBD | Pending |  |
-| 10. VALIDATION.md / Nyquist Frontmatter Refresh | 0/TBD | Pending |  |
+| 6. File-Explorer UI Cluster | 8/12 | In Progress|  |
 
 ## Critical Path & Parallelization
 
@@ -328,4 +263,3 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 *Roadmap created: 2026-05-01*
 *Phase 6 plans revised: 2026-05-10 (added Plan 06-12 for D-06; split Plan 06-09 Task 3 into 4 subtasks; locked handleStatusUpdate signature; populated VALIDATION.md per-task map)*
-*Phases 7-10 added: 2026-05-11 via `/gsd-plan-milestone-gaps` from `.planning/v1.0-MILESTONE-AUDIT.md` — gap closure for WARN-01/02, Phase 6 Playwright, Phase 1/2 operator artifacts, and Nyquist frontmatter refresh*

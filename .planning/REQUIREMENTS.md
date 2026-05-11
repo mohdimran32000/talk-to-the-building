@@ -148,9 +148,9 @@
 | SCHEMA-04 | Phase 1 | ✅ Complete (Plan 03, 37853b7) |
 | SCHEMA-05 | Phase 1 | ✅ Complete (Plan 06, f36e1b7) |
 | RLS-01 | Phase 1 | ✅ Complete (Plan 05, 55077ad) |
-| RLS-02 | Phase 1 | ✅ Complete (Plan 05, 55077ad) — downstream functional defect closed in **Phase 7** (WARN-01: chunk scope/user_id propagation) |
+| RLS-02 | Phase 1 | ✅ Complete (Plan 05, 55077ad) |
 | RLS-03 | Phase 1 | ✅ Complete (Plan 05, 55077ad) — implemented via BEFORE UPDATE trigger (canonical Postgres workaround for OLD.col reference) |
-| RLS-04 | Phase 1 | Pending — checkbox sync flip from `[ ]` → `[x]` queued for **Phase 9** (test_two_scope_rls.py 49/0 already verified per audit; only metadata drift remains) |
+| RLS-04 | Phase 1 | Pending |
 | BACKFILL-01 | Phase 2 | ✅ Complete (Plan 02-02, 4dd7c4c + 91ad425) |
 | BACKFILL-02 | Phase 2 | ✅ Complete (Plan 02-03 writer 28e8fab + Plan 02-04 verifier 2ad9b78) |
 | BACKFILL-03 | Phase 2 | ✅ Complete (Plan 02-04 verifier 2ad9b78) — no-op verifier confirms Migration 012 DEFAULT did its job |
@@ -161,19 +161,19 @@
 | FOLDER-04 | Phase 3 | ✅ Complete (Plan 03-01, Migration 019 commit ca017e7) |
 | FOLDER-05 | Phase 3 | ✅ Complete (Plan 03-03, commit c86711a) |
 | FOLDER-06 | Phase 3 | ✅ Complete (Plan 03-04, commits 6049e0e + 3828e49) |
-| FOLDER-07 | Phase 3 | ✅ Complete (Plan 03-05, commits 6fdbdef + 60da21c) — downstream cosmetic gap closed in **Phase 7** (WARN-02: GET /api/files or_() filter for globals) |
+| FOLDER-07 | Phase 3 | ✅ Complete (Plan 03-05, commits 6fdbdef + 60da21c) |
 | TOOL-01 | Phase 4 | Complete |
 | TOOL-02 | Phase 4 | Complete |
 | TOOL-03 | Phase 4 | Complete |
 | TOOL-04 | Phase 4 | Complete |
 | TOOL-05 | Phase 4 | Complete |
 | TOOL-06 | Phase 4 | Complete |
-| TOOL-07 | Phase 4 | Complete — downstream functional defect for non-admin global RAG closed in **Phase 7** (WARN-01) |
+| TOOL-07 | Phase 4 | Complete |
 | TOOL-08 | Phase 4 | Complete |
 | TOOL-09 | Phase 4 | Complete |
 | TOOL-10 | Phase 4 | Complete |
-| SEARCH-01 | Phase 4 | Complete (wiring) — functional outcome on globals for non-admin closed in **Phase 7** (WARN-01) |
-| SEARCH-02 | Phase 4 | Complete (wiring) — RPC predicate rewrite in **Phase 7** (Migration 021) so chunks with scope='global' AND user_id IS NULL match for non-admins |
+| SEARCH-01 | Phase 4 | Complete |
+| SEARCH-02 | Phase 4 | Complete |
 | SEARCH-03 | Phase 4 | Complete |
 | EXPLORER-01 | Phase 5 | ✅ Complete (Plan 05-02 + TEST-03 Section 2 runtime gate green) |
 | EXPLORER-02 | Phase 5 | ✅ Complete (Plan 05-02 + Plan 05-07 lazy-bind fix commit b9f69ba; TEST-03 Section 4 27/0 — `EXPLORER-02 no-progress: exactly ONE sub_agent_tool_start emitted before short-circuit`) |
@@ -188,15 +188,15 @@
 | UI-05 | Phase 6 | Complete |
 | UI-06 | Phase 6 | Pending (Plan 06-03 installed dnd-kit + AlertDialog primitive; wiring in Plan 06-10) |
 | UI-07 | Phase 6 | Complete |
-| UI-08 | Phase 6 | Pending (Plan 06-01 backend status field + Plan 06-03 Badge primitive; UI placement later in phase) — polled-status pipeline for globals to non-admins closed in **Phase 7** (WARN-02) |
+| UI-08 | Phase 6 | Pending (Plan 06-01 backend status field + Plan 06-03 Badge primitive; UI placement later in phase) |
 | UI-09 | Phase 6 | Complete |
 | UI-10 | Phase 6 | Complete |
 | UI-11 | Phase 6 | Complete |
 | TEST-01 | Phase 3 | Complete |
 | TEST-02 | Phase 4 | Complete |
 | TEST-03 | Phase 5 | ✅ Complete (Plan 05-06 suite + Plan 05-07 operator-confirmed `Results: 27 passed, 0 failed`; commit b9f69ba) |
-| TEST-04 | Phase 1 | Pending — checkbox sync flip from `[ ]` → `[x]` queued for **Phase 9** (suite registered in test_all.py + 49/0 per audit; only metadata drift remains) |
-| TEST-05 | Phase 6 | Complete — residual `applied document count` @phase6 failure closed in **Phase 8** (Phase 6 Playwright closure + re-verification) |
+| TEST-04 | Phase 1 | Pending |
+| TEST-05 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 55 total
@@ -214,4 +214,3 @@
 ---
 *Requirements defined: 2026-05-01*
 *Last updated: 2026-05-11 — Phase 6 / Plan 03 installs frontend dep foundation: @dnd-kit/core@6.3.1 + @dnd-kit/sortable@10.0.0 (exact pins), plus six shadcn primitives (context-menu, dialog, alert-dialog, badge, tooltip, separator) — un-edited CLI output. UI-04 / UI-06 / UI-08 remain PENDING because this plan only installs the primitives; the actual wiring lands in Plans 06-09 (ContextMenu CRUD), 06-10 (dnd-kit drag-move + cross-scope BLOCK modal), and later (badge placement). The Plan-03 frontmatter's `requirements: [UI-04, UI-06, UI-08]` declaration was over-claiming and is corrected here — those reqs are foundation-installed, not user-functional-complete.*
-*Gap closure annotated: 2026-05-11 — `/gsd-plan-milestone-gaps` added Phases 7–10 from `.planning/v1.0-MILESTONE-AUDIT.md`. Affected REQs (SEARCH-01/02, RLS-02, TOOL-07, FOLDER-07, UI-08, TEST-05) carry inline closure pointers; original Phase mapping preserved because audit `gaps.requirements: []` was empty (REQs are SATISFIED at source level — Phase 7/8 close downstream functional/test defects, not unsatisfied requirements). RLS-04 + TEST-04 checkbox flips are queued for Phase 9 execution.*
