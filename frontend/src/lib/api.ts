@@ -233,13 +233,18 @@ export async function getUploadedFiles(): Promise<Document[]> {
   return fetchApi('/api/files')
 }
 
-export async function uploadFile(file: File): Promise<Document> {
+export async function uploadFile(
+  file: File,
+  folder_path: string = '/',
+  scope: 'user' | 'global' = 'user',
+): Promise<Document> {
   const token = await getToken()
   const formData = new FormData()
   formData.append('file', file)
-  const res = await fetch('/api/files/upload', {
+  const qs = new URLSearchParams({ folder_path, scope }).toString()
+  const res = await fetch(`/api/files/upload?${qs}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}` },     // NO Content-Type — let browser set multipart boundary
     body: formData,
   })
   if (!res.ok) {
@@ -251,6 +256,83 @@ export async function uploadFile(file: File): Promise<Document> {
 
 export async function deleteFile(fileId: string): Promise<void> {
   await fetchApi(`/api/files/${fileId}`, { method: 'DELETE' })
+}
+
+// ── Folder + Document CRUD (Phase 6 — Plans 06-08/06-09/06-10) ──
+
+export async function listFolder(
+  path: string = '/',
+  scope: 'user' | 'global' | 'both' = 'both',
+): Promise<ListFolderResponse> {
+  const qs = new URLSearchParams({ path, scope }).toString()
+  return fetchApi(`/api/folders?${qs}`)
+}
+
+export async function createFolder(
+  path: string,
+  scope: 'user' | 'global' = 'user',
+): Promise<FolderResponse> {
+  return fetchApi('/api/folders', {
+    method: 'POST',
+    body: JSON.stringify({ path, scope }),
+  })
+}
+
+export async function renameFolder(
+  id: string,
+  new_path: string,
+): Promise<RenameFolderResponse> {
+  return fetchApi(`/api/folders/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ new_path }),
+  })
+}
+
+export async function moveDocument(
+  id: string,
+  folder_path: string,
+): Promise<Document> {
+  return fetchApi(`/api/files/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ folder_path }),
+  })
+}
+
+export async function renameDocument(
+  id: string,
+  file_name: string,
+): Promise<Document> {
+  return fetchApi(`/api/files/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ file_name }),
+  })
+}
+
+// Pitfall 5 (RESEARCH.md §Pitfall 5): deleteFolder does NOT use fetchApi because
+// the helper throws on !res.ok and would lose the structured 409 body. The backend
+// contract is 200 {status:"deleted"} OR 409 {error:"FOLDER_NOT_EMPTY", document_count, subfolder_count}.
+export type DeleteFolderResult =
+  | { ok: true }
+  | { ok: false; error: 'FOLDER_NOT_EMPTY'; document_count: number; subfolder_count: number }
+
+export async function deleteFolder(id: string): Promise<DeleteFolderResult> {
+  const token = await getToken()
+  const res = await fetch(`/api/folders/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (res.status === 200) return { ok: true }
+  if (res.status === 409) {
+    const body = await res.json()
+    return {
+      ok: false,
+      error: body.error,           // 'FOLDER_NOT_EMPTY' per backend contract
+      document_count: body.document_count,
+      subfolder_count: body.subfolder_count,
+    }
+  }
+  const err = await res.json().catch(() => ({}))
+  throw new Error(err.detail || `Delete failed: ${res.status}`)
 }
 
 // --- Messages ---
