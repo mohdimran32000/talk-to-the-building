@@ -3,9 +3,18 @@ import { useAuth } from '@/contexts/AuthContext'
 import { Button } from '@/components/ui/button'
 import { supabase } from '@/lib/supabase'
 import { Upload } from 'lucide-react'
-import type { UploadedFile, MetadataFieldDefinition } from '@/lib/api'
+import { toast } from 'sonner'
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { moveDocument, type UploadedFile, type MetadataFieldDefinition } from '@/lib/api'
 import { RootSection } from './explorer/RootSection'
 import { Breadcrumbs } from './explorer/Breadcrumbs'
+import { CrossScopeMoveDialog } from './explorer/CrossScopeMoveDialog'
 
 export interface SelectedFolder {
   scope: 'user' | 'global'
@@ -34,6 +43,54 @@ export default function FileExplorerPanel({
   const { isAdmin } = useAuth()
   const inputRef = useRef<HTMLInputElement>(null)
   const [selectedFolder, setSelectedFolder] = useState<SelectedFolder>({ scope: 'user', path: '/' })
+
+  // Plan 06-10: DnD state for cross-scope informational dialog (D-01)
+  const [crossScopePending, setCrossScopePending] = useState<{
+    documentName: string
+    sourceScope: 'user' | 'global'
+    targetScope: 'user' | 'global'
+  } | null>(null)
+
+  // 5px activation distance disambiguates click vs drag — without it the existing
+  // onPanelClick handler would fire on every mousedown-mouseup on a row.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  )
+
+  const onDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over) return
+    const sourceData = active.data.current as
+      | { type: 'document'; doc: UploadedFile }
+      | undefined
+    const targetData = over.data.current as
+      | { type: 'folder'; scope: 'user' | 'global'; path: string }
+      | undefined
+    if (!sourceData || sourceData.type !== 'document') return
+    if (!targetData || targetData.type !== 'folder') return
+    const { doc } = sourceData
+
+    // Same-scope move — call API (UI-06 happy path)
+    if (doc.scope === targetData.scope) {
+      if (doc.folder_path === targetData.path) return                  // no-op
+      try {
+        await moveDocument(doc.id, targetData.path)
+        toast.success(`Moved "${doc.file_name}" to ${targetData.path}`)
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Move failed')
+      }
+      return
+    }
+
+    // Cross-scope: open the BLOCKING informational dialog (D-01 LOCKED).
+    // CRITICAL: do NOT call moveDocument here — Migration 015's trigger forbids
+    // scope mutation at the DB level; this dialog is the friendly explanation.
+    setCrossScopePending({
+      documentName: doc.file_name,
+      sourceScope: doc.scope,
+      targetScope: targetData.scope,
+    })
+  }
 
   // Polling pattern — ALSO poll content_markdown_status (D-03 / UI-08)
   useEffect(() => {
@@ -111,18 +168,31 @@ export default function FileExplorerPanel({
           </Button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto" data-testid="file-explorer-body" onClick={onPanelClick}>
-        <RootSection
-          scope="global"
-          onDeleteDocument={onDelete}
-          onRenameDocument={onRename}
+      <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+        <div className="flex-1 overflow-y-auto" data-testid="file-explorer-body" onClick={onPanelClick}>
+          <RootSection
+            scope="global"
+            onDeleteDocument={onDelete}
+            onRenameDocument={onRename}
+          />
+          <RootSection
+            scope="user"
+            onDeleteDocument={onDelete}
+            onRenameDocument={onRename}
+          />
+        </div>
+      </DndContext>
+      {crossScopePending && (
+        <CrossScopeMoveDialog
+          open={true}
+          onOpenChange={(o) => {
+            if (!o) setCrossScopePending(null)
+          }}
+          documentName={crossScopePending.documentName}
+          sourceScope={crossScopePending.sourceScope}
+          targetScope={crossScopePending.targetScope}
         />
-        <RootSection
-          scope="user"
-          onDeleteDocument={onDelete}
-          onRenameDocument={onRename}
-        />
-      </div>
+      )}
     </div>
   )
 }
