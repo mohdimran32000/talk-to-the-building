@@ -20,6 +20,8 @@ import {
   type Message,
   type UploadedFile,
   type MetadataFieldDefinition,
+  type ToolUsedEntry,
+  type ToolCallEntry,
 } from '@/lib/api'
 import type { ToolStep } from '@/components/ToolActivity'
 
@@ -35,9 +37,10 @@ export default function Chat() {
   const [isUploading, setIsUploading] = useState(false)
   const [metadataSchema, setMetadataSchema] = useState<MetadataFieldDefinition[] | null>(null)
   const [metadataFilters, setMetadataFilters] = useState<Record<string, any>>({})
-  const [subAgentContent, setSubAgentContent] = useState('')
-  const [isSubAgentActive, setIsSubAgentActive] = useState(false)
-  const [subAgentDocName, setSubAgentDocName] = useState('')
+  // Phase 6 / Plan 06-07 — single typed state slot replaces the Phase 5
+  // minimum-viable shape (flat sub-agent fields + boolean discriminator on
+  // toolSteps). Structural separation via own state slot replaces the boolean.
+  const [liveSubAgentTrace, setLiveSubAgentTrace] = useState<ToolUsedEntry | null>(null)
   const [toolSteps, setToolSteps] = useState<ToolStep[]>([])
   const [isToolThinking, setIsToolThinking] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -214,9 +217,7 @@ export default function Chat() {
           setMessages((prev) => [...prev, assistantMsg])
           setIsStreaming(false)
           setStreamingContent('')
-          setSubAgentContent('')
-          setIsSubAgentActive(false)
-          setSubAgentDocName('')
+          setLiveSubAgentTrace(null)
           setToolSteps([])
           setIsToolThinking(false)
           abortControllerRef.current = null
@@ -228,23 +229,33 @@ export default function Chat() {
         },
         controller.signal,
         Object.keys(metadataFilters).length > 0 ? metadataFilters : undefined,
-        // Sub-agent callbacks (Phase 5: extended to handle BOTH analyze_document
-        // payload — has document_name — AND explore_knowledge_base payload —
-        // has question. The state slot subAgentDocName now holds whichever is
-        // present; Phase 6 will refactor to a typed discriminator.)
+        // Phase 6 / Plan 06-07 — Sub-agent SSE callbacks now mutate the typed
+        // liveSubAgentTrace slot (ToolUsedEntry) instead of separate flat fields.
+        // Structural separation (own state slot) replaces the Phase 5 boolean
+        // discriminator on toolSteps per RESEARCH.md migration.
         (data) => {
-          setIsSubAgentActive(true)
-          setSubAgentDocName(data.document_name || data.question || '')
-          setSubAgentContent('')
+          setLiveSubAgentTrace({
+            tool: data.agent_name ?? (data.document_name ? 'analyze_document' : 'explore_knowledge_base'),
+            sub_agent_id: data.sub_agent_id,
+            tool_calls: [],
+            document_name: data.document_name,
+            question: data.question,
+            sub_agent_result: '',
+          })
         },
         (token) => {
-          setSubAgentContent((prev) => prev + token)
+          setLiveSubAgentTrace((prev) =>
+            prev ? { ...prev, sub_agent_result: (prev.sub_agent_result ?? '') + token } : prev
+          )
         },
         () => {
-          setIsSubAgentActive(false)
+          // The persisted message rehydrates via tool_metadata on reload; clear
+          // live trace once stream completes. (onDone above also clears it as a
+          // safety net in case the sub_agent_done event is dropped.)
+          setLiveSubAgentTrace(null)
         },
         undefined, // onError
-        // Tool activity callbacks
+        // Tool activity callbacks — main-agent tools (toolSteps[]) stay unchanged
         () => {
           setIsToolThinking(true)
         },
@@ -261,38 +272,41 @@ export default function Chat() {
             )
           )
         },
-        // Phase 5 NEW — onSubAgentToolStart: Explorer's per-turn inner tool dispatch.
-        // Append a tool step with isSubAgent flag so Phase 6's UI-10 can render
-        // these nested under the active sub-agent banner. For Phase 5 minimum-viable,
-        // they appear in the same toolSteps array as main-agent tools (Phase 6
-        // separates them visually).
+        // Phase 6 / Plan 06-07 — onSubAgentToolStart: Explorer's per-turn inner
+        // tool dispatch flows into liveSubAgentTrace.tool_calls (nested), NOT
+        // into the flat toolSteps[] array. SubAgentSection renders them as
+        // ToolCallRow under the parent agent banner during streaming.
         (data) => {
-          setToolSteps((prev) => [...prev, {
-            tool: data.tool,
-            args: data.args,
-            status: 'running' as const,
-            isSubAgent: true,
-            turn: data.turn,
-          }])
+          setLiveSubAgentTrace((prev) => {
+            if (!prev) return prev
+            const newCall: ToolCallEntry = {
+              tool: data.tool as ToolCallEntry['tool'],
+              args: data.args,
+              turn: data.turn,
+              status: 'running',
+            }
+            return { ...prev, tool_calls: [...(prev.tool_calls ?? []), newCall] }
+          })
         },
-        // Phase 5 NEW — onSubAgentToolDone: flip the matching in-flight sub-agent
-        // tool step to 'done' with result_preview as detail. Match by (isSubAgent
-        // AND tool name AND status === 'running' AND same turn) to disambiguate
-        // when multiple sub-agent tool calls are in flight (which the loop's
-        // single-turn-at-a-time discipline shouldn't allow, but defense in depth).
+        // Phase 6 / Plan 06-07 — onSubAgentToolDone: flip the matching in-flight
+        // nested tool call to 'done' with result_preview. Match by (tool name AND
+        // status 'running' AND same turn) for disambiguation defense-in-depth.
         (data) => {
-          setToolSteps((prev) =>
-            prev.map((s) =>
-              s.isSubAgent && s.tool === data.tool && s.status === 'running' && s.turn === data.turn
-                ? { ...s, status: 'done' as const, detail: data.result_preview }
-                : s
+          setLiveSubAgentTrace((prev) => {
+            if (!prev) return prev
+            const updated = (prev.tool_calls ?? []).map((c) =>
+              c.tool === data.tool && c.status === 'running' && c.turn === data.turn
+                ? { ...c, result_preview: data.result_preview, status: 'done' as const }
+                : c
             )
-          )
+            return { ...prev, tool_calls: updated }
+          })
         },
       )
     } catch (err) {
       setIsStreaming(false)
       setStreamingContent('')
+      setLiveSubAgentTrace(null)
       abortControllerRef.current = null
       if ((err as Error).name === 'AbortError') return
       toast.error(err instanceof Error ? err.message : 'Failed to send message')
@@ -304,6 +318,7 @@ export default function Chat() {
     abortControllerRef.current = null
     setIsStreaming(false)
     setStreamingContent('')
+    setLiveSubAgentTrace(null)
     // Reload messages to get whatever was persisted server-side
     if (activeThreadId) loadMessages(activeThreadId)
   }
@@ -356,9 +371,7 @@ export default function Chat() {
               messages={messages}
               streamingContent={streamingContent}
               isStreaming={isStreaming}
-              subAgentContent={subAgentContent}
-              isSubAgentActive={isSubAgentActive}
-              subAgentDocName={subAgentDocName}
+              liveSubAgentTrace={liveSubAgentTrace}
               toolSteps={toolSteps}
               isToolThinking={isToolThinking}
             />
