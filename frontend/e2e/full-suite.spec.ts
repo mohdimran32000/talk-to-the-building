@@ -1,9 +1,18 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import path from 'path'
 import fs from 'fs'
 
 const TEST_EMAIL = 'test@test.com'
 const TEST_PASSWORD = 'supabase123'
+
+// Phase 6 / Plan 06-02: admin account seeded by seed_admin_user.py + Migration 021.
+// Default password matches backend/scripts/test_helpers.py:26-29 convention.
+const TEST_ADMIN_EMAIL = 'admin@test.com'
+const TEST_ADMIN_PASSWORD = process.env.TEST_USER_ADMIN_PASSWORD ?? 'adminpassword123'
+
+// Phase 6 / Plan 06-11: API base for fixture helpers (apiPost / apiDelete).
+// Tests assume the backend runs on :8001 per CLAUDE.md.
+const API_BASE = process.env.PLAYWRIGHT_API_BASE ?? 'http://localhost:8001'
 
 /** Helper: sign in and wait for chat to load */
 async function signIn(page: import('@playwright/test').Page) {
@@ -12,6 +21,98 @@ async function signIn(page: import('@playwright/test').Page) {
   await page.getByLabel('Password').fill(TEST_PASSWORD)
   await page.getByRole('button', { name: 'Sign In' }).click()
   await expect(page.getByRole('button', { name: '+ New Chat' })).toBeVisible({ timeout: 15000 })
+}
+
+/** Helper: sign in as the seeded admin account (Plan 06-02). */
+async function signInAdmin(page: import('@playwright/test').Page) {
+  await page.goto('/login')
+  await page.getByLabel('Email').fill(TEST_ADMIN_EMAIL)
+  await page.getByLabel('Password').fill(TEST_ADMIN_PASSWORD)
+  await page.getByRole('button', { name: 'Sign In' }).click()
+  await expect(page.getByRole('button', { name: '+ New Chat' })).toBeVisible({ timeout: 15000 })
+}
+
+/** Helper: sign out (best-effort; lets a single test switch accounts). */
+async function signOut(page: import('@playwright/test').Page) {
+  const signOutBtn = page.getByRole('button', { name: /sign out/i })
+  if (await signOutBtn.isVisible().catch(() => false)) {
+    await signOutBtn.click()
+    await expect(page.getByLabel('Email')).toBeVisible({ timeout: 10000 })
+  }
+}
+
+/**
+ * Read the Supabase access token from the page's localStorage. Supabase v2 stores it
+ * under `sb-<projectRef>-auth-token`; the project ref varies per env, so we scan all
+ * localStorage keys for one matching the shape. Returns null if not signed in.
+ */
+async function getStoredToken(page: Page): Promise<string | null> {
+  return await page.evaluate(() => {
+    for (const key of Object.keys(window.localStorage)) {
+      if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
+        try {
+          const raw = window.localStorage.getItem(key)
+          if (!raw) continue
+          const parsed = JSON.parse(raw)
+          return parsed?.access_token ?? null
+        } catch {
+          continue
+        }
+      }
+    }
+    return null
+  })
+}
+
+/**
+ * apiPost — fixture helper for Phase 6 e2e tests that need to bootstrap folder
+ * structure without 5 UI clicks. Uses the page's stored Supabase JWT to call
+ * the backend. Caller MUST signIn(page) (or signInAdmin) before invoking.
+ */
+async function apiPost(page: Page, urlPath: string, body: unknown): Promise<any> {
+  const token = await getStoredToken(page)
+  if (!token) throw new Error('apiPost: no auth token in localStorage — call signIn(page) first')
+  const res = await page.request.post(`${API_BASE}${urlPath}`, {
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    data: body as Record<string, unknown>,
+  })
+  if (!res.ok()) {
+    throw new Error(`apiPost ${urlPath} failed: ${res.status()} ${await res.text()}`)
+  }
+  return res.json()
+}
+
+/**
+ * apiGet — fixture helper used in cross-scope drag test to verify the document's
+ * folder_path was NOT mutated after the BLOCK modal opened (D-01 empirical check).
+ */
+async function apiGet(page: Page, urlPath: string): Promise<any> {
+  const token = await getStoredToken(page)
+  if (!token) throw new Error('apiGet: no auth token in localStorage')
+  const res = await page.request.get(`${API_BASE}${urlPath}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok()) {
+    throw new Error(`apiGet ${urlPath} failed: ${res.status()} ${await res.text()}`)
+  }
+  return res.json()
+}
+
+/**
+ * apiDelete — fixture cleanup helper. Used in finally blocks to remove
+ * test-created folders / documents BY ID. CLAUDE.md mandatory rule: tests must
+ * NEVER delete all user data — pass specific ids only. Tolerates 404.
+ */
+async function apiDelete(page: Page, urlPath: string): Promise<void> {
+  const token = await getStoredToken(page)
+  if (!token) throw new Error('apiDelete: no auth token in localStorage')
+  const res = await page.request.delete(`${API_BASE}${urlPath}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok() && res.status() !== 404) {
+    // eslint-disable-next-line no-console
+    console.warn(`apiDelete ${urlPath} returned ${res.status()}: ${await res.text()}`)
+  }
 }
 
 // ── Auth Tests ──
