@@ -303,30 +303,31 @@ export async function sendMessage(
         const msg = parsed.content || 'An error occurred while generating the response'
         onError?.(msg)
         onToken(`\n\n**Error:** ${msg}`)
-      } else if (parsed.type === 'sub_agent_start') {
-        // Phase 5: payload may carry agent_name + question (Explorer) OR
-        // document_name (legacy analyze_document). The callback signature
-        // accepts either via optional fields.
-        onSubAgentStart?.(parsed)
-      } else if (parsed.type === 'sub_agent_token') {
-        onSubAgentToken?.(parsed.content)
-      } else if (parsed.type === 'sub_agent_tool_start') {
-        // Phase 5 NEW — Explorer's per-turn inner tool dispatch.
-        onSubAgentToolStart?.(parsed)
-      } else if (parsed.type === 'sub_agent_tool_done') {
-        // Phase 5 NEW — Explorer's per-turn inner tool result.
-        onSubAgentToolDone?.(parsed)
-      } else if (parsed.type === 'sub_agent_done') {
-        onSubAgentDone?.()
+      } else if (parsed.type === 'sub_agent') {
+        // Phase 6 (UI-10): generalized SSE envelope for all 5 sub-agent events.
+        // Backend emits `{type: 'sub_agent', agent_name, event, payload}` — the
+        // legacy `sub_agent_*` shapes (with trailing underscore) were removed
+        // in 06-04 when the Phase 5 dual-emit window closed.
+        switch (parsed.event) {
+          case 'start':
+            onSubAgentStart?.({ ...parsed.payload, agent_name: parsed.agent_name })
+            break
+          case 'token':
+            onSubAgentToken?.(parsed.payload.content)
+            break
+          case 'tool_start':
+            onSubAgentToolStart?.(parsed.payload)
+            break
+          case 'tool_done':
+            onSubAgentToolDone?.(parsed.payload)
+            break
+          case 'done':
+            onSubAgentDone?.()
+            break
+        }
       } else if (parsed.type === 'done') {
         onDone(parsed.response_id)
       }
-      // NOTE: Plan 04 backend ALSO emits a generalized `parsed.type === 'sub_agent'`
-      // envelope (dual-emit window). Phase 5 frontend intentionally listens to the
-      // LEGACY channel only to avoid double-firing callbacks. Phase 6's frontend
-      // rewrite (UI-10) will switch to the generalized envelope and Plan 04's
-      // legacy emissions will be removed in the same release per the dual-emit
-      // contract (Pitfall 12 mitigation 1).
     }
 
     if (done) break
