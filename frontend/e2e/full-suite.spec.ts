@@ -497,3 +497,501 @@ test.describe('Console Errors', () => {
     expect(criticalErrors).toHaveLength(0)
   })
 })
+
+// ── Phase 6: File Explorer Tests ──
+// Tag: @phase6 — focused-suite gate per Plan 06-11 VALIDATION.md.
+// Run: npx playwright test e2e/full-suite.spec.ts --grep '@phase6'
+//
+// CLEANUP DISCIPLINE (CLAUDE.md): every test below tracks resources it creates
+// (folder ids, document ids) and deletes only those — NEVER blanket-delete user data.
+
+test.describe('FileExplorer @phase6', () => {
+  test.describe.configure({ mode: 'serial' })
+
+  /**
+   * Pitfall 12 structural invariant: MessageList.tsx must NOT contain agent-type
+   * structural forks (if/===/switch on tool.tool that gates JSX). Label LOOKUP map
+   * via tool.tool[key] is permitted; structural if-branches are forbidden.
+   * This is the grep gate from Plan 06-11 Task 1 — runs without a browser context.
+   */
+  test('Pitfall 12 invariant: SubAgentSection has no agent-type fork @phase6', () => {
+    const srcPath = path.join(__dirname, '..', 'src', 'components', 'MessageList.tsx')
+    const src = fs.readFileSync(srcPath, 'utf8')
+    // Forbidden: if (tool.tool === 'explore_knowledge_base') { <JSX> } and similar.
+    const forbiddenIf =
+      /if\s*\(\s*tool\.(tool|name|agent|type)\s*===?\s*['"](explore_knowledge_base|analyze_document)['"]/
+    expect(src).not.toMatch(forbiddenIf)
+    // Also forbid switch(tool.tool) { case 'explore_knowledge_base': }
+    const forbiddenSwitch =
+      /switch\s*\(\s*tool\.(tool|name|agent|type)\s*\)\s*\{[\s\S]*?case\s+['"](explore_knowledge_base|analyze_document)['"]/
+    expect(src).not.toMatch(forbiddenSwitch)
+  })
+
+  // UI-01: file explorer panel renders (replaces FileUploadPanel).
+  test('UI-01 FileExplorer renders in place of FileUploadPanel @phase6', async ({ page }) => {
+    await signIn(page)
+    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+    // The legacy panel name should not appear anywhere in the DOM
+    expect(await page.getByText('FileUploadPanel', { exact: true }).count()).toBe(0)
+  })
+
+  // UI-02: two scope sections render simultaneously (not tabs).
+  test('UI-02 two scope sections render simultaneously (not tabs) @phase6', async ({ page }) => {
+    await signIn(page)
+    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Shared (global)').first()).toBeVisible()
+    await expect(page.getByText('My Files').first()).toBeVisible()
+    // No tablist inside the explorer body — the two sections render side-by-side
+    const explorer = page.getByTestId('file-explorer-body')
+    expect(await explorer.locator('[role="tablist"]').count()).toBe(0)
+  })
+
+  // UI-03: folder open state persists across reload (per useOpenFoldersStorage).
+  test('UI-03 folder open state persists across reload @phase6', async ({ page }) => {
+    await signIn(page)
+    const created: string[] = []
+    try {
+      const folder = await apiPost(page, '/api/folders', { path: '/phase6-persist', scope: 'user' })
+      created.push(folder.id)
+      await page.reload()
+      await expect(page.getByRole('button', { name: '+ New Chat' })).toBeVisible({ timeout: 15000 })
+      // Find the row for the created folder (my-files scope) and toggle it open
+      const row = page.locator('[data-folder-path="/phase6-persist"][data-scope="user"]').first()
+      await expect(row).toBeVisible({ timeout: 10000 })
+      await row.locator('button[tabindex="0"]').first().click()
+      await expect(row).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
+      // Reload and verify aria-expanded persists
+      await page.reload()
+      const rowAfter = page.locator('[data-folder-path="/phase6-persist"][data-scope="user"]').first()
+      await expect(rowAfter).toHaveAttribute('aria-expanded', 'true', { timeout: 10000 })
+    } finally {
+      for (const id of created) await apiDelete(page, `/api/folders/${id}`)
+    }
+  })
+
+  // UI-04: right-click context menu shows Create/Rename/Delete (admin on Shared).
+  test('UI-04 folder context menu shows Create/Rename/Delete @phase6', async ({ page }) => {
+    await signIn(page)
+    const created: string[] = []
+    try {
+      const folder = await apiPost(page, '/api/folders', { path: '/phase6-ctxmenu', scope: 'user' })
+      created.push(folder.id)
+      await page.reload()
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      const row = page.locator('[data-folder-path="/phase6-ctxmenu"][data-scope="user"]').first()
+      await expect(row).toBeVisible({ timeout: 10000 })
+      await row.click({ button: 'right' })
+      await expect(page.getByRole('menuitem', { name: /new folder/i })).toBeVisible({ timeout: 5000 })
+      await expect(page.getByRole('menuitem', { name: /rename/i })).toBeVisible()
+      await expect(page.getByRole('menuitem', { name: /delete/i })).toBeVisible()
+      await page.keyboard.press('Escape')
+    } finally {
+      for (const id of created) await apiDelete(page, `/api/folders/${id}`)
+    }
+  })
+
+  // UI-04 Pitfall 5: delete non-empty folder surfaces server-supplied counts.
+  test('UI-04 delete non-empty folder shows server-supplied document count @phase6', async ({ page }) => {
+    test.setTimeout(90000)
+    await signIn(page)
+    const createdFolders: string[] = []
+    const createdDocs: string[] = []
+    try {
+      const folder = await apiPost(page, '/api/folders', { path: '/phase6-nonempty', scope: 'user' })
+      createdFolders.push(folder.id)
+
+      // Upload a document into the folder via the UI (FormData; complex to issue via apiPost)
+      await page.reload()
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      const row = page.locator('[data-folder-path="/phase6-nonempty"][data-scope="user"]').first()
+      await expect(row).toBeVisible({ timeout: 10000 })
+      await row.click()  // selects the folder so upload lands here
+
+      const tmpPath = path.join(__dirname, 'phase6_nonempty.txt')
+      fs.writeFileSync(tmpPath, 'Phase 6 non-empty delete test content.')
+      try {
+        const fileInput = page.locator('input[type="file"]').first()
+        await fileInput.setInputFiles(tmpPath)
+        await expect(page.getByText('phase6_nonempty.txt').first()).toBeVisible({ timeout: 15000 })
+      } finally {
+        fs.unlinkSync(tmpPath)
+      }
+
+      // Capture the document id for cleanup
+      const docHandle = page.locator('[data-document-id]').filter({ hasText: 'phase6_nonempty.txt' }).first()
+      const docId = await docHandle.getAttribute('data-document-id')
+      if (docId) createdDocs.push(docId)
+
+      // Right-click the folder row and select Delete; expect server-supplied counts.
+      await row.click({ button: 'right' })
+      await page.getByRole('menuitem', { name: /delete/i }).click()
+      // Trigger the actual DELETE call via the dialog confirm button to fetch counts
+      const confirmBtn = page.getByRole('button', { name: /^delete$/i })
+      await expect(confirmBtn).toBeVisible({ timeout: 5000 })
+      await confirmBtn.click()
+      // After the 409, the dialog must surface the server-supplied counts literally
+      await expect(page.getByText(/contains \d+ documents?/i)).toBeVisible({ timeout: 10000 })
+      await expect(page.getByText(/\d+ subfolders?/i)).toBeVisible()
+      // Close the dialog
+      const cancelBtn = page.getByRole('button', { name: /cancel|close/i }).first()
+      if (await cancelBtn.isVisible().catch(() => false)) await cancelBtn.click()
+      else await page.keyboard.press('Escape')
+    } finally {
+      for (const id of createdDocs) await apiDelete(page, `/api/files/${id}`)
+      for (const id of createdFolders) await apiDelete(page, `/api/folders/${id}`)
+    }
+  })
+
+  // UI-05: upload lands in currently-selected folder.
+  test('UI-05 upload lands in currently-selected folder @phase6', async ({ page }) => {
+    test.setTimeout(90000)
+    await signIn(page)
+    const createdFolders: string[] = []
+    const createdDocs: string[] = []
+    try {
+      const folder = await apiPost(page, '/api/folders', { path: '/phase6-upload', scope: 'user' })
+      createdFolders.push(folder.id)
+      await page.reload()
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      const row = page.locator('[data-folder-path="/phase6-upload"][data-scope="user"]').first()
+      await expect(row).toBeVisible({ timeout: 10000 })
+      await row.click()
+
+      const tmpPath = path.join(__dirname, 'phase6_upload.txt')
+      fs.writeFileSync(tmpPath, 'Phase 6 upload-into-selected-folder test.')
+      try {
+        const fileInput = page.locator('input[type="file"]').first()
+        await fileInput.setInputFiles(tmpPath)
+        await expect(page.getByText('phase6_upload.txt').first()).toBeVisible({ timeout: 15000 })
+      } finally {
+        fs.unlinkSync(tmpPath)
+      }
+
+      const docHandle = page.locator('[data-document-id]').filter({ hasText: 'phase6_upload.txt' }).first()
+      const docId = await docHandle.getAttribute('data-document-id')
+      if (docId) createdDocs.push(docId)
+      // Verify backend stored it under /phase6-upload (read folder via API)
+      const listing = await apiGet(page, `/api/folders?path=/phase6-upload&scope=user`)
+      const fileNames = (listing.documents ?? []).map((d: any) => d.file_name)
+      expect(fileNames).toContain('phase6_upload.txt')
+    } finally {
+      for (const id of createdDocs) await apiDelete(page, `/api/files/${id}`)
+      for (const id of createdFolders) await apiDelete(page, `/api/folders/${id}`)
+    }
+  })
+
+  // UI-06 happy path: same-scope drag-move using pointer-event pattern.
+  test('UI-06 drag document to another folder in same scope moves it @phase6', async ({ page }) => {
+    test.setTimeout(120000)
+    await signIn(page)
+    const createdFolders: string[] = []
+    const createdDocs: string[] = []
+    try {
+      const dest = await apiPost(page, '/api/folders', { path: '/phase6-drag-dest', scope: 'user' })
+      createdFolders.push(dest.id)
+
+      // Upload doc to root via UI flow
+      await page.reload()
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      // Select root user
+      const rootUser = page.locator('[data-folder-path="/"][data-scope="user"]').first()
+      await expect(rootUser).toBeVisible({ timeout: 10000 })
+      await rootUser.click()
+
+      const tmpPath = path.join(__dirname, 'phase6_drag.txt')
+      fs.writeFileSync(tmpPath, 'Phase 6 drag-move test.')
+      try {
+        const fileInput = page.locator('input[type="file"]').first()
+        await fileInput.setInputFiles(tmpPath)
+        await expect(page.getByText('phase6_drag.txt').first()).toBeVisible({ timeout: 15000 })
+      } finally {
+        fs.unlinkSync(tmpPath)
+      }
+
+      const docHandle = page.locator('[data-document-id]').filter({ hasText: 'phase6_drag.txt' }).first()
+      const docId = await docHandle.getAttribute('data-document-id')
+      if (!docId) throw new Error('phase6_drag.txt did not surface a data-document-id')
+      createdDocs.push(docId)
+
+      // dnd-kit needs pointer events — NOT page.dragTo (HTML5 only).
+      // Pattern per Plan 06-11 RESEARCH.md §Wave 0 Gaps line 698.
+      const source = page.locator(`[data-document-id="${docId}"]`).first()
+      const target = page.locator('[data-folder-path="/phase6-drag-dest"][data-scope="user"]').first()
+      const sourceBox = await source.boundingBox()
+      const targetBox = await target.boundingBox()
+      if (!sourceBox || !targetBox) throw new Error('boundingBox failed for drag fixtures')
+      await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(
+        targetBox.x + targetBox.width / 2,
+        targetBox.y + targetBox.height / 2,
+        { steps: 10 }
+      )
+      await page.mouse.up()
+
+      // Verify backend folder_path was updated to /phase6-drag-dest
+      await expect.poll(
+        async () => {
+          const listing = await apiGet(page, `/api/folders?path=/phase6-drag-dest&scope=user`)
+          const names = (listing.documents ?? []).map((d: any) => d.file_name)
+          return names.includes('phase6_drag.txt')
+        },
+        { timeout: 10000, message: 'expected phase6_drag.txt to appear under /phase6-drag-dest' }
+      ).toBe(true)
+    } finally {
+      for (const id of createdDocs) await apiDelete(page, `/api/files/${id}`)
+      for (const id of createdFolders) await apiDelete(page, `/api/folders/${id}`)
+    }
+  })
+
+  // UI-06 / D-01: cross-scope drag opens BLOCKING dialog and does NOT mutate.
+  test('UI-06/D-01 cross-scope drag opens BLOCK modal and does not mutate @phase6', async ({ page }) => {
+    test.setTimeout(120000)
+    await signInAdmin(page)
+    const createdDocs: string[] = []
+    try {
+      // Upload a doc to admin's My Files root via UI
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      const rootUser = page.locator('[data-folder-path="/"][data-scope="user"]').first()
+      await expect(rootUser).toBeVisible({ timeout: 10000 })
+      await rootUser.click()
+
+      const tmpPath = path.join(__dirname, 'phase6_crossscope.txt')
+      fs.writeFileSync(tmpPath, 'Phase 6 cross-scope BLOCK modal test.')
+      try {
+        const fileInput = page.locator('input[type="file"]').first()
+        await fileInput.setInputFiles(tmpPath)
+        await expect(page.getByText('phase6_crossscope.txt').first()).toBeVisible({ timeout: 15000 })
+      } finally {
+        fs.unlinkSync(tmpPath)
+      }
+
+      const docHandle = page.locator('[data-document-id]').filter({ hasText: 'phase6_crossscope.txt' }).first()
+      const docId = await docHandle.getAttribute('data-document-id')
+      if (!docId) throw new Error('phase6_crossscope.txt did not surface a data-document-id')
+      createdDocs.push(docId)
+
+      // Capture original folder_path before drag
+      const beforeListing = await apiGet(page, `/api/folders?path=/&scope=user`)
+      const beforeDoc = (beforeListing.documents ?? []).find((d: any) => d.id === docId)
+      const originalPath = beforeDoc?.folder_path ?? '/'
+
+      // Drag onto the Shared root folder (cross-scope)
+      const source = page.locator(`[data-document-id="${docId}"]`).first()
+      const target = page.locator('[data-folder-path="/"][data-scope="global"]').first()
+      await expect(target).toBeVisible({ timeout: 5000 })
+      const sourceBox = await source.boundingBox()
+      const targetBox = await target.boundingBox()
+      if (!sourceBox || !targetBox) throw new Error('boundingBox failed for cross-scope fixtures')
+      await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(
+        targetBox.x + targetBox.width / 2,
+        targetBox.y + targetBox.height / 2,
+        { steps: 10 }
+      )
+      await page.mouse.up()
+
+      // D-01 LOCKED copy must appear verbatim — Plan 06-10 CrossScopeMoveDialog.
+      await expect(page.getByText(/Scope is permanent for security/i)).toBeVisible({ timeout: 5000 })
+
+      // Empirical: backend was NOT called — doc's folder_path unchanged + scope unchanged.
+      const afterListing = await apiGet(page, `/api/folders?path=/&scope=user`)
+      const afterDoc = (afterListing.documents ?? []).find((d: any) => d.id === docId)
+      expect(afterDoc).toBeTruthy()
+      expect(afterDoc.folder_path).toBe(originalPath)
+      expect(afterDoc.scope).toBe('user')
+
+      // Close the dialog via "Got it"
+      const gotIt = page.getByRole('button', { name: /got it/i })
+      if (await gotIt.isVisible().catch(() => false)) await gotIt.click()
+      else await page.keyboard.press('Escape')
+      await expect(page.getByText(/Scope is permanent for security/i)).not.toBeVisible({ timeout: 5000 })
+    } finally {
+      for (const id of createdDocs) await apiDelete(page, `/api/files/${id}`)
+    }
+  })
+
+  // UI-07: inline document rename via Enter key.
+  test('UI-07 rename document inline via Enter key @phase6', async ({ page }) => {
+    test.setTimeout(90000)
+    await signIn(page)
+    const createdDocs: string[] = []
+    try {
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      const rootUser = page.locator('[data-folder-path="/"][data-scope="user"]').first()
+      await expect(rootUser).toBeVisible({ timeout: 10000 })
+      await rootUser.click()
+
+      const tmpPath = path.join(__dirname, 'phase6_rename.txt')
+      fs.writeFileSync(tmpPath, 'Phase 6 inline-rename test.')
+      try {
+        const fileInput = page.locator('input[type="file"]').first()
+        await fileInput.setInputFiles(tmpPath)
+        await expect(page.getByText('phase6_rename.txt').first()).toBeVisible({ timeout: 15000 })
+      } finally {
+        fs.unlinkSync(tmpPath)
+      }
+
+      const docHandle = page.locator('[data-document-id]').filter({ hasText: 'phase6_rename.txt' }).first()
+      const docId = await docHandle.getAttribute('data-document-id')
+      if (docId) createdDocs.push(docId)
+
+      // Click the filename span (UI-07 enters rename mode)
+      await docHandle.getByText('phase6_rename.txt', { exact: false }).click()
+      const input = docHandle.locator('input').first()
+      await expect(input).toBeVisible({ timeout: 5000 })
+      await input.fill('phase6_renamed.txt')
+      await input.press('Enter')
+
+      await expect(page.getByText('phase6_renamed.txt').first()).toBeVisible({ timeout: 10000 })
+    } finally {
+      for (const id of createdDocs) await apiDelete(page, `/api/files/${id}`)
+    }
+  })
+
+  // UI-08: breadcrumbs + scope badge + status badge render.
+  test('UI-08 breadcrumbs and scope/status badges render @phase6', async ({ page }) => {
+    test.setTimeout(90000)
+    await signIn(page)
+    const createdFolders: string[] = []
+    const createdDocs: string[] = []
+    try {
+      const folder = await apiPost(page, '/api/folders', { path: '/phase6-bc', scope: 'user' })
+      createdFolders.push(folder.id)
+      await page.reload()
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+      const row = page.locator('[data-folder-path="/phase6-bc"][data-scope="user"]').first()
+      await expect(row).toBeVisible({ timeout: 10000 })
+      await row.click()
+
+      // Breadcrumbs should surface "phase6-bc" segment in the header
+      // (Breadcrumbs sits at the top of FileExplorerPanel — outside file-explorer-body.)
+      await expect(page.getByText('phase6-bc').first()).toBeVisible({ timeout: 5000 })
+
+      // Upload a doc so we can assert scope+status badges
+      const tmpPath = path.join(__dirname, 'phase6_badge.txt')
+      fs.writeFileSync(tmpPath, 'Phase 6 badge test.')
+      try {
+        const fileInput = page.locator('input[type="file"]').first()
+        await fileInput.setInputFiles(tmpPath)
+        await expect(page.getByText('phase6_badge.txt').first()).toBeVisible({ timeout: 15000 })
+      } finally {
+        fs.unlinkSync(tmpPath)
+      }
+
+      const docHandle = page.locator('[data-document-id]').filter({ hasText: 'phase6_badge.txt' }).first()
+      const docId = await docHandle.getAttribute('data-document-id')
+      if (docId) createdDocs.push(docId)
+
+      // Scope badge: 'Private' for user-scope; Status badge: at minimum 'pending'/'processing'/'ready'/'failed'
+      await expect(docHandle.getByText(/private/i)).toBeVisible({ timeout: 10000 })
+      await expect(docHandle.getByText(/pending|processing|ready|failed/i).first()).toBeVisible()
+    } finally {
+      for (const id of createdDocs) await apiDelete(page, `/api/files/${id}`)
+      for (const id of createdFolders) await apiDelete(page, `/api/folders/${id}`)
+    }
+  })
+
+  // UI-09 keyboard nav (D-04 LOCKED set: Right/Left/Up/Down/Enter/Space).
+  test('UI-09 keyboard arrows navigate the tree @phase6', async ({ page }) => {
+    await signIn(page)
+    const createdFolders: string[] = []
+    try {
+      const f = await apiPost(page, '/api/folders', { path: '/phase6-kbd', scope: 'user' })
+      createdFolders.push(f.id)
+      await page.reload()
+      await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+
+      const row = page.locator('[data-folder-path="/phase6-kbd"][data-scope="user"]').first()
+      await expect(row).toBeVisible({ timeout: 10000 })
+
+      // Focus the row's interactive button
+      const rowBtn = row.locator('button[tabindex="0"]').first()
+      await rowBtn.focus()
+
+      // Initial state: collapsed (aria-expanded=false)
+      await expect(row).toHaveAttribute('aria-expanded', 'false', { timeout: 5000 })
+
+      // ArrowRight expands
+      await page.keyboard.press('ArrowRight')
+      await expect(row).toHaveAttribute('aria-expanded', 'true', { timeout: 5000 })
+
+      // ArrowLeft collapses
+      await page.keyboard.press('ArrowLeft')
+      await expect(row).toHaveAttribute('aria-expanded', 'false', { timeout: 5000 })
+
+      // ArrowDown moves focus off the current row (we just assert focus changes)
+      const focusedBefore = await page.evaluate(() => document.activeElement?.outerHTML ?? null)
+      await page.keyboard.press('ArrowDown')
+      const focusedAfter = await page.evaluate(() => document.activeElement?.outerHTML ?? null)
+      expect(focusedAfter).not.toBe(focusedBefore)
+    } finally {
+      for (const id of createdFolders) await apiDelete(page, `/api/folders/${id}`)
+    }
+  })
+
+  // UI-10 SubAgentSection renders Explorer trace on chat reload.
+  // Skipped by default: requires a thread with explore_knowledge_base tool_metadata.
+  // Operators can seed one manually; running without a seeded thread is a no-op pass.
+  test('UI-10 SubAgentSection renders Explorer trace on chat reload @phase6', async ({ page }) => {
+    await signIn(page)
+    // Heuristic: find any thread whose conversation already includes a SubAgent label.
+    // If none exists in the test account, skip — operator note documented in SUMMARY.md.
+    const threads = page.locator('.overflow-y-auto > div')
+    const threadCount = await threads.count()
+    if (threadCount === 0) {
+      test.skip(true, 'No threads in test account — seed one with explore_knowledge_base trace to exercise UI-10')
+      return
+    }
+
+    // Try each thread until we find one with a SubAgent trace; otherwise skip.
+    let found = false
+    for (let i = 0; i < Math.min(threadCount, 5); i++) {
+      await threads.nth(i).click()
+      await page.waitForTimeout(800)
+      const subAgent = page.getByText(/explore_knowledge_base|Explorer/i).first()
+      if (await subAgent.isVisible().catch(() => false)) {
+        found = true
+        break
+      }
+    }
+    if (!found) {
+      test.skip(true, 'No thread with explore_knowledge_base trace in fixture — seed manually to exercise UI-10')
+      return
+    }
+    // Reload and verify the SubAgentSection still renders the trace
+    await page.reload()
+    await expect(page.getByText(/explore_knowledge_base|Explorer/i).first()).toBeVisible({ timeout: 10000 })
+  })
+
+  // UI-11: admin sees + New folder affordance in Shared section.
+  test('UI-11 admin sees + New folder in Shared section @phase6', async ({ page }) => {
+    await signInAdmin(page)
+    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+    const sharedSection = page.locator('section[data-root-scope="global"]').first()
+    await expect(sharedSection).toBeVisible()
+    // Section-header "+ New folder" button is gated structurally on canCreate (admin sees it)
+    await expect(sharedSection.getByRole('button', { name: /new folder/i })).toBeVisible({ timeout: 5000 })
+  })
+
+  // UI-11: non-admin does NOT see Create/Rename/Delete on Shared scope.
+  test('UI-11 non-admin does not see + New folder in Shared section @phase6', async ({ page }) => {
+    await signIn(page)
+    await expect(page.getByTestId('file-explorer-body')).toBeVisible({ timeout: 10000 })
+    const sharedSection = page.locator('section[data-root-scope="global"]').first()
+    await expect(sharedSection).toBeVisible()
+    // Section-header "+ New folder" button must be absent for non-admin (canCreate=false)
+    expect(await sharedSection.getByRole('button', { name: /new folder/i }).count()).toBe(0)
+
+    // Right-click root Shared row → must surface only the "Read-only (admin required)" item
+    const sharedRoot = page.locator('[data-folder-path="/"][data-scope="global"]').first()
+    await expect(sharedRoot).toBeVisible({ timeout: 5000 })
+    await sharedRoot.click({ button: 'right' })
+    await expect(page.getByRole('menuitem', { name: /Read-only \(admin required\)/i })).toBeVisible({ timeout: 5000 })
+    // Should NOT see destructive entries
+    expect(await page.getByRole('menuitem', { name: /^delete$/i }).count()).toBe(0)
+    expect(await page.getByRole('menuitem', { name: /^rename$/i }).count()).toBe(0)
+    await page.keyboard.press('Escape')
+  })
+})
