@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: "Completed 06-05-PLAN.md (frontend api.ts: folder + doc CRUD methods + D-06 typed FolderRef; back-compat-preserving uploadFile extension; 2 tasks / 2 commits)"
-last_updated: "2026-05-11T06:01:08.861Z"
+last_updated: "2026-05-11T06:07:55.888Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 46
-  completed_plans: 39
-  percent: 85
+  completed_plans: 40
+  percent: 87
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 06 (file-explorer-ui-cluster) — EXECUTING
-Plan: 6 of 12
+Plan: 7 of 12
 Status: Ready to execute
 Last activity: 2026-05-11
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 87%
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [█████████░] 85%
 | Phase 06 P04 | 6min | 2 tasks | 2 files |
 | Phase 06 P12 | 8 | 3 tasks | 4 files |
 | Phase 06 P05 | 2 | 2 tasks | 1 files |
+| Phase 06 P06 | 3 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -175,6 +176,10 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 6 / Plan 06-05: Pitfall-5 helper-bypass pattern applied for first time in frontend API client — deleteFolder uses bare fetch (not fetchApi) to preserve structured 409 body; DeleteFolderResult is a discriminated union exposing FOLDER_NOT_EMPTY error + document_count + subfolder_count for Plan 06-09 delete-confirm dialog
 - [Phase ?]: Phase 6 / Plan 06-05: D-06 wire shape locked in api.ts ListFolderResponse.subfolders as Array of id+path object literal — checker grep-gate anchor; FolderRef (id: string or null) also exported for consumers needing strict null-handling of inferred-only folders
 - [Phase ?]: Phase 6 / Plan 06-05: uploadFile extended with folder_path='/' and scope='user' defaults — preserves back-compat with existing Chat.tsx single-arg call site; scope defaults to 'user' (not 'global') to keep the surface safe for non-admin callers
+- [Phase ?]: Recursive FolderNode uses internal ExpansionContext to avoid prop-drilling isOpen
+- [Phase ?]: 06-06: useExpandedState is module-internal to FolderTree (not promoted to a standalone hook)
+- [Phase ?]: 06-06: Root '/' opens by default so users see top-level content on first render
+- [Phase ?]: 06-06: data-folder-id={folderId ?? ''} (empty string for null) gives Playwright a deterministic selector for inferred-only folders
 
 ### Pending Todos
 
@@ -201,7 +206,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-11T06:01:08.846Z
+Last session: 2026-05-11T06:07:55.874Z
 Stopped at: Completed 06-05-PLAN.md (frontend api.ts: folder + doc CRUD methods + D-06 typed FolderRef; back-compat-preserving uploadFile extension; 2 tasks / 2 commits)
 
 Earlier session: 2026-05-07 (Phase 3 / Plan 06 executed — code-complete; verification gate awaits operator backend restart)

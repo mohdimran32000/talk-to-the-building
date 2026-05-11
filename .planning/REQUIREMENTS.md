@@ -68,14 +68,14 @@
 ### File Explorer UI
 
 - [ ] **UI-01**: `FileExplorerPanel.tsx` replaces flat `FileUploadPanel.tsx` in `Chat.tsx`
-- [ ] **UI-02**: Two top-level sections rendered simultaneously ("Shared" + "My Files"), not tabs
-- [ ] **UI-03**: Recursive `FolderTree` with expand/collapse; open-folder state persisted in `localStorage` per user
+- [x] **UI-02**: Two top-level sections rendered simultaneously ("Shared" + "My Files"), not tabs
+- [x] **UI-03**: Recursive `FolderTree` with expand/collapse; open-folder state persisted in `localStorage` per user
 - [x] **UI-04**: Folder CRUD via right-click `ContextMenu` (Create / Rename / Delete with confirm) and inline buttons — *primitive installed Phase 6 / Plan 03 (shadcn ContextMenu); full UI wiring lands in Plan 06-09*
 - [x] **UI-05**: Upload-into-folder (drop file onto folder, or pick folder before upload) — replaces flat upload
 - [x] **UI-06**: Drag-move single document with shadcn-style drop indicator; confirm-on-cross-scope move modal — *dnd-kit packages + shadcn AlertDialog primitive installed Phase 6 / Plan 03; drag-move logic + BLOCK modal wiring lands in Plan 06-10*
 - [x] **UI-07**: Document rename in place
 - [x] **UI-08**: Breadcrumbs, inline file count per folder, scope badges on documents, `content_markdown_status` badge for pending/failed re-index — *backend status field landed Phase 6 / Plan 01; shadcn Badge primitive installed Phase 6 / Plan 03; UI placement of badges + breadcrumbs lands later in the phase*
-- [ ] **UI-09**: Keyboard navigation (arrow keys for tree expand/collapse)
+- [x] **UI-09**: Keyboard navigation (arrow keys for tree expand/collapse)
 - [x] **UI-10**: `MessageList` `SubAgentSection` extended (recursively, not forked) to render Explorer's nested tool rows
 - [ ] **UI-11**: Admin-only affordance for global-scope writes (visible only when `isAdmin === true`)
 
@@ -182,14 +182,14 @@
 | EXPLORER-05 | Phase 5 | ✅ Complete (Plan 05-04 tool_metadata accumulator refactor; TEST-03 Section 8 runtime gate green) |
 | EXPLORER-06 | Phase 5 | ✅ Complete (Plan 05-02 @traceable(run_type="chain"); TEST-03 Section 9 runtime gate green) |
 | UI-01 | Phase 6 | Pending |
-| UI-02 | Phase 6 | Pending |
-| UI-03 | Phase 6 | Pending |
+| UI-02 | Phase 6 | Complete |
+| UI-03 | Phase 6 | Complete |
 | UI-04 | Phase 6 | Pending (Plan 06-03 installed ContextMenu primitive; wiring in Plan 06-09) |
 | UI-05 | Phase 6 | Complete |
 | UI-06 | Phase 6 | Pending (Plan 06-03 installed dnd-kit + AlertDialog primitive; wiring in Plan 06-10) |
 | UI-07 | Phase 6 | Complete |
 | UI-08 | Phase 6 | Pending (Plan 06-01 backend status field + Plan 06-03 Badge primitive; UI placement later in phase) |
-| UI-09 | Phase 6 | Pending |
+| UI-09 | Phase 6 | Complete |
 | UI-10 | Phase 6 | Complete |
 | UI-11 | Phase 6 | Pending |
 | TEST-01 | Phase 3 | Complete |
