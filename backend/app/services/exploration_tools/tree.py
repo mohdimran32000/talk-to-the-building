@@ -97,7 +97,14 @@ def tree(
     while bfs_queue and entries_remaining > 0:
         parent_entries, parent_path, depth, folder_data = bfs_queue.popleft()
         documents = folder_data.get("documents") or []
-        subfolders = sorted(folder_data.get("subfolders") or [])
+        # Plan 06-12 changed list_folder() to return subfolders as
+        # List[{id, path}] (was List[str]). Normalize to path strings here
+        # so this tool's downstream logic (which only consumes the path) keeps working.
+        raw_subfolders = folder_data.get("subfolders") or []
+        subfolders = sorted(
+            sub["path"] if isinstance(sub, dict) else sub
+            for sub in raw_subfolders
+        )
 
         # Re-derive a fallback scope for this level's summary (mirrors per-folder logic).
         level_scope = args.scope if args.scope in ("user", "global") else "user"

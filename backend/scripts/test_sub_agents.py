@@ -107,20 +107,25 @@ def run():
         test("Sub-agent SSE returns 200", status_code == 200)
 
         event_types = [e.get("type") for e in events]
-        test("SSE has sub_agent_start event", "sub_agent_start" in event_types,
-             f"event_types={event_types}")
-        test("SSE has sub_agent_token event(s)", "sub_agent_token" in event_types,
-             f"event_types={event_types}")
-        test("SSE has sub_agent_done event", "sub_agent_done" in event_types,
-             f"event_types={event_types}")
+        # Plan 06-04 collapsed legacy sub_agent_* events into one 'sub_agent' envelope
+        # with a discriminating 'event' field. Assert on the new shape.
+        sub_envelopes = [e for e in events if e.get("type") == "sub_agent"]
+        sub_event_names = [e.get("event") for e in sub_envelopes]
+        test("SSE has sub_agent event=start", "start" in sub_event_names,
+             f"sub_event_names={sub_event_names}")
+        test("SSE has sub_agent event=token(s)", "token" in sub_event_names,
+             f"sub_event_names={sub_event_names}")
+        test("SSE has sub_agent event=done", "done" in sub_event_names,
+             f"sub_event_names={sub_event_names}")
         test("SSE has done event", "done" in event_types,
              f"event_types={event_types}")
 
-        # Check sub_agent_start has document_name
-        start_events = [e for e in events if e.get("type") == "sub_agent_start"]
-        if start_events:
-            test("sub_agent_start has document_name", "document_name" in start_events[0],
-                 f"start_event={start_events[0]}")
+        # The start envelope should carry document_name in its payload (analyze_document case).
+        start_envelopes = [e for e in sub_envelopes if e.get("event") == "start"]
+        if start_envelopes:
+            payload = start_envelopes[0].get("payload") or {}
+            test("sub_agent start payload has document_name", "document_name" in payload,
+                 f"start_envelope={start_envelopes[0]}")
 
         # Check main agent tokens exist (context-injection response)
         token_events = [e for e in events if e.get("type") == "token"]
@@ -171,9 +176,14 @@ def run():
         test("Regular search SSE returns 200", status_code == 200)
 
         event_types = [e.get("type") for e in events]
-        # Regular search should NOT have sub_agent events (search_documents, not analyze_document)
-        has_sub_agent = "sub_agent_start" in event_types
-        test("Regular search has NO sub_agent_start event", not has_sub_agent,
+        # Regular search uses search_documents (not analyze_document), so no sub_agent
+        # envelope with event=start for an Explorer-style sub-agent should fire.
+        has_explorer_start = any(
+            e.get("type") == "sub_agent" and e.get("event") == "start"
+            and (e.get("agent_name") in ("analyze_document", "explore_knowledge_base"))
+            for e in events
+        )
+        test("Regular search has NO Explorer sub_agent start event", not has_explorer_start,
              f"event_types={event_types}")
         test("Regular search has done event", "done" in event_types)
 

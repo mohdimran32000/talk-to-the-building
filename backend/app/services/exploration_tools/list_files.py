@@ -73,7 +73,13 @@ def list_files(
         }
 
     documents = folder.get("documents") or []
-    subfolders = folder.get("subfolders") or []
+    # Plan 06-12 changed list_folder() to return subfolders as
+    # List[{id, path}] (was List[str]). Normalize to path strings.
+    raw_subfolders = folder.get("subfolders") or []
+    subfolders = [
+        sub["path"] if isinstance(sub, dict) else sub
+        for sub in raw_subfolders
+    ]
 
     # TOOL-04 ordering contract: folders-then-files; alpha-sorted within each.
     folders_sorted = sorted(subfolders)

@@ -208,7 +208,12 @@ async def send_message(
                 "content": full_response,
             }
             if tool_metadata:
-                insert_data["tool_metadata"] = json.dumps(tool_metadata)
+                # Pass dict directly — Supabase/PostgREST encodes JSONB automatically.
+                # Pre-Phase-6 code wrapped this in json.dumps(), which stored a JSON
+                # string scalar in the JSONB column. On read-back the value came back
+                # as a string, breaking Optional[dict] response validation and 500'ing
+                # GET /api/threads/{id}/messages whenever a Sub-Agent message was loaded.
+                insert_data["tool_metadata"] = tool_metadata
             supabase.table("messages").insert(insert_data).execute()
         else:
             logger.warning(f"Empty assistant response for thread {thread_id} — not persisting")

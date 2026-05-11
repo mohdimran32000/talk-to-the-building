@@ -788,31 +788,35 @@ def _section_6_dual_emit_sse(sb_admin, user_id, token, fixtures) -> tuple[int, i
         )
         return h.passed - h_passed_before, h.failed - h_failed_before
 
-    # Legacy events — at least sub_agent_start, sub_agent_done required.
+    # Plan 06-04 collapsed legacy sub_agent_* into one 'sub_agent' envelope with
+    # a discriminating 'event' field. The legacy event names are gone; we now
+    # assert the same five behaviors against the generalized envelope.
+    generalized_events = [e for e in events if e.get("type") == "sub_agent"]
+    sub_events = [e.get("event") for e in generalized_events]
     h.test(
-        "EXPLORER-04 legacy: sub_agent_start event present",
-        "sub_agent_start" in event_types,
-        f"event_types={sorted(set(event_types))}",
+        "EXPLORER-04: sub_agent event=start present (replaces legacy sub_agent_start)",
+        "start" in sub_events,
+        f"sub_events={sorted(set(e for e in sub_events if e))}",
     )
     h.test(
-        "EXPLORER-04 legacy: sub_agent_done event present",
-        "sub_agent_done" in event_types,
-        f"event_types={sorted(set(event_types))}",
+        "EXPLORER-04: sub_agent event=done present (replaces legacy sub_agent_done)",
+        "done" in sub_events,
+        f"sub_events={sorted(set(e for e in sub_events if e))}",
     )
     h.test(
-        "EXPLORER-04 legacy: sub_agent_token event present (compact summary stream)",
-        "sub_agent_token" in event_types,
-        f"event_types={sorted(set(event_types))}",
+        "EXPLORER-04: sub_agent event=token present (replaces legacy sub_agent_token)",
+        "token" in sub_events,
+        f"sub_events={sorted(set(e for e in sub_events if e))}",
     )
     h.test(
-        "EXPLORER-04 legacy NEW: sub_agent_tool_start event present (Plan 04 NEW)",
-        "sub_agent_tool_start" in event_types,
-        f"event_types={sorted(set(event_types))}",
+        "EXPLORER-04: sub_agent event=tool_start present (replaces legacy sub_agent_tool_start)",
+        "tool_start" in sub_events,
+        f"sub_events={sorted(set(e for e in sub_events if e))}",
     )
     h.test(
-        "EXPLORER-04 legacy NEW: sub_agent_tool_done event present (Plan 04 NEW)",
-        "sub_agent_tool_done" in event_types,
-        f"event_types={sorted(set(event_types))}",
+        "EXPLORER-04: sub_agent event=tool_done present (replaces legacy sub_agent_tool_done)",
+        "tool_done" in sub_events,
+        f"sub_events={sorted(set(e for e in sub_events if e))}",
     )
 
     # Generalized envelope dual-emit — at least 5 'sub_agent' events.
