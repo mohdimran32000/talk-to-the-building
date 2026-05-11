@@ -76,7 +76,7 @@
 - [ ] **UI-07**: Document rename in place
 - [ ] **UI-08**: Breadcrumbs, inline file count per folder, scope badges on documents, `content_markdown_status` badge for pending/failed re-index — *backend status field landed Phase 6 / Plan 01; shadcn Badge primitive installed Phase 6 / Plan 03; UI placement of badges + breadcrumbs lands later in the phase*
 - [ ] **UI-09**: Keyboard navigation (arrow keys for tree expand/collapse)
-- [ ] **UI-10**: `MessageList` `SubAgentSection` extended (recursively, not forked) to render Explorer's nested tool rows
+- [x] **UI-10**: `MessageList` `SubAgentSection` extended (recursively, not forked) to render Explorer's nested tool rows
 - [ ] **UI-11**: Admin-only affordance for global-scope writes (visible only when `isAdmin === true`)
 
 ### Tests
@@ -190,7 +190,7 @@
 | UI-07 | Phase 6 | Pending |
 | UI-08 | Phase 6 | Pending (Plan 06-01 backend status field + Plan 06-03 Badge primitive; UI placement later in phase) |
 | UI-09 | Phase 6 | Pending |
-| UI-10 | Phase 6 | Pending |
+| UI-10 | Phase 6 | Complete |
 | UI-11 | Phase 6 | Pending |
 | TEST-01 | Phase 3 | Complete |
 | TEST-02 | Phase 4 | Complete |

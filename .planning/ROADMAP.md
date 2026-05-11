@@ -208,7 +208,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 06-01-PLAN.md — Extend DocumentResponse with content_markdown_status (D-03 backend Pydantic add) (UI-08)
 - [ ] 06-02-PLAN.md — Provision admin@test.com via seed script + migration 021 (D-02) (UI-11, TEST-05)
 - [x] 06-03-PLAN.md — Install @dnd-kit + 6 shadcn primitives (UI-04, UI-06, UI-08)
-- [ ] 06-04-PLAN.md — Close Phase 5 dual-emit window: delete 5 backend yields + 5 frontend SSE branches; add 1 generalized branch (UI-10)
+- [x] 06-04-PLAN.md — Close Phase 5 dual-emit window: delete 5 backend yields + 5 frontend SSE branches; add 1 generalized branch (UI-10)
 - [ ] 06-12-PLAN.md — Extend GET /api/folders subfolders → Array<{id, path}> (D-06 / checker BLOCKER #1) + FolderRef + FolderListResponse Pydantic models + pytest (FOLDER-04, FOLDER-06, UI-04, UI-07)
 
 **Wave 1** *(blocked on Wave 0 — depends on backend types + new deps + closed SSE window + D-06 folder-id contract)*
