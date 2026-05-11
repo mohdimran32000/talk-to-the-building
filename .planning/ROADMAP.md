@@ -222,7 +222,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 06-10-PLAN.md — DnD wiring with @dnd-kit + same-scope move + cross-scope BLOCK modal (D-01, Pitfall 11) (UI-06)
 
 **Wave 3** *(blocked on Wave 2 — e2e gate)*
-- [ ] 06-11-PLAN.md — Playwright @phase6 spec block: 12+ tests covering UI-01..UI-11 + TEST-05 + Pitfall 12 grep assertion + D-01 cross-scope block test + apiPost/apiDelete fixture helpers (TEST-05)
+- [x] 06-11-PLAN.md — Playwright @phase6 spec block: 12+ tests covering UI-01..UI-11 + TEST-05 + Pitfall 12 grep assertion + D-01 cross-scope block test + apiPost/apiDelete fixture helpers (TEST-05)
 **UI hint**: yes
 **Threats / pitfalls**: Pitfall 11 (scope confusion: scope badges + distinct visual treatment for shared vs private; cross-scope move confirmation modal); Pitfall 5 (folder delete UX: confirmation modal shows actual document/subfolder count from server's structured error, not a guessed number); Pitfall 12 (UI rendering: `SubAgentSection` extended recursively — same component renders both `analyze_document` and Explorer; no `if (agentType === 'explorer')` branch).
 

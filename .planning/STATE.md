@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Completed_06-02-PLAN.md
-last_updated: "2026-05-11T06:45:26.988Z"
+last_updated: "2026-05-11T06:55:34.374Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 46
-  completed_plans: 45
-  percent: 98
+  completed_plans: 46
+  percent: 100
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-01)
 ## Current Position
 
 Phase: 06 (file-explorer-ui-cluster) — EXECUTING
-Plan: 11 of 12
-Status: Ready to execute (06-10 backfilled — 06-11 remaining)
+Plan: 12 of 12
+Status: Ready to execute
 Last activity: 2026-05-11
 
-Progress: [██████████] 98%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -68,6 +68,7 @@ Progress: [██████████] 98%
 | Phase 06 P08 | 4 | 3 tasks | 4 files |
 | Phase 06 P09 | 8 | 6 tasks | 7 files |
 | Phase 06 P10 | 3 | 3 tasks | 4 files |
+| Phase 06 P11 | 15 | 4 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -197,6 +198,9 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 6 / Plan 06-09: D-05 hover-reveal inline buttons use Tailwind 'group' + 'group-hover:opacity-100' — same idiom as Plan 06-06 RootSection chrome. '+' always rendered when canWrite; '⋯' rendered only when hasFolderId. Inline buttons + right-click ContextMenu coexist (D-05 LOCKED dual affordance).
 - [Phase ?]: Phase 6 / Plan 06-09: Pitfall 11 / UI-11 structural admin gate — canWrite = (scope === 'user' || isAdmin) is the SINGLE gate. Non-admins on global scope see ONLY a disabled 'Read-only (admin required)' item (gives discoverability without affording action). NEVER conditional-render between scopes.
 - [Phase ?]: Phase 6 / Plan 06-09: FolderTree refetch via key={refetchCounter} force-remount of the ROOT FolderNode — simpler than recursive cache invalidation; pays cheap re-render cost on mutation. Reusable pattern for any component with internal lazy-load state that needs parent-triggered refresh.
+- [Phase ?]: Chose apiPost/apiGet/apiDelete over UI-flow per checker WARNING #4 — token-scan sb-*-auth-token is version-agnostic
+- [Phase ?]: Frontend package.json type:module makes __dirname undefined at module top level — fileURLToPath(import.meta.url) + path.dirname is the canonical re-derivation; Rule 1 auto-fix, also corrects latent issues in pre-existing Documents tests
+- [Phase ?]: Pre-existing playwright.config.ts baseURL=5174 mismatches Vite default 5173 — out-of-scope carry-forward affecting Documents/Auth tests too; static gate (Pitfall 12) PASSED, browser-dependent gate operator-gated
 
 ### Pending Todos
 
@@ -223,7 +227,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-11T06:45:18.355Z
+Last session: 2026-05-11T06:54:28.617Z
 Stopped at: Completed_06-02-PLAN.md
 
 Earlier session: 2026-05-07 (Phase 3 / Plan 06 executed — code-complete; verification gate awaits operator backend restart)
