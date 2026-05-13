@@ -88,6 +88,16 @@ export function FolderNode({
       setRenameValue(folderName)
       return
     }
+    // WR-05 (Phase 6 review): reject mid-name '/' explicitly. The trim above
+    // only strips leading/trailing slashes, so a value like "foo/bar" would
+    // smuggle a slash into the rebuilt path and either create an unintended
+    // nested folder or fail the backend canonical-form regex with a misleading
+    // toast. Refuse upfront with a clear message.
+    if (trimmed.includes('/')) {
+      toast.error('Folder name cannot contain "/"')
+      setRenameValue(folderName)
+      return
+    }
     // D-06: folderId is in props — no path→id round-trip needed
     const newPath = path.replace(/[^/]+$/, trimmed)
     try {
