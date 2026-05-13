@@ -77,14 +77,40 @@ def _find_admin_user_id(sb) -> str | None:
     supabase-py exposes list_users() (no email filter on older pins); we paginate
     through the results and find the matching email. Returns None if not found.
     """
+    # WR-04 (Phase 6 review): explicitly paginate so the lookup keeps
+    # working in a workspace with >50 auth.users (Supabase's default page
+    # size). Without pagination the seeded admin@test.com could land on
+    # page 2+ and the script printed a misleading "could not resolve admin
+    # user UUID" warning even though the seed succeeded.
+    #
+    # Note: this UUID lookup is purely informational — migration 021 looks
+    # up the row directly via SQL (`auth.users WHERE email='admin@test.com'`)
+    # and does NOT depend on this function returning a value.
+    PER_PAGE = 1000
+    MAX_PAGES = 50  # 50,000 users — defense against runaway pagination
     try:
-        # supabase-py auth.admin.list_users() returns a list[User] (older API) or
-        # an object with .users (newer API). Handle both shapes defensively.
-        result = sb.auth.admin.list_users()
-        users = getattr(result, "users", None) or result
-        for u in users:
-            if getattr(u, "email", None) == ADMIN_EMAIL:
-                return getattr(u, "id", None)
+        page = 1
+        while page <= MAX_PAGES:
+            # supabase-py auth.admin.list_users() returns a list[User] (older
+            # API) or an object with .users (newer API). Handle both shapes
+            # defensively. Older pins may ignore page/per_page kwargs.
+            try:
+                result = sb.auth.admin.list_users(page=page, per_page=PER_PAGE)
+            except TypeError:
+                # Older supabase-py pin: signature has no page/per_page kwargs.
+                # Fall back to default single-page call — pagination is a
+                # best-effort enhancement, not a correctness requirement here.
+                result = sb.auth.admin.list_users()
+            users = getattr(result, "users", None) or result
+            if not users:
+                return None
+            for u in users:
+                if getattr(u, "email", None) == ADMIN_EMAIL:
+                    return getattr(u, "id", None)
+            # Page smaller than PER_PAGE -> end of results.
+            if len(users) < PER_PAGE:
+                return None
+            page += 1
     except Exception as e:
         print(f"WARN: list_users() lookup failed: {e}", file=sys.stderr)
     return None
