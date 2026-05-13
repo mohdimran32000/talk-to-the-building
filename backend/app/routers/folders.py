@@ -169,8 +169,12 @@ async def delete_folder_endpoint(
         msg = str(e).lower()
         if "no_data_found" in msg or "not found" in msg:
             raise HTTPException(status_code=404, detail="Folder not found")
+        # WR-03 (Phase 6 review): do not leak the bare RPC error string to the
+        # client — it can include schema/table/constraint names, SQL fragments,
+        # and other Postgres internals. exc_info above gives operators the
+        # full trace; the response body stays generic.
         logger.error(f"delete_folder RPC failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
+        raise HTTPException(status_code=500, detail="Delete failed")
 
     if not result.get("deleted"):
         return JSONResponse(status_code=409, content={
