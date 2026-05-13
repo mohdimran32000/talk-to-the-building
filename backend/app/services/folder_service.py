@@ -123,6 +123,33 @@ def _assert_uuid(value: str | None, field_name: str = "user_id") -> None:
         raise ValueError(f"invalid {field_name}: not a UUID")
 
 
+def _build_user_or_global_or_clause(user_id: str | None) -> str:
+    """Atomic helper that validates `user_id` is UUID-shaped and returns the
+    PostgREST `.or_()` clause for the union "scope=user AND user_id=X OR
+    scope=global AND user_id IS NULL".
+
+    CR-02 (Phase 6 review): the three sites in `list_folder` that previously
+    interpolated `user_id` directly into f-strings relied on a function-level
+    `_assert_uuid()` invariant called once at the top of `list_folder`. That
+    contract is fragile — a future caller, refactor, or new branch could
+    bypass the validator while still reaching the f-string. This helper makes
+    validation and interpolation atomic: every call re-validates immediately
+    before the f-string is built, so each interpolation site is self-contained
+    and impossible to bypass.
+
+    Future hardening (out of scope for the code-review-fix pass — requires a
+    Supabase migration): move the OR clause into a Postgres RPC function with
+    typed parameters, eliminating PostgREST DSL string concatenation entirely.
+    See REVIEW-FIX.md follow-up note for the proposed RPC signature.
+
+    Raises:
+        ValueError: if `user_id` is not a UUID. Callers wanting the
+        global-only clause should branch on `scope` rather than calling this.
+    """
+    _assert_uuid(user_id, field_name="user_id")
+    return f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
+
+
 def list_folder(
     path: str,
     scope: str,
@@ -170,9 +197,8 @@ def list_folder(
     elif scope == "global":
         docs_q = docs_q.eq("scope", "global").is_("user_id", "null")
     else:  # 'both' — union via or_(); see PostgREST or() syntax
-        docs_q = docs_q.or_(
-            f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
-        )
+        # CR-02: atomic build (re-validates UUID adjacent to interpolation).
+        docs_q = docs_q.or_(_build_user_or_global_or_clause(user_id))
     try:
         docs_resp = docs_q.execute()
         documents = docs_resp.data or []
@@ -200,9 +226,8 @@ def list_folder(
         elif scope == "global":
             f_q = f_q.eq("scope", "global").is_("user_id", "null")
         else:
-            f_q = f_q.or_(
-                f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
-            )
+            # CR-02: atomic build (re-validates UUID adjacent to interpolation).
+            f_q = f_q.or_(_build_user_or_global_or_clause(user_id))
         if norm == "/":
             # Root: any path with two or more '/' is strictly deeper than /child.
             f_q = f_q.neq("path", "/").not_.like("path", "/%/%")
@@ -232,9 +257,8 @@ def list_folder(
         elif scope == "global":
             inf_q = inf_q.eq("scope", "global").is_("user_id", "null")
         else:
-            inf_q = inf_q.or_(
-                f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)"
-            )
+            # CR-02: atomic build (re-validates UUID adjacent to interpolation).
+            inf_q = inf_q.or_(_build_user_or_global_or_clause(user_id))
         prefix = "/" if norm == "/" else f"{norm}/"
         # HI-03: escape `%` and `_` in the prefix so folder names containing
         # those literals do not become wildcards in the LIKE predicate. The
