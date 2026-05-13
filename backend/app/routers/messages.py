@@ -48,16 +48,31 @@ async def send_message(
         if m["content"] and m["content"].strip()
     ]
 
-    # Check if user has ready documents (enables search tool)
+    # WR-01 (Phase 6 review): include scope='global' rows. The pre-Phase-6
+    # filter only counted user-owned rows, so a user whose entire corpus is in
+    # Shared (no personal uploads yet) would never see the search tool enabled
+    # even though the global docs are queryable. Mirror the or_() pattern used
+    # in folder_service.list_folder for the union "user's own OR global".
     has_documents = False
     has_structured_data = False
     try:
-        ready_docs = supabase.table("documents").select("id").eq("user_id", user_id).eq("status", "ready").limit(1).execute()
+        ready_docs = (
+            supabase.table("documents")
+            .select("id")
+            .or_(f"and(scope.eq.user,user_id.eq.{user_id}),and(scope.eq.global,user_id.is.null)")
+            .eq("status", "ready")
+            .limit(1)
+            .execute()
+        )
         has_documents = bool(ready_docs.data)
     except Exception as e:
         logger.warning(f"Document check failed (non-fatal): {e}")
 
-    # Check if user has structured data (enables Text-to-SQL tool)
+    # Check if user has structured data (enables Text-to-SQL tool).
+    # WR-01 NOTE: structured_data has no `scope` column yet (migration 009 only
+    # has user_id NOT NULL — see REVIEW-FIX.md follow-up). Once Phase 7+
+    # extends the two-scope model to structured_data, swap this to the same
+    # or_() union pattern as ready_docs above.
     try:
         struct_data = supabase.table("structured_data").select("id").eq("user_id", user_id).limit(1).execute()
         has_structured_data = bool(struct_data.data)
