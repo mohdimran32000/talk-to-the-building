@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 
 export type Scope = 'user' | 'global'
 
@@ -114,5 +114,14 @@ export function useOpenFoldersStorage(userId: string | null) {
     })
   }, [])
 
-  return { isOpen, toggle, open, close }
+  // WR-07 (Phase 6 review): memoize the returned object so consumers (e.g.
+  // FolderTree's onKeyDown useCallback dep array) get a stable reference
+  // across renders when the underlying callbacks have not changed. Without
+  // useMemo, every invocation of this hook returned a fresh object literal,
+  // invalidating downstream useCallback memoization and forcing children
+  // to re-render even when nothing relevant changed.
+  return useMemo(
+    () => ({ isOpen, toggle, open, close }),
+    [isOpen, toggle, open, close]
+  )
 }
