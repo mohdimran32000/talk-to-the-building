@@ -44,6 +44,11 @@ export default function Chat() {
   const [toolSteps, setToolSteps] = useState<ToolStep[]>([])
   const [isToolThinking, setIsToolThinking] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
+  // WR-09 (Phase 6 review): track the deferred file-reload timeout so it can
+  // be cancelled on unmount. Without this, rapid status updates spawned many
+  // outstanding setTimeouts; users navigating away while uploads were
+  // processing leaked network requests after the component unmounted.
+  const reloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadFiles = useCallback(async () => {
     try {
@@ -115,11 +120,27 @@ export default function Chat() {
         }
       })
     )
-    // Reload files when a document becomes ready to get its metadata
+    // Reload files when a document becomes ready to get its metadata.
+    // WR-09: cancel any pending reload before scheduling a new one so rapid
+    // status flips collapse to a single trailing reload, and store the handle
+    // so the unmount effect below can clear it.
     if (status === 'ready') {
-      setTimeout(() => {
+      if (reloadTimeoutRef.current) clearTimeout(reloadTimeoutRef.current)
+      reloadTimeoutRef.current = setTimeout(() => {
+        reloadTimeoutRef.current = null
         getUploadedFiles().then(setFiles).catch(() => {})
       }, 500)
+    }
+  }, [])
+
+  // WR-09: unmount cleanup — cancel the deferred reload if the component
+  // unmounts before the 500ms timer fires.
+  useEffect(() => {
+    return () => {
+      if (reloadTimeoutRef.current) {
+        clearTimeout(reloadTimeoutRef.current)
+        reloadTimeoutRef.current = null
+      }
     }
   }, [])
 
