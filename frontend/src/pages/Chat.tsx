@@ -268,10 +268,18 @@ export default function Chat() {
           )
         },
         () => {
-          // The persisted message rehydrates via tool_metadata on reload; clear
-          // live trace once stream completes. (onDone above also clears it as a
-          // safety net in case the sub_agent_done event is dropped.)
-          setLiveSubAgentTrace(null)
+          // CR-03 (Phase 6 review): do NOT clear liveSubAgentTrace here.
+          // Trailing sub_agent_tool_done events can arrive interleaved with
+          // sub_agent_done (the agent-level "done" can race with the inner-most
+          // tool's finalize). Clearing here would make those tool_done updates
+          // no-op against prev=null and the last in-flight tool would stay
+          // 'running' until the assistant message rehydrates from DB ~500ms
+          // later, producing a visible flicker.
+          //
+          // The outer onDone callback (above, where the assistant message is
+          // materialized) is the SOLE owner of the clear. Keeping the trace
+          // alive across the sub-agent done window avoids the race.
+          // handleStopStreaming and the catch block also clear as safety nets.
         },
         undefined, // onError
         // Tool activity callbacks — main-agent tools (toolSteps[]) stay unchanged
