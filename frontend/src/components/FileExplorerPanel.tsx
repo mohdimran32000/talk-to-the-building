@@ -141,6 +141,16 @@ export default function FileExplorerPanel({
       const safeScope = targetScope === 'global' && !isAdmin ? 'user' : targetScope
       const safePath = safeScope === targetScope ? targetPath : '/'
 
+      // CR-01 (Phase 6 review): surface the security override to the user. The
+      // collapse to ('user', '/') is intentional (Pitfall 11 — non-admins cannot
+      // write to Shared), but a silent downgrade meant the file landed in My Files
+      // root with no UI signal, leading to misplaced documents.
+      if (safeScope !== targetScope) {
+        toast.warning(
+          'Cannot upload to Shared without admin rights — uploaded to My Files root instead'
+        )
+      }
+
       // Auto-open the target folder before remounting the tree, so the user sees
       // the new file land. Writes directly to the useOpenFoldersStorage key
       // (`fileExplorer:open:{userId}`); the next FolderTree mount reads it.
