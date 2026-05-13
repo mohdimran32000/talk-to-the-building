@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, createContext, useContext } from 'react'
+import { useCallback, useEffect, useRef, useState, createContext, useContext } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { useOpenFoldersStorage, type Scope } from '@/hooks/useOpenFoldersStorage'
 import { FolderNode } from './FolderNode'
@@ -23,9 +23,14 @@ interface FolderTreeProps {
   rootPath: string                          // typically '/' for the root section
   onDeleteDocument?: (id: string) => void
   onRenameDocument?: (id: string, newName: string) => void
+  // WR-08 (Phase 6 review): converge section-header create + inline FolderNode
+  // CRUD onto a single refresh mechanism. RootSection bumps this counter from
+  // its section-header onCreated; FolderNode children call onAfterMutation
+  // internally. Both paths now end up in the same refetchCounter increment.
+  externalMutationSignal?: number
 }
 
-export function FolderTree({ scope, rootPath, onDeleteDocument, onRenameDocument }: FolderTreeProps) {
+export function FolderTree({ scope, rootPath, onDeleteDocument, onRenameDocument, externalMutationSignal = 0 }: FolderTreeProps) {
   const { user } = useAuth()
   const userId = user?.id ?? null
   const expansion = useOpenFoldersStorage(userId)
@@ -37,6 +42,18 @@ export function FolderTree({ scope, rootPath, onDeleteDocument, onRenameDocument
   // listFolder() call. Drilled into recursive children as onAfterMutation.
   const [refetchCounter, setRefetchCounter] = useState(0)
   const onAfterMutation = useCallback(() => setRefetchCounter((c) => c + 1), [])
+
+  // WR-08: bump refetchCounter when the parent signals an external mutation
+  // (section-header CreateFolderDialog onCreated). This unifies the inline
+  // and section-header refresh paths onto a single mechanism. Skip the
+  // initial 0->0 effect run by checking against a ref of the last seen value.
+  const lastSignalRef = useRef(externalMutationSignal)
+  useEffect(() => {
+    if (lastSignalRef.current !== externalMutationSignal) {
+      lastSignalRef.current = externalMutationSignal
+      setRefetchCounter((c) => c + 1)
+    }
+  }, [externalMutationSignal])
 
   // CONTEXT.md D-04 (LOCKED): keyboard nav implements EXACTLY these keys:
   //   Right     -> expand or move into first child

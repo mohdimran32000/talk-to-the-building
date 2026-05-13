@@ -24,7 +24,14 @@ export function RootSection({ scope, onDeleteDocument, onRenameDocument, externa
   // canCreate = scope === 'user' || isAdmin. Non-admins on Shared see no Create affordance.
   const canCreate = scope === 'user' || isAdmin
   const [createOpen, setCreateOpen] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0)
+  // WR-08 (Phase 6 review): unify the section-header create flow with the
+  // inline FolderNode CRUD onto a SINGLE refresh mechanism. We bump
+  // headerMutationSignal on onCreated; FolderTree re-uses its existing
+  // refetchCounter (driven by inline mutations via onAfterMutation) to
+  // remount FolderNode children. Previously a `key=` remount path coexisted
+  // with FolderTree's internal refetchCounter — two parallel mechanisms that
+  // were easy to drift out of sync.
+  const [headerMutationSignal, setHeaderMutationSignal] = useState(0)
 
   const isShared = scope === 'global'
   const label = isShared ? 'Shared (global)' : 'My Files'
@@ -57,16 +64,21 @@ export function RootSection({ scope, onDeleteDocument, onRenameDocument, externa
               onOpenChange={setCreateOpen}
               parentPath="/"
               scope={scope}
-              onCreated={() => setRefreshKey((k) => k + 1)}
+              onCreated={() => setHeaderMutationSignal((k) => k + 1)}
             />
           </>
         )}
       </header>
       <div role="tree" aria-label={`${label} tree`}>
         <FolderTree
-          key={`${refreshKey}:${externalRefreshKey}`}
+          // WR-08: `key` only handles outer parent-driven remounts (uploads
+          // from FileExplorerPanel). Folder CRUD (both inline and section-
+          // header) flows through externalMutationSignal -> FolderTree's
+          // internal refetchCounter — a single source of truth for refresh.
+          key={externalRefreshKey}
           scope={scope}
           rootPath="/"
+          externalMutationSignal={headerMutationSignal}
           onDeleteDocument={onDeleteDocument}
           onRenameDocument={onRenameDocument}
         />
