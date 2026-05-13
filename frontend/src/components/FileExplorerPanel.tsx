@@ -92,26 +92,35 @@ export default function FileExplorerPanel({
     })
   }
 
-  // Polling pattern — ALSO poll content_markdown_status (D-03 / UI-08)
+  // Polling pattern — ALSO poll content_markdown_status (D-03 / UI-08).
+  //
+  // WR-06 (Phase 6 review): the prior dep array `[files, onStatusUpdate]`
+  // tore down + recreated the interval on every files state change (which
+  // happens every poll cycle), restarting the 2000ms cadence and producing
+  // a thundering-herd pattern with multiple in-flight files. Use a ref so
+  // the interval body always reads the latest files but the setup runs
+  // once. The `hasPending` check moves INSIDE the interval body so we skip
+  // the network call on cycles with nothing pending instead of tearing
+  // down the interval entirely.
+  const filesRef = useRef(files)
   useEffect(() => {
-    const hasPending = files.some(
-      (f) => f.status === 'pending' || f.status === 'processing' || f.content_markdown_status === 'pending'
-    )
-    if (!hasPending) return
+    filesRef.current = files
+  }, [files])
+  useEffect(() => {
     const interval = setInterval(async () => {
+      const f = filesRef.current
+      const pending = f.filter(
+        (x) => x.status === 'pending' || x.status === 'processing' || x.content_markdown_status === 'pending'
+      )
+      if (pending.length === 0) return
       try {
         const { data } = await supabase
           .from('documents')
           .select('id, status, error_message, content_markdown_status')
-          .in(
-            'id',
-            files
-              .filter((f) => f.status === 'pending' || f.status === 'processing' || f.content_markdown_status === 'pending')
-              .map((f) => f.id)
-          )
+          .in('id', pending.map((x) => x.id))
         if (data) {
           for (const doc of data) {
-            const current = files.find((f) => f.id === doc.id)
+            const current = f.find((x) => x.id === doc.id)
             if (current && (current.status !== doc.status || current.content_markdown_status !== doc.content_markdown_status)) {
               // 4-arg call (LOCKED per checker WARNING #3): pass content_markdown_status as the fourth arg
               onStatusUpdate(doc.id, doc.status, doc.error_message, doc.content_markdown_status)
@@ -123,7 +132,7 @@ export default function FileExplorerPanel({
       }
     }, 2000)
     return () => clearInterval(interval)
-  }, [files, onStatusUpdate])
+  }, [onStatusUpdate])
 
   // Phase 6 fix: bump on every upload so RootSection remounts FolderTree and
   // re-fetches contents. Without this, FolderNode's cached listFolder() result
