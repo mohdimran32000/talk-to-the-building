@@ -41,9 +41,18 @@ function SubAgentSection({ tool, isLive, defaultExpanded = false }: SubAgentSect
         done: `Explored: ${tool.question}`,
       },
     }
+    // WR-02 (Phase 6 review): for unknown tool names (anything outside the
+    // LABELS lookup), sanitize before rendering. React text rendering escapes
+    // HTML entities so this is not an XSS today, but a malicious or
+    // accidentally mis-encoded `tool.tool` value (control chars, ANSI escapes,
+    // very long strings) would otherwise render as-is. Keep only word chars,
+    // whitespace, and a small punctuation allowlist; truncate to 64 chars.
+    const safeName = (tool.tool ?? '')
+      .replace(/[^\w\s.\-:/]/g, '')
+      .slice(0, 64) || 'sub-agent'
     const entry = LABELS[tool.tool] ?? {
-      live: `Running ${tool.tool}`,
-      done: `Used ${tool.tool}`,
+      live: `Running ${safeName}`,
+      done: `Used ${safeName}`,
     }
     return isLive ? entry.live : entry.done
   }, [tool, isLive])
