@@ -18,6 +18,52 @@ logger = logging.getLogger(__name__)
 SQL_QUERY_TIMEOUT = 5  # seconds
 
 
+def _infer_column_types(cols: list, rows: list, sample_limit: int = 200) -> dict:
+    """Majority-vote type inference: a column is DOUBLE when >=80% of its
+    non-empty sampled values parse as numbers. Tolerates stray text like
+    'N/A' or unit notes in otherwise-numeric columns (real-world CSVs)."""
+    col_types = {}
+    for c in cols:
+        numeric = 0
+        non_empty = 0
+        for row in rows[:sample_limit]:
+            val = row.get(c)
+            if val is None or val == "":
+                continue
+            non_empty += 1
+            if isinstance(val, (int, float)):
+                numeric += 1
+            elif isinstance(val, str):
+                try:
+                    float(val.replace(",", ""))
+                    numeric += 1
+                except ValueError:
+                    pass
+        col_types[c] = "DOUBLE" if non_empty and numeric / non_empty >= 0.8 else "VARCHAR"
+    return col_types
+
+
+def _sample_values(rows: list, col: str, limit: int = 8, max_len: int = 28, scan: int = 500) -> tuple:
+    """Distinct non-empty sample values for a column, so the LLM can see real
+    value formats (e.g. floor='4F' not '4th floor'). Returns (samples,
+    is_exhaustive): is_exhaustive is True when the samples are ALL distinct
+    values in the scanned rows — only then may the LLM treat them as an enum."""
+    seen = []
+    overflow = False
+    for row in rows[:scan]:
+        val = row.get(col)
+        if val is None:
+            continue
+        s = str(val).strip()
+        if not s or s[:max_len] in seen:
+            continue
+        if len(seen) >= limit:
+            overflow = True
+            break
+        seen.append(s[:max_len])
+    return seen, not overflow
+
+
 def _fix_table_names(sql: str, real_table_names: list[str]) -> str:
     """Fix truncated or incorrect table names in generated SQL by fuzzy matching."""
     # Find all table references in SQL: FROM "xxx" or FROM xxx or JOIN "xxx" etc.
@@ -71,10 +117,15 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # For wide tables (>30 cols), include sample rows so the LLM can understand the structure
     MAX_COLS_DETAILED = 30
     schema_desc = "Available tables:\n"
+    table_col_types = {}
     for t in tables:
         cols = t["columns"]
         sample_rows = t["rows"][:3] if t["rows"] else []
-        sample_row = sample_rows[0] if sample_rows else {}
+
+        # Majority-vote type inference over the data — shared with the DuckDB
+        # load below so the schema shown to the LLM matches the actual types
+        col_types = _infer_column_types(cols, t["rows"])
+        table_col_types[t["table_name"]] = col_types
 
         if len(cols) > MAX_COLS_DETAILED:
             # Wide table — show sample rows instead of column list
@@ -89,11 +140,17 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
         else:
             col_descs = []
             for c in cols:
-                val = sample_row.get(c)
-                if isinstance(val, (int, float)):
+                if col_types.get(c) == "DOUBLE":
                     col_descs.append(f"  {c} (numeric)")
                 else:
-                    col_descs.append(f"  {c} (text)")
+                    samples, exhaustive = _sample_values(t["rows"], c)
+                    sample_str = ", ".join(repr(s) for s in samples[:8])
+                    if not samples:
+                        col_descs.append(f"  {c} (text)")
+                    elif exhaustive:
+                        col_descs.append(f"  {c} (text; possible values: {sample_str})")
+                    else:
+                        col_descs.append(f"  {c} (text; many distinct values, examples: {sample_str})")
             schema_desc += f"\nTable: {t['table_name']} ({t['row_count']} rows)\nColumns:\n" + "\n".join(col_descs) + "\n"
 
     # 3. Use Gemini to generate DuckDB SQL
@@ -117,9 +174,15 @@ Rules:
 - Return ONLY the SQL query on a single line, no explanation, no formatting, no newlines
 - Use DuckDB SQL syntax
 - Do not use semicolons
-- Numeric columns are already DOUBLE type — do NOT use CAST or TRY_CAST, just use column names directly (e.g. SELECT SUM(jan + feb + mar) not SELECT SUM(CAST(jan AS DOUBLE) + ...))
+- Columns marked (numeric) are already DOUBLE type — do NOT use CAST or TRY_CAST on them, just use column names directly (e.g. SELECT SUM(jan + feb + mar) not SELECT SUM(CAST(jan AS DOUBLE) + ...))
+- Columns marked (text) are VARCHAR — if arithmetic on a text column is unavoidable, wrap it in TRY_CAST(col AS DOUBLE)
 - Keep queries compact on a single line
 - For text comparisons use ILIKE for case-insensitive matching
+- Match the FORMAT of the column samples — e.g. if floor values look like 'GF', '4F', '6F' then the 4th floor is floor = '4F' (never '%4th%' or 'fourth')
+- Columns marked 'possible values' list the complete set — filter with those exact values. Columns marked 'examples' have MANY OTHER values — if the user's term (e.g. 'FCU') is not among the examples, still filter for it directly with ILIKE '%term%'; NEVER substitute a different example value for the user's term
+- Tables often reference each other by shared identifier values (e.g. a board/panel name column in one table matching a name column in another) — use JOINs across tables when a question spans them
+- When counting equipment/units and the table has a quantity column (e.g. 'points', 'qty', 'count'), SUM that column instead of COUNT(*) — one row can represent multiple units
+- If a table has a parent-reference column (e.g. 'fed_from'), a parent row's totals already INCLUDE its children — summing all rows in an area double-counts. Sum ONLY rows whose parent is OUTSIDE the filtered set, using this exact pattern: SELECT SUM(x.tcl_kw) FROM "panels" x WHERE <area filter on x> AND NOT EXISTS (SELECT 1 FROM "panels" p WHERE p.panel = x.fed_from AND <same area filter on p>)
 
 User question: {question}"""
 
@@ -153,23 +216,9 @@ User question: {question}"""
             if not rows:
                 continue
 
-            # Infer column types from sample data (check first 10 rows)
-            col_types = {}
-            for c in cols:
-                is_numeric = False
-                for row in rows[:10]:
-                    val = row.get(c)
-                    if val is not None and val != "":
-                        if isinstance(val, (int, float)):
-                            is_numeric = True
-                        elif isinstance(val, str):
-                            try:
-                                float(val.replace(",", ""))
-                                is_numeric = True
-                            except (ValueError, AttributeError):
-                                is_numeric = False
-                                break
-                col_types[c] = "DOUBLE" if is_numeric else "VARCHAR"
+            # Reuse the majority-vote types computed for the schema description
+            # so the LLM's view and the actual DuckDB types always agree
+            col_types = table_col_types.get(t["table_name"]) or _infer_column_types(cols, rows)
 
             col_defs = ", ".join(f'"{c}" {col_types[c]}' for c in cols)
             con.execute(f'CREATE TABLE "{t["table_name"]}" ({col_defs})')
@@ -192,8 +241,31 @@ User question: {question}"""
                         values.append(str(val))
                 con.execute(insert_sql, values)
 
-        # 5. Execute SQL with timeout
-        result = con.execute(sql).fetchall()
+        # 5. Execute SQL — on failure, give the LLM one shot at repairing the
+        # query with the actual error message before falling back
+        try:
+            result = con.execute(sql).fetchall()
+        except Exception as first_err:
+            logger.warning(f"SQL failed ({first_err}), attempting LLM repair")
+            repair_prompt = (
+                f"The following DuckDB SQL query failed.\n\n"
+                f"Query: {sql}\n\nError: {first_err}\n\n{schema_desc}\n"
+                f"Fix the query. Columns marked (text) are VARCHAR — use TRY_CAST(col AS DOUBLE) "
+                f"for arithmetic on them. Return ONLY the corrected SQL on a single line, "
+                f"no explanation, no semicolons, no code fences."
+            )
+            repair_resp = client.models.generate_content(
+                model=model,
+                contents=repair_prompt,
+                config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=2048),
+            )
+            sql = (repair_resp.text or "").strip().rstrip(";")
+            if sql.startswith("```"):
+                lines = sql.split("\n")
+                sql = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
+            sql = _fix_table_names(sql, real_table_names)
+            logger.info(f"Repaired SQL: {sql}")
+            result = con.execute(sql).fetchall()
         col_names = [desc[0] for desc in con.description]
 
         # 6. Format as markdown table (max 50 rows)
@@ -213,6 +285,21 @@ User question: {question}"""
             md += f"\n*Showing {max_rows} of {len(result)} rows*\n"
 
         md += f"\nSQL: `{sql}`"
+
+        # Hierarchy warning must travel WITH the result — the answer-writing
+        # model never sees the SQL-generation prompt, and without this it adds
+        # parent totals to child totals (double-counting)
+        parent_cols = sorted({
+            c for t in tables for c in t["columns"]
+            if "fed_from" in str(c).lower() or str(c).lower() in ("parent", "parent_id")
+        })
+        if parent_cols:
+            md += (
+                f"\n\nIMPORTANT (for interpreting these results): this data is hierarchical "
+                f"(parent-reference column: {', '.join(parent_cols)}). A parent row's totals "
+                f"already INCLUDE everything fed from it — when reporting a total for an area, "
+                f"use only the topmost row(s); never add a parent's total to its children's totals."
+            )
         return md
 
     except Exception as e:

@@ -36,7 +36,7 @@ OUTPUT FORMAT RULES (strict):
 - Keep answers focused on what was asked. If a source has extra detail, leave it out."""
 
 
-def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_search_enabled: bool) -> str:
+def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_search_enabled: bool, structured_tables=None) -> str:
     """Build system prompt dynamically based on which tools are available."""
     if not has_documents and not has_structured_data and not web_search_enabled:
         return SYSTEM_PROMPT_NO_DOCS
@@ -48,7 +48,11 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
         parts.append("- search_documents: Find specific facts or snippets across documents. Only returns a few excerpts — NOT for summarization.")
         parts.append("- explore_knowledge_base: Open-ended exploration that spawns a sub-agent which iteratively uses tree/glob/grep/list_files/read_document over up to 8 turns and returns a compact summary. Use when the user asks 'where is X', 'find everything about Y', or 'what does the KB say about Z' and the answer requires multi-step exploration to even find what to read.")
     if has_structured_data:
-        parts.append("- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons).")
+        sql_line = "- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons) and for looking up specific values in the tables."
+        schema_summary = _format_structured_tables(structured_tables)
+        if schema_summary:
+            sql_line += f" Available tables: {schema_summary}"
+        parts.append(sql_line)
     if web_search_enabled:
         parts.append("- web_search: Search the web for information not found in the user's documents.")
 
@@ -97,7 +101,13 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
             "shared knowledge base (scope='global'). Don't conflate the two."
         )
     if has_structured_data:
-        parts.append("- For quantitative questions about tabular data (numbers, totals, averages), use query_structured_data.")
+        parts.append(
+            "- For questions about tabular data, use query_structured_data — this includes "
+            "quantitative analysis (numbers, totals, averages) AND single-value lookups when "
+            "the entity the user names appears in one of the available tables (e.g. 'what is "
+            "the rating/load of X' where X is a row in a table). Only fall back to "
+            "search_documents for tabular entities when SQL returns nothing."
+        )
     if web_search_enabled:
         parts.append("- For current events or information not in the user's documents, use web_search.")
     parts.append("- For casual greetings or questions clearly unrelated to any tool, respond directly without calling a tool.")
@@ -181,14 +191,35 @@ def _build_search_tool() -> types.Tool:
     )
 
 
-def _build_sql_tool() -> types.FunctionDeclaration:
+def _format_structured_tables(structured_tables) -> str:
+    """One-line schema summary per table: name(col1, col2, ...) — capped for prompt size."""
+    if not structured_tables:
+        return ""
+    lines = []
+    for t in structured_tables[:20]:
+        cols = t.get("columns") or []
+        col_str = ", ".join(str(c) for c in cols[:15])
+        if len(cols) > 15:
+            col_str += ", ..."
+        lines.append(f"{t.get('table_name', '?')}({col_str})")
+    return "; ".join(lines)
+
+
+def _build_sql_tool(structured_tables=None) -> types.FunctionDeclaration:
     """Build the query_structured_data tool definition."""
+    description = (
+        "Query the user's tabular data (from uploaded CSV/XLSX files) using SQL. "
+        "Use this for totals, counts, averages, comparisons, AND for looking up any "
+        "specific value stored in these tables — even a single cell (e.g. the rating, "
+        "load, or attribute of one named row). Prefer this over search_documents "
+        "whenever the entity the user asks about appears in a table below."
+    )
+    schema_summary = _format_structured_tables(structured_tables)
+    if schema_summary:
+        description += f" Available tables: {schema_summary}"
     return types.FunctionDeclaration(
         name="query_structured_data",
-        description=(
-            "Query the user's tabular data (from uploaded CSV/XLSX files) to answer quantitative questions. "
-            "Use this for questions about totals, counts, averages, comparisons, or any numeric analysis."
-        ),
+        description=description,
         parameters=types.Schema(
             type="OBJECT",
             properties={
@@ -644,6 +675,7 @@ def stream_response(
     supabase_client=None,
     has_documents: bool = False,
     has_structured_data: bool = False,
+    structured_tables: Optional[List[dict]] = None,
     manual_metadata_filter: Optional[dict] = None,
 ) -> Generator[tuple[str, str], None, None]:
     """
@@ -736,7 +768,7 @@ Document excerpts:
             logger.warning(f"Failed to build explore_knowledge_base tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
-            function_declarations.append(_build_sql_tool())
+            function_declarations.append(_build_sql_tool(structured_tables))
         except Exception as e:
             logger.warning(f"Failed to build SQL tool (non-fatal): {e}")
     if web_search_enabled:
@@ -747,7 +779,7 @@ Document excerpts:
 
     tools = None
     tool_config = None
-    system_text = _build_system_prompt(has_documents, text_to_sql_enabled, web_search_enabled)
+    system_text = _build_system_prompt(has_documents, text_to_sql_enabled, web_search_enabled, structured_tables)
     if function_declarations:
         tools = [types.Tool(function_declarations=function_declarations)]
         tool_config = types.ToolConfig(
@@ -759,6 +791,9 @@ Document excerpts:
         tools=tools,
         tool_config=tool_config,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        # Deterministic tool routing — default temperature makes the
+        # search-vs-SQL choice flaky for lookup questions
+        temperature=0,
     )
 
     # Emit a thinking event when tools are available so the frontend can show status
@@ -918,6 +953,12 @@ Document excerpts:
         elif tool_name == "query_structured_data":
             from app.services.sql_tool import execute_sql_query
             question = args.get("question", "")
+            # The router's paraphrase can drop parts of the user's intent
+            # (e.g. "total load" reduced to "which panels") — always give the
+            # SQL generator the original wording too
+            last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            if last_user_msg and last_user_msg.strip().lower() not in question.strip().lower():
+                question = f"{last_user_msg}\n(Additional context from the assistant: {question})"
             result_text = execute_sql_query(question, user_id, supabase_client)
 
             # If SQL failed and user has documents, fall back to document search

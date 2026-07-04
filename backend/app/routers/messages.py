@@ -73,9 +73,17 @@ async def send_message(
     # has user_id NOT NULL — see REVIEW-FIX.md follow-up). Once Phase 7+
     # extends the two-scope model to structured_data, swap this to the same
     # or_() union pattern as ready_docs above.
+    structured_tables = []
     try:
-        struct_data = supabase.table("structured_data").select("id").eq("user_id", user_id).limit(1).execute()
+        struct_data = (
+            supabase.table("structured_data")
+            .select("table_name,columns")
+            .eq("user_id", user_id)
+            .limit(20)
+            .execute()
+        )
         has_structured_data = bool(struct_data.data)
+        structured_tables = struct_data.data or []
     except Exception as e:
         logger.warning(f"Structured data check failed (non-fatal): {e}")
 
@@ -90,6 +98,7 @@ async def send_message(
                 supabase_client=supabase,
                 has_documents=has_documents,
                 has_structured_data=has_structured_data,
+                structured_tables=structured_tables,
                 manual_metadata_filter=body.metadata_filter,
             ):
                 if event_type == "token":
