@@ -39,8 +39,8 @@ export default function MessageInput({ onSend, onStop, disabled, isStreaming }: 
   }
 
   return (
-    <div className="border-t p-4">
-      <div className="flex gap-2">
+    <div className="border-t border-border/60 p-3">
+      <div className="glass-strong flex gap-2 rounded-2xl p-2">
         <textarea
           ref={textareaRef}
           value={content}
@@ -50,7 +50,7 @@ export default function MessageInput({ onSend, onStop, disabled, isStreaming }: 
           placeholder="Type a message..."
           disabled={disabled}
           rows={1}
-          className="flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          className="flex-1 resize-none rounded-lg border border-transparent bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-ring"
           autoFocus
         />
         {isStreaming ? (

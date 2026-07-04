@@ -34,9 +34,12 @@ export default function Chat() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [loadingThreads, setLoadingThreads] = useState(true)
   const [files, setFiles] = useState<UploadedFile[]>([])
-  const [isUploading, setIsUploading] = useState(false)
+  // Note: only the setter is consumed today; underscore-prefixed to satisfy
+  // noUnusedLocals (pre-existing issue surfaced by the full build).
+  const [_isUploading, setIsUploading] = useState(false)
   const [metadataSchema, setMetadataSchema] = useState<MetadataFieldDefinition[] | null>(null)
   const [metadataFilters, setMetadataFilters] = useState<Record<string, any>>({})
+  const [filtersVisible, setFiltersVisible] = useState(false)
   // Phase 6 / Plan 06-07 — single typed state slot replaces the Phase 5
   // minimum-viable shape (flat sub-agent fields + boolean discriminator on
   // toolSteps). Structural separation via own state slot replaces the boolean.
@@ -68,7 +71,11 @@ export default function Chat() {
     }
   }, [])
 
-  const handleUploadFile = async (file: File, folder_path: string = '/', scope: 'user' | 'global' = 'user') => {
+  const handleUploadFile = async (
+    file: File,
+    folder_path: string = '/',
+    scope: 'user' | 'global' = 'user',
+  ): Promise<UploadedFile | null> => {
     setIsUploading(true)
     try {
       const uploaded = await uploadFile(file, folder_path, scope)
@@ -81,8 +88,10 @@ export default function Chat() {
       } else {
         setFiles((prev) => [uploaded, ...prev])
       }
+      return uploaded
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to upload file')
+      return null
     } finally {
       setIsUploading(false)
     }
@@ -382,7 +391,7 @@ export default function Chat() {
   const hasReadyDocs = files.some((f) => f.status === 'ready' && f.metadata)
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen gap-2 p-2">
       <ThreadSidebar
         threads={threads}
         activeThreadId={activeThreadId}
@@ -392,9 +401,9 @@ export default function Chat() {
         onSignOut={handleSignOut}
       />
 
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
         {loadingThreads ? (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
+          <div className="glass flex flex-1 items-center justify-center rounded-2xl text-muted-foreground">
             Loading...
           </div>
         ) : (
@@ -406,23 +415,48 @@ export default function Chat() {
               onStatusUpdate={handleStatusUpdate}
               metadataSchema={metadataSchema}
             />
-            {hasReadyDocs && metadataSchema && (
-              <MetadataFilterBar
-                schema={metadataSchema}
-                documents={files}
-                filters={metadataFilters}
-                onFilterChange={setMetadataFilters}
+            <div className="glass flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
+              {hasReadyDocs && metadataSchema && (
+                <div className="border-b border-border/60">
+                  <button
+                    type="button"
+                    onClick={() => setFiltersVisible((v) => !v)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground transition-all duration-150 hover:bg-primary/5 dark:hover:bg-primary/10"
+                    aria-expanded={filtersVisible}
+                    title={
+                      Object.keys(metadataFilters).length > 0
+                        ? 'Manual filters active — override the agent\'s auto-filtering'
+                        : 'Optional: pin metadata filters to override the agent\'s auto-filtering'
+                    }
+                  >
+                    <span>{filtersVisible ? '▾' : '▸'}</span>
+                    <span>Manual filters</span>
+                    {Object.keys(metadataFilters).length > 0 && (
+                      <span className="ml-1 rounded-full bg-primary/15 text-primary dark:bg-primary/25 dark:text-primary-foreground px-1.5 py-0.5 text-[10px] font-medium">
+                        {Object.keys(metadataFilters).length} active
+                      </span>
+                    )}
+                  </button>
+                  {filtersVisible && (
+                    <MetadataFilterBar
+                      schema={metadataSchema}
+                      documents={files}
+                      filters={metadataFilters}
+                      onFilterChange={setMetadataFilters}
+                    />
+                  )}
+                </div>
+              )}
+              <MessageList
+                messages={messages}
+                streamingContent={streamingContent}
+                isStreaming={isStreaming}
+                liveSubAgentTrace={liveSubAgentTrace}
+                toolSteps={toolSteps}
+                isToolThinking={isToolThinking}
               />
-            )}
-            <MessageList
-              messages={messages}
-              streamingContent={streamingContent}
-              isStreaming={isStreaming}
-              liveSubAgentTrace={liveSubAgentTrace}
-              toolSteps={toolSteps}
-              isToolThinking={isToolThinking}
-            />
-            <MessageInput onSend={handleSendMessage} onStop={handleStopStreaming} disabled={isStreaming} isStreaming={isStreaming} />
+              <MessageInput onSend={handleSendMessage} onStop={handleStopStreaming} disabled={isStreaming} isStreaming={isStreaming} />
+            </div>
           </>
         )}
       </div>

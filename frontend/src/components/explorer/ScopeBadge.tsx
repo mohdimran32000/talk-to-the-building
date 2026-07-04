@@ -4,8 +4,8 @@ interface ScopeBadgeProps {
 
 export function ScopeBadge({ scope }: ScopeBadgeProps) {
   const config = scope === 'global'
-    ? { label: 'Shared', className: 'bg-blue-100 text-blue-800' }
-    : { label: 'Private', className: 'bg-zinc-100 text-zinc-800' }
+    ? { label: 'Shared', className: 'bg-primary/15 text-primary dark:bg-primary/20 dark:text-primary' }
+    : { label: 'Private', className: 'bg-foreground/8 text-muted-foreground' }
   return (
     <span
       className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${config.className}`}

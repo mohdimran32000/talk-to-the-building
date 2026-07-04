@@ -65,15 +65,15 @@ export default function MetadataFilterBar({
   const activeCount = Object.keys(filters).length
 
   return (
-    <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-muted/10 text-xs">
+    <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border/60 text-xs">
       <span className="font-medium text-muted-foreground">
-        Filters{activeCount > 0 && <span className="ml-1 inline-block rounded-full bg-purple-100 text-purple-800 px-1.5">{activeCount}</span>}:
+        Filters{activeCount > 0 && <span className="ml-1 inline-block rounded-full bg-primary/15 text-primary px-1.5">{activeCount}</span>}:
       </span>
 
       {Object.entries(distinctValues).map(([fieldName, values]) => (
         <select
           key={fieldName}
-          className="rounded border bg-background text-foreground px-2 py-1 text-xs"
+          className="rounded-lg border border-border/70 bg-white/50 dark:bg-white/5 text-foreground px-2 py-1 text-xs backdrop-blur-sm transition-all duration-150 hover:border-primary/30 focus:outline-none focus:ring-2 focus:ring-ring"
           value={filters[fieldName] || ''}
           onChange={(e) => handleTextFilterChange(fieldName, e.target.value)}
         >
@@ -88,7 +88,7 @@ export default function MetadataFilterBar({
         <label key={field.name} className="flex items-center gap-1 cursor-pointer">
           <input
             type="checkbox"
-            className="rounded"
+            className="rounded accent-primary"
             checked={!!filters[field.name]}
             onChange={(e) => handleBooleanFilterChange(field.name, e.target.checked)}
           />
@@ -98,7 +98,7 @@ export default function MetadataFilterBar({
 
       {hasFilters && (
         <button
-          className="text-xs text-muted-foreground hover:text-foreground underline"
+          className="text-xs text-muted-foreground hover:text-foreground underline transition-colors duration-150"
           onClick={() => onFilterChange({})}
         >
           Clear

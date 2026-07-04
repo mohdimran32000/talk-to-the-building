@@ -63,7 +63,7 @@ export function DocumentRow({ doc, depth, onDelete, onRename }: DocumentRowProps
           data-document-id={doc.id}
           data-scope={doc.scope}
           data-dragging={isDragging || undefined}
-          className={`flex items-center justify-between rounded-md bg-muted/30 px-3 py-1.5 text-sm cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-50' : ''}`}
+          className={`flex items-center justify-between rounded-lg bg-white/30 dark:bg-white/4 px-3 py-1.5 text-sm cursor-grab active:cursor-grabbing transition-all duration-150 hover:bg-primary/5 dark:hover:bg-primary/10 ${isDragging ? 'opacity-50' : ''}`}
           style={{ marginLeft: `${depth * 16}px` }}
           role="treeitem"
           aria-level={depth + 1}

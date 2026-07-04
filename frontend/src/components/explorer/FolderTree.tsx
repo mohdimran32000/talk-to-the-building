@@ -28,9 +28,10 @@ interface FolderTreeProps {
   // its section-header onCreated; FolderNode children call onAfterMutation
   // internally. Both paths now end up in the same refetchCounter increment.
   externalMutationSignal?: number
+  onDropFiles?: (files: FileList | File[], path: string, scope: Scope) => void
 }
 
-export function FolderTree({ scope, rootPath, onDeleteDocument, onRenameDocument, externalMutationSignal = 0 }: FolderTreeProps) {
+export function FolderTree({ scope, rootPath, onDeleteDocument, onRenameDocument, externalMutationSignal = 0, onDropFiles }: FolderTreeProps) {
   const { user } = useAuth()
   const userId = user?.id ?? null
   const expansion = useOpenFoldersStorage(userId)
@@ -125,6 +126,7 @@ export function FolderTree({ scope, rootPath, onDeleteDocument, onRenameDocument
           onAfterMutation={onAfterMutation}
           onDeleteDocument={onDeleteDocument}
           onRenameDocument={onRenameDocument}
+          onDropFiles={onDropFiles}
         />
       </div>
     </ExpansionContext.Provider>

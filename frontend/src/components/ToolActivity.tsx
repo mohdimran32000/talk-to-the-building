@@ -120,9 +120,9 @@ function ToolIcon({ type }: { type: string }) {
 function DotSpinner() {
   return (
     <span className="inline-flex items-center gap-0.5 ml-1.5">
-      <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_infinite]" />
-      <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_0.2s_infinite]" />
-      <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_0.4s_infinite]" />
+      <span className="w-1 h-1 rounded-full bg-primary animate-[dotPulse_1.4s_ease-in-out_infinite]" />
+      <span className="w-1 h-1 rounded-full bg-primary animate-[dotPulse_1.4s_ease-in-out_0.2s_infinite]" />
+      <span className="w-1 h-1 rounded-full bg-primary animate-[dotPulse_1.4s_ease-in-out_0.4s_infinite]" />
     </span>
   )
 }
@@ -143,7 +143,7 @@ function ToolStepRow({ step }: { step: ToolStep }) {
     <div className="group">
       <button
         onClick={() => hasDetails && setExpanded(!expanded)}
-        className={`flex items-center gap-1.5 text-xs transition-colors ${
+        className={`flex items-center gap-1.5 text-xs transition-colors duration-150 ${
           step.status === 'running'
             ? 'text-muted-foreground'
             : 'text-muted-foreground/70 hover:text-muted-foreground'

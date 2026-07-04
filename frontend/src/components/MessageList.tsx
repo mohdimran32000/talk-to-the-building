@@ -58,11 +58,11 @@ function SubAgentSection({ tool, isLive, defaultExpanded = false }: SubAgentSect
   }, [tool, isLive])
 
   return (
-    <div className="border-l-2 border-blue-400/50 pl-3 ml-1 my-2">
+    <div className="border-l-2 border-primary/40 pl-3 ml-1 my-2">
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+        className="flex items-center gap-1 text-xs text-primary/90 hover:text-primary transition-colors duration-150"
       >
         <span className="font-mono">{expanded ? '▼' : '▶'}</span>
         <span>{label}</span>
@@ -167,10 +167,10 @@ export default function MessageList({
           className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
         >
           <div
-            className={`max-w-[75%] rounded-lg px-4 py-2 text-sm ${
+            className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${
               msg.role === 'user'
-                ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
-                : 'bg-muted text-foreground'
+                ? 'bg-primary/90 text-primary-foreground shadow-md shadow-primary/20 whitespace-pre-wrap'
+                : 'glass-strong text-foreground'
             }`}
           >
             {msg.role === 'assistant' && msg.tool_metadata?.tools_used?.length ? (
@@ -191,7 +191,7 @@ export default function MessageList({
 
       {isStreaming && (
         <div className="flex justify-start">
-          <div className="max-w-[75%] rounded-lg bg-muted px-4 py-2 text-sm">
+          <div className="glass-strong max-w-[75%] rounded-2xl px-4 py-2.5 text-sm">
             {isToolThinking && toolSteps.length === 0 && !streamingContent && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -199,9 +199,9 @@ export default function MessageList({
                 </svg>
                 <span>Searching available tools</span>
                 <span className="inline-flex items-center gap-0.5 ml-0.5">
-                  <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_infinite]" />
-                  <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_0.2s_infinite]" />
-                  <span className="w-1 h-1 rounded-full bg-orange-400 animate-[dotPulse_1.4s_ease-in-out_0.4s_infinite]" />
+                  <span className="w-1 h-1 rounded-full bg-primary animate-[dotPulse_1.4s_ease-in-out_infinite]" />
+                  <span className="w-1 h-1 rounded-full bg-primary animate-[dotPulse_1.4s_ease-in-out_0.2s_infinite]" />
+                  <span className="w-1 h-1 rounded-full bg-primary animate-[dotPulse_1.4s_ease-in-out_0.4s_infinite]" />
                 </span>
               </div>
             )}

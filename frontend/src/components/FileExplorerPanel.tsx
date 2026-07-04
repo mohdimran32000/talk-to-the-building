@@ -23,7 +23,12 @@ export interface SelectedFolder {
 
 interface FileExplorerPanelProps {
   files: UploadedFile[]
-  onUpload: (file: File, folder_path: string, scope: 'user' | 'global') => void
+  // onUpload now returns a Promise<UploadedFile | null> so the panel can
+  // track in-flight uploads, render an optimistic "uploading…" banner, and
+  // trigger a folder refetch the instant each upload settles (resolved or
+  // rejected) — including the skipped/updated paths which don't change
+  // files.length.
+  onUpload: (file: File, folder_path: string, scope: 'user' | 'global') => Promise<UploadedFile | null>
   onDelete: (fileId: string) => void
   onRename?: (fileId: string, newName: string) => void
   // LOCKED signature (Phase 6 checker WARNING #3): fourth optional arg propagates content_markdown_status
@@ -134,51 +139,85 @@ export default function FileExplorerPanel({
     return () => clearInterval(interval)
   }, [onStatusUpdate])
 
-  // Phase 6 fix: bump on every upload so RootSection remounts FolderTree and
-  // re-fetches contents. Without this, FolderNode's cached listFolder() result
-  // hides the newly-uploaded doc until the user manually collapses + re-expands
-  // the target folder.
+  // Bump RootSection's key on every upload completion (resolved or rejected,
+  // including skipped/updated paths that don't change files.length). The
+  // remount forces FolderNode to drop its cached listFolder() result and
+  // re-fetch with the new document visible.
   const [uploadRefreshKey, setUploadRefreshKey] = useState(0)
 
+  // Optimistic in-flight upload tracking. Each entry corresponds to a file
+  // dispatched to onUpload that hasn't settled yet. Rendered as a banner
+  // under the panel header so the user sees an immediate response on drop /
+  // file-pick rather than 1-3 seconds of dead air while the backend round-
+  // trip completes.
+  type GhostUpload = {
+    tempId: string
+    name: string
+    folder_path: string
+    scope: 'user' | 'global'
+  }
+  const [ghostUploads, setGhostUploads] = useState<GhostUpload[]>([])
+
+  // Shared upload sink — used by both the file-picker (multi-select via `multiple`)
+  // and native OS drag-and-drop on folder rows. Applies the UI-11 non-admin
+  // downgrade to ('user', '/') once for the batch, opens the target in
+  // localStorage, and dispatches each file to onUpload sequentially. The backend
+  // semaphore (Semaphore(2) in files.py) handles the queueing.
+  const uploadFilesTo = (
+    files: FileList | File[],
+    targetPath: string,
+    targetScope: 'user' | 'global',
+  ) => {
+    const list = Array.from(files)
+    if (list.length === 0) return
+
+    const safeScope = targetScope === 'global' && !isAdmin ? 'user' : targetScope
+    const safePath = safeScope === targetScope ? targetPath : '/'
+
+    if (safeScope !== targetScope) {
+      toast.warning(
+        'Cannot upload to Shared without admin rights — uploaded to My Files root instead'
+      )
+    }
+
+    if (user?.id && safePath !== '/') {
+      try {
+        const key = `fileExplorer:open:${user.id}`
+        const raw = window.localStorage.getItem(key)
+        const parsed = raw ? JSON.parse(raw) : { user: [], global: [] }
+        const opened: string[] = Array.isArray(parsed[safeScope]) ? parsed[safeScope] : []
+        if (!opened.includes(safePath)) {
+          opened.push(safePath)
+          parsed[safeScope] = opened
+          window.localStorage.setItem(key, JSON.stringify(parsed))
+        }
+      } catch { /* localStorage disabled — non-fatal */ }
+    }
+
+    const newGhosts: GhostUpload[] = list.map((f) => ({
+      tempId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${f.name}`,
+      name: f.name,
+      folder_path: safePath,
+      scope: safeScope,
+    }))
+    setGhostUploads((prev) => [...prev, ...newGhosts])
+
+    list.forEach((f, i) => {
+      const ghostId = newGhosts[i].tempId
+      onUpload(f, safePath, safeScope).finally(() => {
+        setGhostUploads((prev) => prev.filter((g) => g.tempId !== ghostId))
+        // Bump on every settle (resolved/rejected/skipped/updated). The
+        // length-watching effect previously missed skipped+updated paths
+        // because they don't grow files.length.
+        setUploadRefreshKey((k) => k + 1)
+      })
+    })
+  }
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      // UI-05: upload defaults into the currently-selected folder; if user is non-admin and selected scope is 'global',
-      // fall back to root user (UI-11 defense — non-admin can never write to global)
-      const targetScope = selectedFolder.scope
-      const targetPath = selectedFolder.path
-      const safeScope = targetScope === 'global' && !isAdmin ? 'user' : targetScope
-      const safePath = safeScope === targetScope ? targetPath : '/'
-
-      // CR-01 (Phase 6 review): surface the security override to the user. The
-      // collapse to ('user', '/') is intentional (Pitfall 11 — non-admins cannot
-      // write to Shared), but a silent downgrade meant the file landed in My Files
-      // root with no UI signal, leading to misplaced documents.
-      if (safeScope !== targetScope) {
-        toast.warning(
-          'Cannot upload to Shared without admin rights — uploaded to My Files root instead'
-        )
-      }
-
-      // Auto-open the target folder before remounting the tree, so the user sees
-      // the new file land. Writes directly to the useOpenFoldersStorage key
-      // (`fileExplorer:open:{userId}`); the next FolderTree mount reads it.
-      if (user?.id && safePath !== '/') {
-        try {
-          const key = `fileExplorer:open:${user.id}`
-          const raw = window.localStorage.getItem(key)
-          const parsed = raw ? JSON.parse(raw) : { user: [], global: [] }
-          const list: string[] = Array.isArray(parsed[safeScope]) ? parsed[safeScope] : []
-          if (!list.includes(safePath)) {
-            list.push(safePath)
-            parsed[safeScope] = list
-            window.localStorage.setItem(key, JSON.stringify(parsed))
-          }
-        } catch { /* localStorage disabled — non-fatal */ }
-      }
-
-      onUpload(file, safePath, safeScope)
-      setUploadRefreshKey((k) => k + 1)
+    const fileList = e.target.files
+    if (fileList && fileList.length > 0) {
+      uploadFilesTo(fileList, selectedFolder.path, selectedFolder.scope)
       e.target.value = ''
     }
   }
@@ -192,15 +231,15 @@ export default function FileExplorerPanel({
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="border-b px-3 py-2 flex items-center justify-between">
+    <div className="glass flex flex-col shrink-0 max-h-[40vh] overflow-hidden rounded-2xl">
+      <div className="border-b border-border/60 px-3 py-2 flex items-center justify-between">
         <Breadcrumbs
           path={selectedFolder.path}
           scopeLabel={selectedFolder.scope === 'global' ? 'Shared' : 'My Files'}
           onNavigate={(path) => setSelectedFolder({ scope: selectedFolder.scope, path })}
         />
         <div className="flex items-center gap-1">
-          <input ref={inputRef} type="file" hidden onChange={handleFileChange} />
+          <input ref={inputRef} type="file" multiple hidden onChange={handleFileChange} />
           <Button
             type="button"
             size="sm"
@@ -212,6 +251,39 @@ export default function FileExplorerPanel({
           </Button>
         </div>
       </div>
+      {ghostUploads.length > 0 && (
+        <div
+          className="border-b border-border/60 bg-primary/5 dark:bg-primary/10 px-3 py-1.5 text-xs flex flex-col gap-1"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-2 text-primary dark:text-primary font-medium">
+            <svg
+              className="animate-spin h-3.5 w-3.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="4" />
+              <path
+                d="M4 12a8 8 0 018-8"
+                stroke="currentColor"
+                strokeWidth="4"
+                strokeLinecap="round"
+              />
+            </svg>
+            Uploading {ghostUploads.length} file{ghostUploads.length === 1 ? '' : 's'}…
+          </div>
+          {ghostUploads.map((g) => (
+            <div key={g.tempId} className="pl-5 text-muted-foreground truncate" title={`${g.scope === 'global' ? 'Shared' : 'My Files'} ${g.folder_path}`}>
+              {g.name}
+              <span className="ml-2 text-[10px] opacity-70">
+                → {g.scope === 'global' ? 'Shared' : 'My Files'} {g.folder_path}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         <div className="flex-1 overflow-y-auto" data-testid="file-explorer-body" onClick={onPanelClick}>
           <RootSection
@@ -219,12 +291,14 @@ export default function FileExplorerPanel({
             onDeleteDocument={onDelete}
             onRenameDocument={onRename}
             externalRefreshKey={uploadRefreshKey}
+            onDropFiles={uploadFilesTo}
           />
           <RootSection
             scope="user"
             onDeleteDocument={onDelete}
             onRenameDocument={onRename}
             externalRefreshKey={uploadRefreshKey}
+            onDropFiles={uploadFilesTo}
           />
         </div>
       </DndContext>

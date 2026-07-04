@@ -24,28 +24,30 @@ export default function ThreadSidebar({
   const { isAdmin } = useAuth()
 
   return (
-    <div className="flex h-full w-64 flex-col border-r bg-muted/30">
+    <div className="glass flex h-full w-64 flex-col overflow-hidden rounded-2xl">
       <div className="p-3">
         <Button onClick={onNewThread} className="w-full" variant="outline">
           + New Chat
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
         {threads.length === 0 ? (
           <p className="p-3 text-center text-sm text-muted-foreground">No conversations yet</p>
         ) : (
           threads.map((thread) => (
             <div
               key={thread.id}
-              className={`group flex cursor-pointer items-center justify-between px-3 py-2 text-sm hover:bg-muted ${
-                thread.id === activeThreadId ? 'bg-muted font-medium' : ''
+              className={`group relative flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-sm transition-all duration-150 hover:bg-primary/5 dark:hover:bg-primary/10 ${
+                thread.id === activeThreadId
+                  ? 'bg-primary/10 font-medium dark:bg-primary/20 before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-primary'
+                  : ''
               }`}
               onClick={() => onSelectThread(thread.id)}
             >
               <span className="truncate">{thread.title}</span>
               <button
-                className="ml-2 hidden text-muted-foreground hover:text-destructive group-hover:inline"
+                className="ml-2 hidden text-muted-foreground transition-colors duration-150 hover:text-destructive group-hover:inline"
                 onClick={(e) => {
                   e.stopPropagation()
                   onDeleteThread(thread.id)
@@ -58,7 +60,7 @@ export default function ThreadSidebar({
         )}
       </div>
 
-      <div className="border-t p-3 space-y-2">
+      <div className="border-t border-border/60 p-3 space-y-2">
         {isAdmin && (
           <Link to="/settings">
             <Button variant="outline" className="w-full text-sm" data-testid="settings-link">

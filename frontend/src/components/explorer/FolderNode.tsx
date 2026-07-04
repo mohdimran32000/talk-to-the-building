@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { ChevronRight, ChevronDown, Folder, FolderOpen, Plus, MoreVertical } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { ChevronRight, Folder, FolderOpen, Plus, MoreVertical } from 'lucide-react'
 import { toast } from 'sonner'
 import { useDroppable } from '@dnd-kit/core'
 import { listFolder, renameFolder, type ListFolderResponse, type UploadedFile } from '@/lib/api'
@@ -25,6 +25,9 @@ export interface FolderNodeProps {
   onAfterMutation?: () => void                       // Plan 06-09 Task 3d: bubble CRUD completion up to FolderTree
                                                      // so it can force-remount the tree and re-fetch contents.
   // DnD wiring lands in Plan 06-10 (useDroppable on the header div)
+  // Native HTML5 drop of OS files onto this folder header (separate event
+  // system from @dnd-kit, which uses pointer events for internal moves).
+  onDropFiles?: (files: FileList | File[], path: string, scope: 'user' | 'global') => void
 }
 
 export function FolderNode({
@@ -37,6 +40,7 @@ export function FolderNode({
   onDeleteDocument,
   onRenameDocument,
   onAfterMutation,
+  onDropFiles,
 }: FolderNodeProps) {
   const { isAdmin } = useAuth()
   const canWrite = scope === 'user' || isAdmin
@@ -63,6 +67,52 @@ export function FolderNode({
     data: { type: 'folder', scope, path },
   })
   const isHotTarget = isOver && (active?.data.current as { type?: string } | undefined)?.type === 'document'
+
+  // Native HTML5 drop target — separate from @dnd-kit's pointer-driven move.
+  // Only activates when the drag contains OS files (`types` includes 'Files'),
+  // so internal document moves still flow through @dnd-kit unmolested.
+  const [isFileDragOver, setIsFileDragOver] = useState(false)
+  const dragDepthRef = useRef(0)
+  const isFileDrag = (e: React.DragEvent) => {
+    const types = e.dataTransfer?.types
+    if (!types) return false
+    for (let i = 0; i < types.length; i++) if (types[i] === 'Files') return true
+    return false
+  }
+  const onFileDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!onDropFiles || !canWrite || !isFileDrag(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepthRef.current += 1
+    setIsFileDragOver(true)
+  }
+  const onFileDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!onDropFiles || !canWrite || !isFileDrag(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  const onFileDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!onDropFiles || !canWrite || !isFileDrag(e)) return
+    dragDepthRef.current -= 1
+    if (dragDepthRef.current <= 0) {
+      dragDepthRef.current = 0
+      setIsFileDragOver(false)
+    }
+  }
+  const onFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!onDropFiles || !isFileDrag(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepthRef.current = 0
+    setIsFileDragOver(false)
+    if (!canWrite) {
+      toast.error('Read-only — admin rights required to upload here')
+      return
+    }
+    const files = e.dataTransfer.files
+    if (files && files.length > 0) onDropFiles(files, path, scope)
+  }
 
   // Lazy-load children on first expand (per RESEARCH.md §FileExplorerPanel "lazy loading prevents loading the entire tree upfront for a 200-folder corpus")
   useEffect(() => {
@@ -122,18 +172,22 @@ export function FolderNode({
           data-folder-path={path}
           data-folder-id={folderId ?? ''}
           data-scope={scope}
-          data-drop-active={isHotTarget || undefined}
-          className={`group ${isHotTarget ? 'ring-1 ring-blue-400/40 bg-blue-400/10 rounded-md' : ''}`}
+          data-drop-active={isHotTarget || isFileDragOver || undefined}
+          onDragEnter={onFileDragEnter}
+          onDragOver={onFileDragOver}
+          onDragLeave={onFileDragLeave}
+          onDrop={onFileDrop}
+          className={`group ${(isHotTarget || isFileDragOver) ? 'ring-1 ring-primary/40 bg-primary/10 rounded-lg' : ''}`}
         >
           <button
             type="button"
             tabIndex={0}
             onClick={() => onToggle(scope, path)}
-            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-sm hover:bg-muted/50 transition-colors text-left"
+            className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-sm hover:bg-primary/5 dark:hover:bg-primary/10 transition-all duration-150 text-left"
             style={{ paddingLeft: `${depth * 16 + 8}px` }}
           >
-            {isOpen ? <ChevronDown className="w-3.5 h-3.5 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
-            {isOpen ? <FolderOpen className="w-4 h-4 shrink-0 text-blue-600" /> : <Folder className="w-4 h-4 shrink-0 text-blue-600" />}
+            <ChevronRight className={`w-3.5 h-3.5 shrink-0 transition-transform duration-150 ${isOpen ? 'rotate-90' : ''}`} />
+            {isOpen ? <FolderOpen className="w-4 h-4 shrink-0 text-primary" /> : <Folder className="w-4 h-4 shrink-0 text-primary" />}
             {renameMode ? (
               <input
                 autoFocus
@@ -167,7 +221,7 @@ export function FolderNode({
                     e.stopPropagation()
                     setCreateDialogOpen(true)
                   }}
-                  className="rounded p-0.5 hover:bg-muted text-muted-foreground hover:text-foreground"
+                  className="rounded-md p-0.5 transition-all duration-150 hover:bg-primary/10 text-muted-foreground hover:text-foreground"
                   title="New folder"
                   aria-label={`Create child folder under ${folderName}`}
                 >
@@ -192,7 +246,7 @@ export function FolderNode({
                         })
                       )
                     }}
-                    className="rounded p-0.5 hover:bg-muted text-muted-foreground hover:text-foreground"
+                    className="rounded-md p-0.5 transition-all duration-150 hover:bg-primary/10 text-muted-foreground hover:text-foreground"
                     title="Folder actions"
                     aria-label={`Open ${folderName} folder menu`}
                   >
@@ -208,7 +262,7 @@ export function FolderNode({
                 <div className="text-xs text-muted-foreground px-2 py-1" style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}>Loading…</div>
               )}
               {error && (
-                <div className="text-xs text-red-600 px-2 py-1" style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}>{error}</div>
+                <div className="text-xs text-red-600 dark:text-red-400 px-2 py-1" style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}>{error}</div>
               )}
               {contents && (
                 <>
@@ -224,6 +278,7 @@ export function FolderNode({
                       onDeleteDocument={onDeleteDocument}
                       onRenameDocument={onRenameDocument}
                       onAfterMutation={onAfterMutation}
+                      onDropFiles={onDropFiles}
                     />
                   ))}
                   {/* Then documents */}

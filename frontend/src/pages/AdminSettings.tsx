@@ -91,7 +91,7 @@ export default function AdminSettings() {
         <Button variant="outline" onClick={() => navigate('/')}>Back to Chat</Button>
       </div>
 
-      <Card className="mb-6">
+      <Card className="glass-strong mb-6 rounded-2xl">
         <CardHeader>
           <CardTitle>LLM Configuration</CardTitle>
         </CardHeader>
@@ -113,7 +113,7 @@ export default function AdminSettings() {
               value={llmModel}
               onChange={(e) => setLlmModel(e.target.value)}
               disabled={loadingModels}
-              className="flex h-9 w-full rounded-md border border-input bg-background text-foreground px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+              className="flex h-9 w-full rounded-lg border border-input bg-white/50 dark:bg-white/5 text-foreground px-3 py-1 text-sm shadow-xs backdrop-blur-sm transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
             >
               {loadingModels ? (
                 <option>Loading models...</option>
@@ -127,7 +127,7 @@ export default function AdminSettings() {
         </CardContent>
       </Card>
 
-      <Card className="mb-6">
+      <Card className="glass-strong mb-6 rounded-2xl">
         <CardHeader>
           <CardTitle>LangSmith Observability</CardTitle>
         </CardHeader>
@@ -156,14 +156,14 @@ export default function AdminSettings() {
               type="checkbox"
               checked={langsmithTracing}
               onChange={(e) => setLangsmithTracing(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-4 w-4 rounded border-gray-300 accent-primary"
             />
             <Label htmlFor="langsmith-tracing">Enable Tracing</Label>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="mb-6">
+      <Card className="glass-strong mb-6 rounded-2xl">
         <CardHeader>
           <CardTitle>Retrieval Settings</CardTitle>
         </CardHeader>
@@ -174,7 +174,7 @@ export default function AdminSettings() {
               type="checkbox"
               checked={hybridSearchEnabled}
               onChange={(e) => setHybridSearchEnabled(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-4 w-4 rounded border-gray-300 accent-primary"
             />
             <Label htmlFor="hybrid-search">Enable Hybrid Search (Vector + Keyword)</Label>
           </div>
@@ -187,7 +187,7 @@ export default function AdminSettings() {
               type="checkbox"
               checked={rerankingEnabled}
               onChange={(e) => setRerankingEnabled(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-4 w-4 rounded border-gray-300 accent-primary"
             />
             <Label htmlFor="reranking">Enable LLM Reranking</Label>
           </div>
@@ -202,7 +202,7 @@ export default function AdminSettings() {
                   id="reranking-provider"
                   value={rerankingProvider}
                   onChange={(e) => setRerankingProvider(e.target.value)}
-                  className="flex h-9 w-full rounded-md border border-input bg-background text-foreground px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                  className="flex h-9 w-full rounded-lg border border-input bg-white/50 dark:bg-white/5 text-foreground px-3 py-1 text-sm shadow-xs backdrop-blur-sm transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
                 >
                   <option value="gemini">Gemini (LLM-as-Judge)</option>
                   <option value="cohere">Cohere (Rerank API)</option>
@@ -225,7 +225,7 @@ export default function AdminSettings() {
         </CardContent>
       </Card>
 
-      <Card className="mb-6">
+      <Card className="glass-strong mb-6 rounded-2xl">
         <CardHeader>
           <CardTitle>Additional Tools</CardTitle>
         </CardHeader>
@@ -236,7 +236,7 @@ export default function AdminSettings() {
               type="checkbox"
               checked={textToSqlEnabled}
               onChange={(e) => setTextToSqlEnabled(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-4 w-4 rounded border-gray-300 accent-primary"
             />
             <Label htmlFor="text-to-sql">Enable Text-to-SQL</Label>
           </div>
@@ -249,7 +249,7 @@ export default function AdminSettings() {
               type="checkbox"
               checked={webSearchEnabled}
               onChange={(e) => setWebSearchEnabled(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-4 w-4 rounded border-gray-300 accent-primary"
             />
             <Label htmlFor="web-search">Enable Web Search</Label>
           </div>

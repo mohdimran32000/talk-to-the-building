@@ -16,9 +16,10 @@ interface RootSectionProps {
   // the new document does not appear in its target folder until the user
   // collapses + re-expands the folder.
   externalRefreshKey?: number
+  onDropFiles?: (files: FileList | File[], path: string, scope: 'user' | 'global') => void
 }
 
-export function RootSection({ scope, onDeleteDocument, onRenameDocument, externalRefreshKey = 0 }: RootSectionProps) {
+export function RootSection({ scope, onDeleteDocument, onRenameDocument, externalRefreshKey = 0, onDropFiles }: RootSectionProps) {
   const { isAdmin } = useAuth()
   // UI-11 / Pitfall 11: the global-scope inline-create button is gated structurally —
   // canCreate = scope === 'user' || isAdmin. Non-admins on Shared see no Create affordance.
@@ -37,11 +38,11 @@ export function RootSection({ scope, onDeleteDocument, onRenameDocument, externa
   const label = isShared ? 'Shared (global)' : 'My Files'
   const Icon = isShared ? Globe : UserIcon
   const tintClass = isShared
-    ? 'bg-blue-50/50 dark:bg-blue-950/20'             // Pitfall 11 visual differentiator (PATTERNS.md line 128)
-    : 'bg-zinc-50/50 dark:bg-zinc-900/30'
+    ? 'bg-primary/4 dark:bg-primary/8'                // Pitfall 11 visual differentiator (PATTERNS.md line 128)
+    : 'bg-transparent'
 
   return (
-    <section className={`border-b ${tintClass}`} aria-label={label} data-root-scope={scope}>
+    <section className={`border-b border-border/60 last:border-b-0 ${tintClass}`} aria-label={label} data-root-scope={scope}>
       <header className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-muted-foreground">
         <Icon className="w-4 h-4 shrink-0" />
         <span>{label}</span>
@@ -81,6 +82,7 @@ export function RootSection({ scope, onDeleteDocument, onRenameDocument, externa
           externalMutationSignal={headerMutationSignal}
           onDeleteDocument={onDeleteDocument}
           onRenameDocument={onRenameDocument}
+          onDropFiles={onDropFiles}
         />
       </div>
     </section>

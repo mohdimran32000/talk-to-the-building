@@ -36,12 +36,12 @@ export default function ThemeToggle() {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full left-0 z-50 mb-1 rounded-md border bg-popover p-1 shadow-md">
+          <div className="glass-strong absolute bottom-full left-0 z-50 mb-1 rounded-lg p-1 shadow-md">
             {options.map(({ value, label, icon: ItemIcon }) => (
               <button
                 key={value}
-                className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent ${
-                  theme === value ? 'bg-accent' : ''
+                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-all duration-150 hover:bg-primary/5 dark:hover:bg-primary/15 ${
+                  theme === value ? 'bg-primary/10 dark:bg-primary/20' : ''
                 }`}
                 onClick={() => {
                   setTheme(value)
