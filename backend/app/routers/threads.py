@@ -43,7 +43,9 @@ async def get_thread(thread_id: str, user_id: str = Depends(get_current_user)):
         .maybe_single()
         .execute()
     )
-    if not result.data:
+    # maybe_single() returns None (not a response object) when no rows match
+    # on this supabase-py version, so guard before touching .data
+    if result is None or not result.data:
         raise HTTPException(status_code=404, detail="Thread not found")
     return result.data
 

@@ -42,7 +42,7 @@ def _require_admin(user_id: str, action: str) -> None:
 @router.get("", response_model=FolderListResponse)
 async def list_folders(
     path: str = Query("/", description="Canonical folder path to list"),
-    scope: str = Query("both", regex="^(user|global|both)$",
+    scope: str = Query("both", pattern="^(user|global|both)$",
                        description="Filter scope: user | global | both (union)"),
     user_id: str = Depends(get_current_user),
 ):

@@ -64,7 +64,7 @@ async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     folder_path: str = Query("/", description="Canonical folder path"),
-    scope: str = Query("user", regex="^(user|global)$",
+    scope: str = Query("user", pattern="^(user|global)$",
                        description="'user' (default) or 'global'; admin required for 'global'"),
     user_id: str = Depends(get_current_user),
 ):

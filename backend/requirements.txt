@@ -11,3 +11,5 @@ docling==2.91.0
 cohere
 duckdb
 tavily-python
+pywin32
+openpyxl
