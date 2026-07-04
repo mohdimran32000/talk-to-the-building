@@ -59,8 +59,8 @@ def run():
     section("Text-to-SQL Tool")
 
     # Enable text-to-sql via admin settings (need admin token)
-    from test_helpers import TEST_USER_B
-    admin_token = get_auth_token(TEST_USER_B["email"], TEST_USER_B["password"])
+    from test_helpers import TEST_USER_ADMIN
+    admin_token = get_auth_token(TEST_USER_ADMIN["email"], TEST_USER_ADMIN["password"])
     admin_headers = auth_headers(admin_token)
 
     # Enable text-to-sql

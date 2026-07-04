@@ -18,9 +18,9 @@ and multi-path redundancy with automatic failover.
 The protocol operates at Layer 3.5 of the OSI model, bridging network and transport layers.
 Performance benchmarks show 99.999% packet delivery rates under heavy load."""
 
-# Admin user (test@test.com) for settings changes
-ADMIN_EMAIL = h.TEST_USER_B["email"]
-ADMIN_PASSWORD = h.TEST_USER_B["password"]
+# Admin user (admin@test.com) for settings changes
+ADMIN_EMAIL = h.TEST_USER_ADMIN["email"]
+ADMIN_PASSWORD = h.TEST_USER_ADMIN["password"]
 
 
 def _get_admin_token():

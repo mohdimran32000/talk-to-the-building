@@ -254,19 +254,20 @@ def run():
             )
 
         # -- Section 4: BACKFILL-03 verifier (Migration 012 NOT NULL DEFAULT did the work) --
-        h.section("BACKFILL-03: existing rows at folder_path='/' AND scope='user'")
-        # PostgREST .or_() filter syntax: comma-separated, dots inside escaped via the syntax below.
-        # Coarser fallback uses two .neq() calls if the .or_() form fails on this client version.
+        h.section("BACKFILL-03: no rows with NULL folder_path or NULL scope")
+        # Migration 012's NOT NULL DEFAULT guarantee is that every row has a
+        # folder_path and scope. Rows in non-root folders / global scope are
+        # legitimate once the folder feature is in use, so only NULLs regress.
         try:
-            r1 = sb_admin.table("documents").select("id").neq("folder_path", "/").limit(5).execute().data or []
-            r2 = sb_admin.table("documents").select("id").neq("scope", "user").limit(5).execute().data or []
+            r1 = sb_admin.table("documents").select("id").is_("folder_path", "null").limit(5).execute().data or []
+            r2 = sb_admin.table("documents").select("id").is_("scope", "null").limit(5).execute().data or []
             h.test(
-                "BACKFILL-03: zero documents with folder_path != '/'",
+                "BACKFILL-03: zero documents with NULL folder_path",
                 len(r1) == 0,
                 f"found {len(r1)} offending rows: {[x['id'] for x in r1]}",
             )
             h.test(
-                "BACKFILL-03: zero documents with scope != 'user'",
+                "BACKFILL-03: zero documents with NULL scope",
                 len(r2) == 0,
                 f"found {len(r2)} offending rows: {[x['id'] for x in r2]}",
             )
