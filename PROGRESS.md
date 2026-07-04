@@ -753,3 +753,53 @@ Episode 2 was forked from this repo's Episode 1 final state and is being develop
 ### How to revisit Episode 1
 - `git checkout Episode-1-Complete` (detached HEAD, read-only)
 - Or browse the [Release page](https://github.com/mohdimran32000/claude-code-agentic-rag-masterclass/releases/tag/Episode-1-Complete) on GitHub
+
+---
+
+## Session 2026-07-02 → 2026-07-04 — Machine Migration, Load-Schedule Integration, SQL Reliability, Glass UI
+
+### Environment Rebuild (new machine)
+- Repo was copied from the old machine (`mi2007`) — venv pointed at a nonexistent Python, Node.js absent
+- Rebuilt `backend/venv` with local Python 3.13 (`py -3.13 -m venv venv` + pip install)
+- Installed Node.js 24 LTS via winget (`C:\Program Files\nodejs`)
+- Added missing runtime deps to `requirements.txt`: `pywin32` (PPTX COM), `openpyxl` (XLSX)
+- Old broken venv parked at `backend/venv_broken_old/` — safe to delete to reclaim disk
+- Supabase project had been paused/deleted for inactivity — restored from dashboard, all data intact
+- Gemini API key was revoked mid-session (GCP cleanup casualty) — replaced in `backend/.env`
+- **Zombie uvicorn warning**: killing the `--reload` parent on Windows orphans the worker, which keeps serving stale code on 8001 while a new server binds silently. Enumerate ALL python processes (`Get-CimInstance Win32_Process`) and kill uvicorn+multiprocessing children before restarting.
+
+### Full Check — Test Suite (360/360 after fixes)
+- `regex=` → `pattern=` FastAPI deprecations (`files.py`, `folders.py`)
+- `threads.py` `get_thread`: `maybe_single()` returns `None` on no match → guarded, now 404 instead of 500
+- `test_hybrid.py` / `test_tools.py` used `TEST_USER_B` for admin actions — this DB's admin is `admin@test.com` (`TEST_USER_ADMIN`)
+- `test_backfill.py` BACKFILL-03 asserted all docs at folder root (stale moment-in-time invariant) — now checks NULL folder_path/scope instead
+- Purged 6 orphaned test-fixture documents left by interrupted test runs
+
+### Load-Schedule Integration (Sql from PDF project)
+- Final extraction output ingested from `C:\RAG Automators\Sql from PDF\load-schedule-extraction\fullrun\csv\` into `/load-schedule` folder (user: admin@test.com):
+  `panels.csv` (101 rows), `smdb_feeders.csv` (238), `db_circuits.csv` (2,251), `mdb_calc.csv` (23)
+- Text-to-SQL enabled in global settings; re-upload same filenames after extraction updates — record manager handles dedup/update
+- Verified: TCL of MDB-C = 5,785.87 kW; 29 FCUs on 4F Block B (SUM of `points`, not circuit count); floor total = 98.51 kW (hierarchy-aware, no double count)
+
+### SQL Tool & Agent Reliability (fixes driven by LangSmith traces)
+| Fix | File |
+|-----|------|
+| Table schemas (names + columns) injected into `query_structured_data` tool description + system prompt — single-value lookups now route to SQL | `openai_client.py`, `messages.py` |
+| Deterministic tool routing — `temperature=0` on the tool-decision call | `openai_client.py` |
+| Majority-vote column type inference (≥80% numeric over 200 rows) shared between schema description and DuckDB load — stray text no longer forces VARCHAR | `sql_tool.py` |
+| One-shot LLM repair retry when generated SQL errors | `sql_tool.py` |
+| Sample values per text column in schema ('possible values' when exhaustive vs 'examples' when high-cardinality) — fixes format mismatches like floor `'4F'` vs `'4th'`, prevents sample-substitution for user terms | `sql_tool.py` |
+| Quantity semantics: 'how many X' → `SUM(points/qty)` not `COUNT(*)` | `sql_tool.py` |
+| Hierarchy-aware totals: `NOT EXISTS` pattern sums only top-level rows per area; warning attached to every SQL result so the answer model can't re-double-count via `fed_from` | `sql_tool.py` |
+| User's original question leads SQL generation (router paraphrase demoted to context) — paraphrase was dropping intent | `openai_client.py` |
+
+### Frontend — Glassmorphism Redesign
+- Violet-blue accent (`--primary: oklch(0.55 0.18 265)`), ambient gradient background, `.glass` / `.glass-strong` utilities (backdrop-blur + translucency), radius 0.75rem
+- Floating glass panels (thread sidebar, chat column, file explorer), gradient primary buttons, glass dialogs/context menus, soft translucent status pills, accent-tinted user bubbles, styled scrollbars, `prefers-reduced-motion` support
+- Both light + dark mode; all Playwright test hooks (testids/roles/labels) preserved; `tsc` + `vite build` verified
+- 21 files changed — see commit
+
+### Operational Notes
+- Servers run detached (survive session close): backend `venv\Scripts\python -m uvicorn app.main:app --port 8001`, frontend `npm run dev` (Node at `C:\Program Files\nodejs` — open a NEW terminal for PATH)
+- LangSmith debugging works via API (`LANGSMITH_PROJECT=rag-masterclass-ep2`) — list runs, drill into tool calls, read generated SQL
+- Login: admin@test.com / adminpassword123 (admin); test@test.com and testuser@example.com are regular users
