@@ -1,5 +1,11 @@
 # RAG Consistency Audit Playbook
 
+## How to launch (copy-paste this as the goal)
+
+```
+/goal Run the RAG consistency audit defined in backend/scripts/EVAL_PLAYBOOK.md: extend the three eval suites in backend/scripts to cover the full matrix in that playbook — every question category, every phrasing style (including conversational wording like "explain in simple terms", multi-turn follow-ups like "give a breakdown of it", typos, and negative questions about things that don't exist), across all three pipeline layers (tool routing, SQL generation, answer formatting) — minimum 40 cases. Fix every failure at the layer it belongs to, add each fix as a permanent regression case, and stop only when two consecutive full runs pass 100%. Finish with the scorecard defined in the playbook.
+```
+
 Purpose: verify the load-schedule RAG pipeline gives correct, consistent answers
 across ALL question types, phrasings, and pipeline layers — and fix it when it
 doesn't. This file is the reference for the `/goal` that runs the audit; it is
