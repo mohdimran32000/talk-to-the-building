@@ -803,3 +803,21 @@ Episode 2 was forked from this repo's Episode 1 final state and is being develop
 - Servers run detached (survive session close): backend `venv\Scripts\python -m uvicorn app.main:app --port 8001`, frontend `npm run dev` (Node at `C:\Program Files\nodejs` — open a NEW terminal for PATH)
 - LangSmith debugging works via API (`LANGSMITH_PROJECT=rag-masterclass-ep2`) — list runs, drill into tool calls, read generated SQL
 - Login: admin@test.com / adminpassword123 (admin); test@test.com and testuser@example.com are regular users
+
+### Eval Harness & Answer Consistency (session 2026-07-05 → 07-09)
+- **Goal-driven eval suite** in `backend/scripts/` (run from `backend/` with venv python): `eval_sql_breakdown.py` (4 cases), `eval_rag_vs_truth.py` (24 cases — RAG SQL vs hand-written ground-truth SQL over the same data), `eval_routing.py` (2 routing regressions via `stream_response`). All 30 passing, two consecutive runs.
+- **Fixes this round** (each has a regression case):
+
+| Fix | File |
+|-----|------|
+| Breakdown/list questions must SELECT descriptive columns (`room_area`, `points`) + as-printed ORDER BY, not just identifiers | `sql_tool.py` |
+| Never drop the equipment-type filter (FCU) when a floor/block filter exists | `sql_tool.py` |
+| `max_output_tokens` 2048→8192 — thinking models spent thought tokens from the same budget and truncated SQL mid-string | `sql_tool.py` |
+| Quantitative guard: "explain/summarize"-wording + quantitative terms never hijacked from SQL into `analyze_document` (was: "whats the total load for block B? explain me in simple terms" → "No document matching...") | `openai_client.py` |
+| `analyze_document` dead-ends fall back to SQL when tabular data exists (both normal and forced paths) | `openai_client.py` |
+| Answer rules: render ALL rows on list/breakdown/Excel requests; never leak internal notes or `SQL:` line; drop provenance noise but surface substantive corrections (struck/superseded values) as current-vs-original | `openai_client.py` |
+| Single-row lookups also SELECT notes/remarks so corrections reach the answer | `sql_tool.py` |
+
+- **Data fix (Supabase, additive with provenance notes):** `SMDB-B-6F` (210.21/163.96 kW) and `MCC-B-RS` (38.60/27.02) added to panels from the MDB-C-G2 feeder schedule — were missing from ingest; panels 101→103 rows
+- **Block B adjudication:** Block B alone = 1,234.30 kW TCL / 955.97 MDL (topmost panels); serving board MDB-C-G2 = 1,445.45 TCL / **1,156.36 MDL (DEWA-corrected; printed 1,120.40 superseded)** — MDB-C-G2 also feeds ~366 kW of Block C/shared, so it is NOT "Block B alone". Unresolved: 6F lab DBs reference "SMDB-B-6F-LAB" (4 spellings, in no table) → possible ~12.4 kW double count; awaiting user confirmation
+- **Next session:** run the full consistency-audit goal — copy-paste text + coverage matrix in `backend/scripts/EVAL_PLAYBOOK.md`; push (~21 commits, needs one-time GitHub sign-in via GCM); revoke GCP service-account key
