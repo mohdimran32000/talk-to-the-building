@@ -31,7 +31,10 @@ SYSTEM_PROMPT_NO_DOCS = "You are a helpful assistant. Answer the user's question
 OUTPUT_FORMAT_RULES = """
 OUTPUT FORMAT RULES (strict):
 - Never output raw HTML in your answer. Tags like <table>, <tr>, <td>, <th>, <br>, <span>, <div> are forbidden. If the source excerpts contain HTML, extract the data into clean markdown.
-- For tabular source data, prefer a concise markdown bulleted list unless the user explicitly asked for a table. If a markdown table is warranted, keep it small and relevant to the question — do not include every row and column.
+- For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render EVERY relevant row as a clean markdown table — never truncate or stop partway. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity) and, when a quantity column is present, end with a Total row that matches the stated total.
+- Never reveal internal notes from tool results. Lines like "SQL: `...`" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
+- Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
+- EXCEPTION: if a note records a substantive correction to a value (struck out, superseded, handwritten replacement, revised by the authority), do surface it briefly — state the current value and mention the original (e.g. "Max Demand: 1156.36 kW (corrected by DEWA from the printed 1120.40)"). Never present a superseded value as current.
 - Never paste, echo, or reproduce source excerpts verbatim. Always synthesize the answer in your own words.
 - Keep answers focused on what was asked. If a source has extra detail, leave it out."""
 
@@ -809,6 +812,14 @@ Document excerpts:
         import re
         last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "").lower()
         summarize_pattern = re.search(r'\b(summarize|summarise|summary|analyze|analyse|review|explain|overview)\b', last_user_msg)
+        # Quantitative questions often carry these words too ("what's the total
+        # load for block B? explain in simple terms") — those are DATA questions
+        # for the SQL tool, never document summarization. Detect and skip.
+        quantitative_pattern = re.search(
+            r'\b(total|how many|count|sum|average|load|demand|rating|kw|kva|watt|watts|amps?|highest|lowest|capacity)\b',
+            last_user_msg)
+        if has_structured_data and quantitative_pattern:
+            summarize_pattern = None
         if summarize_pattern:
             # Check if user references a specific document (not a generic question)
             generic_terms = {'document', 'documents', 'file', 'files', 'my'}
@@ -875,7 +886,9 @@ Document excerpts:
         args = dict(fc.args) if fc.args else {}
         tool_name = fc.name
 
-        # Override tool choice if forced_tool is set and Gemini picked wrong
+        # Override tool choice if forced_tool is set and Gemini picked wrong.
+        # (Quantitative questions never reach here — the detection above skips
+        # them — so this only redirects genuine summarization requests.)
         if forced_tool and tool_name != forced_tool:
             logger.info(f"Overriding {tool_name} -> {forced_tool} (summarization intent detected)")
             last_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
@@ -1001,7 +1014,19 @@ Document excerpts:
                 .limit(1).execute()
 
             if not doc.data:
-                result_text = f"No document matching '{doc_name}' found."
+                if has_structured_data:
+                    # No document by that name, but the user has tabular data —
+                    # the "document name" is usually a misrouted data question
+                    # (e.g. "explain the total load for block B"), so answer it
+                    # with SQL instead of dead-ending.
+                    logger.info(f"analyze_document found no match for '{doc_name}', falling back to SQL")
+                    yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No matching document, trying tables"}))
+                    tool_name = "query_structured_data"
+                    yield ("tool_start", json.dumps({"tool": tool_name, "args": {"question": question}}))
+                    from app.services.sql_tool import execute_sql_query
+                    result_text = execute_sql_query(question or doc_name, user_id, supabase_client)
+                else:
+                    result_text = f"No document matching '{doc_name}' found."
             else:
                 doc_id = doc.data[0]["id"]
                 actual_name = doc.data[0]["file_name"]
@@ -1250,7 +1275,14 @@ Tool ({tool_name}) results:
             .limit(1).execute()
 
         if not doc.data:
-            result_text = f"No document matching '{doc_name}' found."
+            if has_structured_data:
+                # Same fallback as the main analyze_document handler: a data
+                # question misdetected as summarization shouldn't dead-end.
+                logger.info(f"Forced analyze_document found no match for '{doc_name}', falling back to SQL")
+                from app.services.sql_tool import execute_sql_query
+                result_text = execute_sql_query(question or doc_name, user_id, supabase_client)
+            else:
+                result_text = f"No document matching '{doc_name}' found."
         else:
             doc_id = doc.data[0]["id"]
             actual_name = doc.data[0]["file_name"]

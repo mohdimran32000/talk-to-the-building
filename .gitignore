@@ -27,3 +27,7 @@ trace_tool.json
 
 # Local reference materials
 Ref Screenshots/
+
+# Detached backend server logs
+backend/uvicorn.out.log
+backend/uvicorn.err.log

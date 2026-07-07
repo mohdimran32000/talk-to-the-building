@@ -181,7 +181,11 @@ Rules:
 - Match the FORMAT of the column samples — e.g. if floor values look like 'GF', '4F', '6F' then the 4th floor is floor = '4F' (never '%4th%' or 'fourth')
 - Columns marked 'possible values' list the complete set — filter with those exact values. Columns marked 'examples' have MANY OTHER values — if the user's term (e.g. 'FCU') is not among the examples, still filter for it directly with ILIKE '%term%'; NEVER substitute a different example value for the user's term
 - Tables often reference each other by shared identifier values (e.g. a board/panel name column in one table matching a name column in another) — use JOINs across tables when a question spans them
+- NEVER drop a constraint from the question. If the user names an equipment/load type (e.g. 'FCU'), the WHERE clause MUST filter on it (e.g. load_type ILIKE '%FCU%') IN ADDITION TO any floor/block/area filters — a floor filter alone returns every load type on that floor, which is wrong
 - When counting equipment/units and the table has a quantity column (e.g. 'points', 'qty', 'count'), SUM that column instead of COUNT(*) — one row can represent multiple units
+- When the user asks for a breakdown, list, itemization, or table of items, do NOT select only identifier columns — also SELECT every column that makes a row meaningful on its own: any room/area/location/description column, the quantity column (e.g. 'points', 'qty'), and the load/rating column if relevant. Example: for "breakdown of FCUs" select db, cir_no, room_area, points — not just db and cir_no
+- For breakdowns/lists, ORDER BY the natural reading order: the board/panel column first, then the serial/row number cast numerically (e.g. ORDER BY db, TRY_CAST(sl_no AS INTEGER)) so circuits appear in as-printed order
+- For single-row value lookups (not aggregates), also SELECT the notes/remarks column when the table has one — source documents sometimes contain corrections (a printed value struck out and replaced by hand). The notes record this, and the answer must be able to report the current value versus the original
 - If a table has a parent-reference column (e.g. 'fed_from'), a parent row's totals already INCLUDE its children — summing all rows in an area double-counts. Sum ONLY rows whose parent is OUTSIDE the filtered set, using this exact pattern: SELECT SUM(x.tcl_kw) FROM "panels" x WHERE <area filter on x> AND NOT EXISTS (SELECT 1 FROM "panels" p WHERE p.panel = x.fed_from AND <same area filter on p>)
 
 User question: {question}"""
@@ -191,7 +195,9 @@ User question: {question}"""
         contents=prompt,
         config=genai_types.GenerateContentConfig(
             temperature=0,
-            max_output_tokens=2048,
+            # Thinking models (gemini-2.5+/3) spend "thought" tokens from this same
+            # budget — 2048 sometimes truncated the SQL mid-string. Keep it high.
+            max_output_tokens=8192,
         ),
     )
 
@@ -257,7 +263,7 @@ User question: {question}"""
             repair_resp = client.models.generate_content(
                 model=model,
                 contents=repair_prompt,
-                config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=2048),
+                config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=8192),
             )
             sql = (repair_resp.text or "").strip().rstrip(";")
             if sql.startswith("```"):
