@@ -36,6 +36,7 @@ OUTPUT FORMAT RULES (strict):
 - Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
 - EXCEPTION: if a note records a substantive correction to a value (struck out, superseded, handwritten replacement, revised by the authority), do surface it briefly — state the current value and mention the original (e.g. "Max Demand: 1156.36 kW (corrected by DEWA from the printed 1120.40)"). Never present a superseded value as current.
 - Never paste, echo, or reproduce source excerpts verbatim. Always synthesize the answer in your own words.
+- When the user asks you to explain or simplify a figure from earlier in the conversation ("explain it in simple terms"), ALWAYS restate that figure explicitly in the explanation — an explanation that never names the value it explains is incomplete.
 - Keep answers focused on what was asked. If a source has extra detail, leave it out."""
 
 
@@ -115,6 +116,10 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
         parts.append("- For current events or information not in the user's documents, use web_search.")
     parts.append("- For casual greetings or questions clearly unrelated to any tool, respond directly without calling a tool.")
     parts.append("- Only call ONE tool per turn.")
+    # Answers produced WITHOUT a tool round-trip (follow-ups answered from
+    # conversation history) stream this same prompt's response directly, so the
+    # format rules must live here too — not only in the tool-result final call.
+    parts.append(OUTPUT_FORMAT_RULES)
 
     return "\n".join(parts)
 
@@ -228,7 +233,16 @@ def _build_sql_tool(structured_tables=None) -> types.FunctionDeclaration:
             properties={
                 "question": types.Schema(
                     type="STRING",
-                    description="The natural language question about the tabular data",
+                    description=(
+                        "The user's question, passed through VERBATIM. Only resolve "
+                        "pronouns/references from conversation context (e.g. 'give a "
+                        "breakdown of it' -> 'give a breakdown of the FCUs on the 4th "
+                        "floor of Block B'). Do NOT rephrase domain terms, do NOT name "
+                        "tables or columns, and do NOT reinterpret what is being asked — "
+                        "the SQL engine sees the full schema and maps the question itself; "
+                        "a paraphrase that guesses the wrong table/column produces a "
+                        "confidently wrong answer."
+                    ),
                 ),
             },
             required=["question"],
@@ -815,9 +829,16 @@ Document excerpts:
         # Quantitative questions often carry these words too ("what's the total
         # load for block B? explain in simple terms") — those are DATA questions
         # for the SQL tool, never document summarization. Detect and skip.
-        quantitative_pattern = re.search(
-            r'\b(total|how many|count|sum|average|load|demand|rating|kw|kva|watt|watts|amps?|highest|lowest|capacity)\b',
-            last_user_msg)
+        # Plurals count ("review the loads"), and pronoun follow-ups ("explain
+        # it in simple terms") carry their subject in earlier turns, so those
+        # are scanned for the quantitative context too.
+        quant_re = (r'\b(totals?|how many|counts?|sums?|averages?|loads?|demands?|ratings?'
+                    r'|kw|kva|watts?|amps?|highest|lowest|capacity|breakdowns?)\b')
+        quant_scan = last_user_msg
+        if re.search(r'\b(it|that|this|them|those)\b', last_user_msg):
+            recent = " ".join(str(m.get("content") or "") for m in messages[-4:])
+            quant_scan = f"{last_user_msg}\n{recent.lower()}"
+        quantitative_pattern = re.search(quant_re, quant_scan)
         if has_structured_data and quantitative_pattern:
             summarize_pattern = None
         if summarize_pattern:

@@ -10,6 +10,14 @@ compared:
     RAG result's markdown table (tolerance 0.01)
   - kind="text":   every expected string must appear in the RAG result
 
+Case kinds:
+  - kind="number":     truth value must appear among the numeric cells (tol 0.01)
+  - kind="number_any": at least ONE of the values in "accept" must appear —
+                       for genuinely ambiguous questions with two valid framings
+  - kind="text":       every expected string must appear in the RAG result
+  - kind="negative":   the entity/filter doesn't exist — result must be empty,
+                       NULL or zero; any nonzero numeric cell is a hallucination
+
 This is the automated alternative to manually testing questions in the UI.
 Add new cases as bad answers are discovered — each becomes a regression test.
 
@@ -18,6 +26,7 @@ Usage: cd backend && venv/Scripts/python scripts/eval_rag_vs_truth.py
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -173,6 +182,76 @@ CASES = [
         "kind": "number",
         "truth_sql": """SELECT TRY_CAST(mdl_kw AS DOUBLE) FROM panels WHERE panel='MDB-C-G2'""",
     },
+    # ---- Matrix extension (consistency audit, 2026-07-11) ----
+    {
+        # Phrasing: typos/informal — same truth as the clean FCU count
+        "q": "how many FCU's conected to 4th flor block B",
+        "kind": "number",
+        "truth_sql": """SELECT SUM(TRY_CAST(points AS DOUBLE)) FROM db_circuits
+                        WHERE db IN ('DB-04(B)-SP-01','DB-04(B)-SP-02') AND load_type ILIKE '%FCU%'""",
+    },
+    {
+        # Category: negative/absent — panel that exists in no table
+        "q": "what is the total connected load of panel XYZ-99?",
+        "kind": "negative",
+    },
+    {
+        # Category: negative/absent — floor that doesn't exist (floors are GF..6F)
+        "q": "how many FCUs are there on the 15th floor of Block B?",
+        "kind": "negative",
+    },
+    {
+        # Category: cross-table join over the WHOLE block (panels ⋈ db_circuits),
+        # equipment-type filter must survive alongside the block filter
+        "q": "how many FCU points are there in total across all of Block B?",
+        "kind": "number",
+        "truth_sql": """SELECT SUM(TRY_CAST(d.points AS DOUBLE)) FROM db_circuits d
+                        JOIN panels p ON d.db = p.panel
+                        WHERE p.block='B' AND d.load_type ILIKE '%FCU%'""",
+    },
+    {
+        # Category: superlative among DBs (some 4F DBs have empty tcl_kw — NULLS
+        # must sort last, not crash or win)
+        "q": "which distribution board on the 4th floor of Block B has the highest connected load?",
+        "kind": "text",
+        "expect": ["DB-04(B)-LP-02"],
+    },
+    {
+        # Category: relationship, reverse direction (children of a parent)
+        "q": "which panels are fed from SMDB-B-4F?",
+        "kind": "text",
+        "expect": ["DB-04(B)-LP-02", "DB-04(B)-SP-01", "DB-04(B)-SP-02"],
+    },
+    {
+        # Category: count of panels by kind within a block
+        "q": "how many SMDBs are there in Block B?",
+        "kind": "number",
+        "truth_sql": """SELECT COUNT(*) FROM panels WHERE kind='SMDB' AND block='B'""",
+    },
+    {
+        # Regression (run 2026-07-12): "max demand of MDB-C-G2" via the router
+        # was answered by SUMming mdb_calc per-load-type rows (2283.40 / 2891.00)
+        # instead of reading the panel's own row. Single named-panel values must
+        # come from panels, never a SUM over the design-calc breakdown table.
+        "q": "what is the total connected load of MDB-C-G2?",
+        "kind": "number",
+        "truth_sql": """SELECT TRY_CAST(tcl_kw AS DOUBLE) FROM panels WHERE panel='MDB-C-G2'""",
+    },
+    {
+        # Category: ambiguous framing — "total load for Block B" legitimately
+        # means either Block B panels alone (1234.30) or the serving board
+        # MDB-C-G2 (1445.45). Either is correct; anything else (e.g. a
+        # double-counted hierarchy sum) is wrong.
+        "q": "what is the total load for Block B?",
+        "kind": "number_any",
+        "accept_sqls": [
+            """SELECT SUM(TRY_CAST(x.tcl_kw AS DOUBLE)) FROM panels x
+               WHERE x.block='B'
+               AND NOT EXISTS (SELECT 1 FROM panels p WHERE p.panel = x.fed_from
+                               AND p.block='B')""",
+            """SELECT TRY_CAST(tcl_kw AS DOUBLE) FROM panels WHERE panel='MDB-C-G2'""",
+        ],
+    },
 ]
 
 
@@ -211,14 +290,37 @@ def numeric_cells(result: str) -> list:
     return nums
 
 
+def with_retry(fn, attempts=3, delay=5):
+    """Retry transient network/API failures — an eval run must not be killed
+    by one TLS blip to Supabase or Gemini (observed 2026-07-11)."""
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            if i == attempts - 1:
+                raise
+            print(f"  (transient error, retry {i + 1}/{attempts - 1}: {type(e).__name__}: {e})")
+            time.sleep(delay * (i + 1))
+
+
 def main():
     sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
     con, user_id = load_truth_db(sb)
 
+    # Optional CLI filter: `1-17` runs cases by 1-based index range; any other
+    # args are substrings matched against the question (e.g. `MDB-C-G2`).
+    q_filters = sys.argv[1:]
+    m = re.fullmatch(r"(\d+)-(\d+)", q_filters[0]) if len(q_filters) == 1 else None
+    if m:
+        cases = CASES[int(m.group(1)) - 1:int(m.group(2))]
+    else:
+        cases = [c for c in CASES
+                 if not q_filters or any(f.lower() in c["q"].lower() for f in q_filters)]
+
     passed = 0
-    for case in CASES:
+    for case in cases:
         q = case["q"]
-        rag = execute_sql_query(q, user_id, sb)
+        rag = with_retry(lambda: execute_sql_query(q, user_id, sb))
         failures = []
 
         if case["kind"] == "number":
@@ -229,6 +331,22 @@ def main():
                 cells = numeric_cells(rag)
                 if not any(abs(v - float(truth)) < 0.01 for v in cells):
                     failures.append(f"truth={truth}, RAG numeric cells={cells}")
+        elif case["kind"] == "number_any":
+            truths = [con.execute(s).fetchone()[0] for s in case["accept_sqls"]]
+            if any(t is None for t in truths):
+                failures.append(f"a ground-truth SQL returned NULL — fix it (truths={truths})")
+            else:
+                cells = numeric_cells(rag)
+                if not any(abs(v - float(t)) < 0.01 for v in cells for t in truths):
+                    failures.append(f"accepted values={truths}, RAG numeric cells={cells}")
+        elif case["kind"] == "negative":
+            # Entity doesn't exist: empty result / NULL / 0 are all correct.
+            # Any nonzero numeric cell means the SQL hallucinated an answer
+            # (e.g. by dropping the filter that had no matches).
+            cells = numeric_cells(rag)
+            nonzero = [v for v in cells if abs(v) > 0.001]
+            if nonzero and "no results" not in rag.lower():
+                failures.append(f"expected empty/NULL/0 result, got nonzero cells={nonzero}")
         else:
             expect = case.get("expect")
             if expect is None:
@@ -249,8 +367,8 @@ def main():
             print("  --- RAG result head ---")
             print("  " + "\n  ".join(rag.splitlines()[:6]))
 
-    print(f"\n{passed}/{len(CASES)} cases passed")
-    sys.exit(0 if passed == len(CASES) else 1)
+    print(f"\n{passed}/{len(cases)} cases passed")
+    sys.exit(0 if passed == len(cases) else 1)
 
 
 if __name__ == "__main__":

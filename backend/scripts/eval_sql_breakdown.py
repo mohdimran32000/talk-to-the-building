@@ -14,6 +14,7 @@ Exit code 0 = all checks pass, 1 = failures (prints per-question detail).
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -91,6 +92,11 @@ CASES = [
     ("how many FCU's connected to 4th floor in Block B? - Provide me the breakdown in an Excel sheet format", check_breakdown),
     ("can you give a breakdown of the FCUs on the 4th floor of Block B?", check_breakdown),
     ("list down all FCU circuits on the 4th floor of Block B", check_breakdown),
+    # Matrix extension (consistency audit, 2026-07-11):
+    # typos/informal phrasing must not change the SQL
+    ("how many FCU's conected to 4th flor block B", check_total),
+    # conversational ask must still produce the full per-circuit breakdown
+    ("i need to know all the FCUs on the 4th floor of block B, list them out with their rooms please", check_breakdown),
 ]
 
 
@@ -100,7 +106,16 @@ def main():
 
     passed = 0
     for question, checker in CASES:
-        result = execute_sql_query(question, user_id, sb)
+        result = None
+        for i in range(3):
+            try:
+                result = execute_sql_query(question, user_id, sb)
+                break
+            except Exception as e:
+                if i == 2:
+                    raise
+                print(f"  (transient error, retry {i + 1}/2: {type(e).__name__}: {e})")
+                time.sleep(5 * (i + 1))
         failures = checker(result)
         status = "PASS" if not failures else "FAIL"
         print(f"\n[{status}] {question}")
