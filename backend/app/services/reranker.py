@@ -20,13 +20,22 @@ class RerankResult(BaseModel):
     rankings: list[ChunkRelevance]
 
 
+# Relevance scoring is a cheap classification task — pin a fast non-thinking
+# model instead of the (possibly thinking) chat model; measured 21.5s/rerank on
+# gemini-3-flash-preview vs a few seconds on flash-lite.
+RERANK_MODEL = "gemini-2.5-flash-lite"
+
+
 def _rerank_gemini(query: str, chunks: List[str], top_k: int) -> List[str]:
     """Use Gemini to score each chunk's relevance to the query."""
     client = genai.Client(api_key=get_llm_api_key())
-    model = get_llm_model()
+    model = RERANK_MODEL
 
+    # Score on a bounded prefix — relevance is judged fine from the head of a
+    # chunk, and full OCR-table chunks (median ~3.6k chars, max ~21k) make the
+    # scoring call slow and expensive for no ranking gain.
     chunk_list = "\n\n".join(
-        f"[Chunk {i}]: {chunk}"
+        f"[Chunk {i}]: {chunk[:1200]}"
         for i, chunk in enumerate(chunks)
     )
 

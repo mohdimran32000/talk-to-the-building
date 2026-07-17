@@ -309,6 +309,28 @@ CASES = [
         "tools_exclude": ["analyze_document"],
         "min_rows": 16,
     },
+    # -- SQL-vs-docs routing boundary (doc-QA audit 2026-07-17; the full set
+    # -- lives in eval_doc_qa.py RB1-RB5 — these two guard the boundary from
+    # -- the load-schedule suite's side) ------------------------------------
+    {
+        # Equipment warranty lives in the switchgear MANUAL even though
+        # "distribution boards" sounds like the panels table.
+        "name": "B1 DB warranty routes to docs not SQL",
+        "messages": [u("what warranty do the distribution boards have?")],
+        "tools_include": ["search_documents"],
+        "tools_exclude": ["query_structured_data"],
+        "contains_any": ["12 month", "one year", "1 year", "1-year"],
+        "skip_if_no_docs": True,
+    },
+    {
+        # Named-panel load stays SQL even though the switchgear manual also
+        # names MDB-C-G2 — and the doc-search fallback must NOT fire.
+        "name": "B2 MDB-C-G2 load stays SQL despite manual naming it",
+        "messages": [u("what is the total connected load of MDB-C-G2?")],
+        "tools_include": ["query_structured_data"],
+        "tools_exclude": ["search_documents", "analyze_document"],
+        "has_number": 1445.45,
+    },
     {
         # Regression (run 2026-07-12): pronoun follow-up with a summarize-word
         # and NO quantitative word in the last message was forced into

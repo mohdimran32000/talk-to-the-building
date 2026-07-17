@@ -31,3 +31,6 @@ Ref Screenshots/
 # Detached backend server logs
 backend/uvicorn.out.log
 backend/uvicorn.err.log
+
+# Eval result banks (doc-QA audit)
+backend/scripts/results/

@@ -1,5 +1,6 @@
 import json
 import logging
+from itertools import zip_longest
 from typing import Generator, Optional, List
 
 from google import genai
@@ -21,7 +22,14 @@ def _get_client() -> genai.Client:
     if not key:
         raise ValueError("No Gemini API key configured. Set GEMINI_API_KEY in .env or configure it in Admin Settings.")
     if _client_cache["key"] != key or _client_cache["client"] is None:
-        _client_cache["client"] = genai.Client(api_key=key)
+        # 3-minute per-request timeout: without one, a wedged HTTP connection
+        # hangs generate_content forever (observed during the doc-QA audit —
+        # eval runs froze mid-case with zero CPU in the API call). A timeout
+        # surfaces as an exception that caller-side retries can handle.
+        _client_cache["client"] = genai.Client(
+            api_key=key,
+            http_options=types.HttpOptions(timeout=180_000),
+        )
         _client_cache["key"] = key
     return _client_cache["client"]
 
@@ -35,6 +43,7 @@ OUTPUT FORMAT RULES (strict):
 - Never reveal internal notes from tool results. Lines like "SQL: `...`" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
 - Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
 - EXCEPTION: if a note records a substantive correction to a value (struck out, superseded, handwritten replacement, revised by the authority), do surface it briefly — state the current value and mention the original (e.g. "Max Demand: 1156.36 kW (corrected by DEWA from the printed 1120.40)"). Never present a superseded value as current.
+- When excerpts contain BOTH project/site-specific records (asset registers, schedules, commissioning sheets, warranty letters) AND generic manufacturer literature (datasheets, marketing copy), answer from the project-specific records — they state what was actually installed WHERE and FOR WHAT. Use generic literature only for details the project records lack.
 - Never paste, echo, or reproduce source excerpts verbatim. Always synthesize the answer in your own words.
 - When the user asks you to explain or simplify a figure from earlier in the conversation ("explain it in simple terms"), ALWAYS restate that figure explicitly in the explanation — an explanation that never names the value it explains is incomplete.
 - Keep answers focused on what was asked. If a source has extra detail, leave it out."""
@@ -52,7 +61,7 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
         parts.append("- search_documents: Find specific facts or snippets across documents. Only returns a few excerpts — NOT for summarization.")
         parts.append("- explore_knowledge_base: Open-ended exploration that spawns a sub-agent which iteratively uses tree/glob/grep/list_files/read_document over up to 8 turns and returns a compact summary. Use when the user asks 'where is X', 'find everything about Y', or 'what does the KB say about Z' and the answer requires multi-step exploration to even find what to read.")
     if has_structured_data:
-        sql_line = "- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons) and for looking up specific values in the tables."
+        sql_line = "- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons) and for looking up specific values — but ONLY when the subject of the question lives in the available tables listed below."
         schema_summary = _format_structured_tables(structured_tables)
         if schema_summary:
             sql_line += f" Available tables: {schema_summary}"
@@ -111,6 +120,27 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
             "the entity the user names appears in one of the available tables (e.g. 'what is "
             "the rating/load of X' where X is a row in a table). Only fall back to "
             "search_documents for tabular entities when SQL returns nothing."
+        )
+        parts.append(
+            "- Route by the SUBJECT of the question, not its shape: a count/total/spec "
+            "question about equipment or facts that are NOT rows or columns of the "
+            "available tables (e.g. devices, systems, warranties, procedures described "
+            "in uploaded manuals) must use the document tools (search_documents), NOT "
+            "query_structured_data. 'How many X …' only goes to SQL when X is something "
+            "the tables actually store."
+        )
+        parts.append(
+            "- When the question is anchored to a NAMED SYSTEM or its documentation "
+            "(e.g. 'how many X does the <system> control/monitor/serve', 'in the "
+            "<system> system', 'per the manual'), use the document tools even if the "
+            "counted item also appears in a table column — the tables describe the "
+            "items themselves, not which system controls them or how it behaves."
+        )
+        parts.append(
+            "- The tables hold quantities, loads, and ratings — NOT manufacturers, "
+            "models, brands, or part numbers. Questions asking WHAT make/model/brand/"
+            "unit/device is installed (even inside equipment the tables list, like "
+            "panels) go to the document tools."
         )
     if web_search_enabled:
         parts.append("- For current events or information not in the user's documents, use web_search.")
@@ -220,7 +250,10 @@ def _build_sql_tool(structured_tables=None) -> types.FunctionDeclaration:
         "Use this for totals, counts, averages, comparisons, AND for looking up any "
         "specific value stored in these tables — even a single cell (e.g. the rating, "
         "load, or attribute of one named row). Prefer this over search_documents "
-        "whenever the entity the user asks about appears in a table below."
+        "whenever the entity the user asks about appears in a table below. Do NOT "
+        "use it when the subject of the question is not stored in these tables — "
+        "counts/specs of equipment described only in uploaded documents belong to "
+        "search_documents."
     )
     schema_summary = _format_structured_tables(structured_tables)
     if schema_summary:
@@ -568,15 +601,31 @@ def _build_explore_knowledge_base_tool() -> "types.FunctionDeclaration":
     )
 
 
-def _sanitize_keyword_query(q: str) -> str:
-    """Strip websearch_to_tsquery operators so user identifiers don't become NOT clauses.
-    A space-prefixed hyphen (e.g. `MDB -C-G3` from email formatting) is the NOT operator
-    in websearch syntax, which silently excludes the very chunks the user is searching for.
+def _sanitize_keyword_query(q: str, semantics: str = "and") -> str:
+    """Build a websearch_to_tsquery string from the user's query.
+
+    Always strips operators first: a space-prefixed hyphen (e.g. `MDB -C-G3`
+    from email formatting) is the NOT operator in websearch syntax, silently
+    excluding the very chunks the user wants.
+
+    semantics="and" (websearch default): every term must match — precise but
+    brittle for full-sentence questions, which may match zero or one chunk.
+    semantics="or": any term matches, ts_rank_cd still ranks multi-term chunks
+    higher — the recall-recovery form used when the AND pass under-fills.
     """
     import re
     q = q.replace("-", " ").replace('"', " ")
     q = re.sub(r"\bor\b", " ", q, flags=re.IGNORECASE)
     q = re.sub(r"\s+", " ", q).strip()
+    if semantics == "or":
+        tokens = [t for t in q.split(" ") if t]
+        # Unit-suffixed tokens tokenize differently in source text ("8kVA" is
+        # one lexeme, "8 KVA" is two) — add split variants so either form hits.
+        for t in list(tokens):
+            parts = re.findall(r"\d+|[A-Za-z]+", t)
+            if len(parts) > 1:
+                tokens += [p for p in parts if len(p) > 1 or p.isdigit()]
+        return " or ".join(dict.fromkeys(tokens))
     return q
 
 
@@ -606,16 +655,29 @@ def retrieve_chunks(
 
     if hybrid:
         fetch_count = top_k * 4 if reranking else top_k
-        result = supabase_client.rpc("match_document_chunks_hybrid", {
-            "query_embedding": query_embedding,
-            "query_text": _sanitize_keyword_query(query),
-            "match_user_id": user_id,
-            "match_count": fetch_count,
-            "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
-            # SEARCH-02: forward optional narrowing args (NULL = no narrowing).
-            "match_folder_path": folder_path,
-            "match_scope": scope,
-        }).execute()
+
+        def _hybrid_call(query_text):
+            return supabase_client.rpc("match_document_chunks_hybrid", {
+                "query_embedding": query_embedding,
+                "query_text": query_text,
+                "match_user_id": user_id,
+                "match_count": fetch_count,
+                "metadata_filter": json.dumps(metadata_filter) if metadata_filter else None,
+                # SEARCH-02: forward optional narrowing args (NULL = no narrowing).
+                "match_folder_path": folder_path,
+                "match_scope": scope,
+            }).execute().data or []
+
+        # Keyword ladder: AND-semantics first (precise). Full-sentence queries
+        # often AND-match almost nothing, so when the precise pass under-fills,
+        # top it up with OR-semantics results (any term, ranked by ts_rank_cd) —
+        # AND hits keep their positions, OR hits fill the remaining slots.
+        rows = _hybrid_call(_sanitize_keyword_query(query))
+        if len(rows) < fetch_count:
+            seen_ids = {r["id"] for r in rows}
+            rows += [r for r in _hybrid_call(_sanitize_keyword_query(query, semantics="or"))
+                     if r["id"] not in seen_ids]
+            rows = rows[:fetch_count]
     else:
         result = supabase_client.rpc("match_document_chunks_with_filters", {
             "query_embedding": query_embedding,
@@ -626,8 +688,7 @@ def retrieve_chunks(
             "match_folder_path": folder_path,
             "match_scope": scope,
         }).execute()
-
-    rows = result.data or []
+        rows = result.data or []
 
     # Fetch document names for source attribution
     doc_ids = list(set(row["document_id"] for row in rows))
@@ -649,6 +710,28 @@ def retrieve_chunks(
         chunks = [content_to_chunk[rc] for rc in reranked_contents if rc in content_to_chunk]
 
     return chunks[:top_k]
+
+
+def _sql_result_is_empty(result_text: str) -> bool:
+    """True when a query_structured_data result carries no data: either the
+    explicit no-results message, or a markdown table whose data cells are all
+    NULL (rendered as empty) — e.g. SUM() over zero matching rows. A 0 value
+    is NOT empty; zero can be a correct answer."""
+    if result_text.startswith("Query returned no results"):
+        return True
+    table_lines = [l.strip() for l in result_text.splitlines() if l.strip().startswith("|")]
+    if len(table_lines) < 3:
+        return False
+    # table_lines[0] is the header, [1] the |---|---| separator; the rest are
+    # data rows — a row of NULLs renders as empty cells (`|  |`), so it must
+    # NOT be filtered out here.
+    cells = [c.strip() for r in table_lines[2:] for c in r.strip("|").split("|")]
+    if bool(cells) and all(c == "" for c in cells):
+        return True
+    # A lone 0 (single row, single column) usually means COUNT/SUM matched no
+    # rows — for a misrouted document question that's the "wrong tool" signal.
+    # Multi-cell results with a 0 among real values are NOT empty.
+    return len(cells) == 1 and cells[0] in ("0", "0.0")
 
 
 @traceable(name="search_documents", run_type="tool")
@@ -728,7 +811,7 @@ Document excerpts:
         model = get_llm_model()
         response = client.models.generate_content_stream(
             model=model, contents=contents,
-            config=types.GenerateContentConfig(system_instruction=system_text),
+            config=types.GenerateContentConfig(system_instruction=system_text, temperature=0.2),
         )
         for chunk in response:
             if chunk.text:
@@ -880,7 +963,7 @@ Document excerpts:
 {context}"""
         response_fb = client.models.generate_content_stream(
             model=model, contents=contents,
-            config=types.GenerateContentConfig(system_instruction=fallback_system),
+            config=types.GenerateContentConfig(system_instruction=fallback_system, temperature=0.2),
         )
         for chunk in response_fb:
             if chunk.text:
@@ -958,6 +1041,46 @@ Document excerpts:
                 folder_path=folder_path_arg,
                 scope=rpc_scope,
             )
+            # The model's metadata filters use @> containment against document
+            # metadata — when it invents keywords/entities that no document
+            # carries, the filter silently zeroes the search. Filters narrow;
+            # an EMPTY filtered result means the filter was wrong, not the
+            # corpus — retry unfiltered.
+            if not chunks and metadata_filter:
+                logger.info(f"Filtered search empty (filter={metadata_filter}), retrying unfiltered")
+                chunks = _execute_search_documents(
+                    search_query=search_query,
+                    metadata_filter=None,
+                    user_id=user_id,
+                    supabase_client=supabase_client,
+                    folder_path=folder_path_arg,
+                    scope=rpc_scope,
+                )
+            # The router's paraphrase can drop the very terms that rank the
+            # right chunk (same failure mode the SQL path guards against) —
+            # also search the user's own wording and merge, paraphrase hits
+            # first, capped to the same overall budget. Deliberately unfiltered:
+            # this pass is the safety net, it must not inherit a poisoned filter.
+            last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            if last_user_msg and last_user_msg.strip().lower() != search_query.strip().lower():
+                extra = _execute_search_documents(
+                    search_query=last_user_msg,
+                    metadata_filter=None,
+                    user_id=user_id,
+                    supabase_client=supabase_client,
+                    folder_path=folder_path_arg,
+                    scope=rpc_scope,
+                )
+                # Interleave the two rankings (paraphrase first) so the top
+                # hits of EACH query survive the cap — appending would let the
+                # paraphrase's tail crowd out the user-wording's best hits.
+                merged, seen = [], set()
+                for pair in zip_longest(chunks, extra):
+                    for c in pair:
+                        if c is not None and (c["document_id"], c["content"]) not in seen:
+                            seen.add((c["document_id"], c["content"]))
+                            merged.append(c)
+                chunks = merged[:12]
             if chunks:
                 from collections import Counter
                 doc_counts = Counter(c["file_name"] for c in chunks)
@@ -995,8 +1118,40 @@ Document excerpts:
                 question = f"{last_user_msg}\n(Additional context from the assistant: {question})"
             result_text = execute_sql_query(question, user_id, supabase_client)
 
+            # Empty SQL results on a question that MIGHT be a document question
+            # (e.g. "how many CCTV cameras are installed?" — cameras are
+            # equipment, not a load-schedule row) get a second chance against
+            # the document index. The SQL outcome is kept in the context so the
+            # model can still answer "not found" for genuinely absent entities
+            # instead of hallucinating from unrelated excerpts.
+            if _sql_result_is_empty(result_text) and has_documents:
+                # Search with the user's own wording — `question` may carry the
+                # SQL-augmentation prefix, which dilutes keyword ranking.
+                doc_query = last_user_msg or question
+                logger.info(f"SQL returned no data, augmenting with search_documents for: {doc_query}")
+                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No rows — checking documents"}))
+                yield ("tool_start", json.dumps({"tool": "search_documents", "args": {"query": doc_query}}))
+                chunks = _execute_search_documents(
+                    search_query=doc_query,
+                    metadata_filter=None,
+                    user_id=user_id,
+                    supabase_client=supabase_client,
+                )
+                if chunks:
+                    doc_context = "\n\n---\n\n".join(
+                        f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                    )
+                    result_text = (
+                        "The structured tables returned no rows for this question. "
+                        "Document excerpts that may answer it instead:\n\n" + doc_context +
+                        "\n\n(If the excerpts do not contain the answer either, say the "
+                        "information was not found — do not guess.)"
+                    )
+                    tool_name = "search_documents"
+                yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks) if chunks else 0} results"}))
+
             # If SQL failed and user has documents, fall back to document search
-            if result_text.startswith("SQL query failed") and has_documents:
+            elif result_text.startswith("SQL query failed") and has_documents:
                 logger.info(f"SQL tool failed, falling back to search_documents for: {question}")
                 yield ("tool_done", json.dumps({"tool": tool_name, "detail": "SQL failed, falling back"}))
                 yield ("tool_start", json.dumps({"tool": "search_documents", "args": {"query": question}}))
@@ -1046,6 +1201,30 @@ Document excerpts:
                     yield ("tool_start", json.dumps({"tool": tool_name, "args": {"question": question}}))
                     from app.services.sql_tool import execute_sql_query
                     result_text = execute_sql_query(question or doc_name, user_id, supabase_client)
+                    # A doc-flavored question ("how often do the zip tap
+                    # filters need changing?") lands here too when its topic
+                    # phrase fuzzy-matches no file name — and the tables may
+                    # return rows that are RELATED but can't answer it (circuit
+                    # locations vs a maintenance schedule). Always add document
+                    # excerpts; the answer model picks the source that answers.
+                    logger.info("analyze->no doc-name match: combining SQL result with document search")
+                    yield ("tool_done", json.dumps({"tool": tool_name, "detail": "Also checking documents"}))
+                    tool_name = "search_documents"
+                    yield ("tool_start", json.dumps({"tool": tool_name, "args": {"query": question or doc_name}}))
+                    chunks = _execute_search_documents(
+                        search_query=question or doc_name,
+                        metadata_filter=None,
+                        user_id=user_id,
+                        supabase_client=supabase_client,
+                    )
+                    if chunks:
+                        doc_context = "\n\n---\n\n".join(
+                            f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                        )
+                        sql_part = "" if _sql_result_is_empty(result_text) else (
+                            "Tabular data result:\n" + result_text + "\n\n---\n\n"
+                        )
+                        result_text = sql_part + "Document excerpts:\n\n" + doc_context
                 else:
                     result_text = f"No document matching '{doc_name}' found."
             else:
@@ -1232,7 +1411,7 @@ Document excerpts:
 
         # Context injection for the final answer (skip the tool round-trip)
         # Truncate very large results to avoid empty Gemini responses
-        truncated_result = result_text[:16000] if len(result_text) > 16000 else result_text
+        truncated_result = result_text[:60000] if len(result_text) > 60000 else result_text
         system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
 If the tool encountered an error, explain the issue to the user in simple terms and suggest they rephrase their question.
 If the results do not contain enough information, clearly state that the available documents do not contain the answer. Do NOT dump or echo the raw tool results back to the user. Instead, briefly explain what information was found (if any) and suggest the user try a different query or upload a document that might contain the answer. You may answer from general knowledge if applicable, but clearly label it as such.
@@ -1246,7 +1425,7 @@ Tool ({tool_name}) results:
         response2 = client.models.generate_content_stream(
             model=model,
             contents=contents,
-            config=types.GenerateContentConfig(system_instruction=system_with_context),
+            config=types.GenerateContentConfig(system_instruction=system_with_context, temperature=0.2),
         )
 
         has_response2_text = False
@@ -1262,7 +1441,7 @@ Tool ({tool_name}) results:
                 fallback = client.models.generate_content(
                     model=model,
                     contents=contents,
-                    config=types.GenerateContentConfig(system_instruction=system_with_context),
+                    config=types.GenerateContentConfig(system_instruction=system_with_context, temperature=0.2),
                 )
                 if fallback.candidates and fallback.candidates[0].content and fallback.candidates[0].content.parts:
                     for part in fallback.candidates[0].content.parts:
@@ -1297,11 +1476,27 @@ Tool ({tool_name}) results:
 
         if not doc.data:
             if has_structured_data:
-                # Same fallback as the main analyze_document handler: a data
-                # question misdetected as summarization shouldn't dead-end.
-                logger.info(f"Forced analyze_document found no match for '{doc_name}', falling back to SQL")
+                # Same fallback chain as the main analyze_document handler: a
+                # data question misdetected as summarization shouldn't dead-end,
+                # and a doc question whose topic matches no FILE NAME must still
+                # reach the document content when the tables come back empty.
+                logger.info(f"Forced analyze_document found no match for '{doc_name}', falling back to SQL + doc search")
                 from app.services.sql_tool import execute_sql_query
                 result_text = execute_sql_query(question or doc_name, user_id, supabase_client)
+                chunks = _execute_search_documents(
+                    search_query=question or doc_name,
+                    metadata_filter=None,
+                    user_id=user_id,
+                    supabase_client=supabase_client,
+                )
+                if chunks:
+                    doc_context = "\n\n---\n\n".join(
+                        f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                    )
+                    sql_part = "" if _sql_result_is_empty(result_text) else (
+                        "Tabular data result:\n" + result_text + "\n\n---\n\n"
+                    )
+                    result_text = sql_part + "Document excerpts:\n\n" + doc_context
             else:
                 result_text = f"No document matching '{doc_name}' found."
         else:
@@ -1315,7 +1510,7 @@ Tool ({tool_name}) results:
             result_text = sub_agent_result
 
         if result_text:
-            truncated_result = result_text[:16000] if len(result_text) > 16000 else result_text
+            truncated_result = result_text[:60000] if len(result_text) > 60000 else result_text
             system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
 {OUTPUT_FORMAT_RULES}
 
@@ -1323,7 +1518,7 @@ Tool (analyze_document) results:
 {truncated_result}"""
             response2 = client.models.generate_content_stream(
                 model=model, contents=contents,
-                config=types.GenerateContentConfig(system_instruction=system_with_context),
+                config=types.GenerateContentConfig(system_instruction=system_with_context, temperature=0.2),
             )
             for chunk in response2:
                 if chunk.text:
