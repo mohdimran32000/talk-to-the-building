@@ -47,7 +47,7 @@ SYSTEM_PROMPT_NO_DOCS = "You are a helpful assistant. Answer the user's question
 OUTPUT_FORMAT_RULES = """
 OUTPUT FORMAT RULES (strict):
 - Never output raw HTML in your answer. Tags like <table>, <tr>, <td>, <th>, <br>, <span>, <div> are forbidden. If the source excerpts contain HTML, extract the data into clean markdown.
-- For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render EVERY relevant row as a clean markdown table — never truncate or stop partway. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity) and, when a quantity column is present, end with a Total row that matches the stated total.
+- For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render EVERY relevant row as a clean markdown table — never truncate or stop partway. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity). MANDATORY: when a quantity/points column is present, the table's last row MUST be a Total row summing it, and the sentence introducing or closing the table MUST state that total explicitly.
 - Never reveal internal notes from tool results. Lines like "SQL: `...`" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
 - Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
 - EXCEPTION: if a note records a substantive correction to a value (struck out, superseded, handwritten replacement, revised by the authority), do surface it briefly — state the current value and mention the original (e.g. "Max Demand: 1156.36 kW (corrected by DEWA from the printed 1120.40)"). Never present a superseded value as current.
@@ -57,6 +57,7 @@ OUTPUT FORMAT RULES (strict):
 - When the user asks for the answer "as a table" or "in a table", the answer MUST contain a markdown table — a bulleted list is not acceptable.
 - Never paste, echo, or reproduce source excerpts verbatim. Always synthesize the answer in your own words.
 - When the user asks you to explain or simplify a figure from earlier in the conversation ("explain it in simple terms"), ALWAYS restate that figure explicitly in the explanation — an explanation that never names the value it explains is incomplete.
+- Only state facts that appear in the provided excerpts/results. If they don't contain the asked-for specifics (locations, values, dates, names), say the records don't show them — NEVER construct plausible-looking specifics.
 - Keep answers focused on what was asked. If a source has extra detail, leave it out."""
 
 
@@ -877,8 +878,11 @@ def stream_response(
     Uses Gemini's automatic function calling — the SDK handles the tool loop
     and thought_signature internally.
     """
-    _current_question.set(
-        next((m["content"] for m in reversed(messages) if m["role"] == "user"), ""))
+    # Last TWO user turns: pronoun follow-ups ("where exactly are they
+    # installed?") carry their subject in the previous turn — windowing and
+    # excerpt trimming need those terms or the relevant passage gets cut.
+    _user_turns = [m["content"] for m in messages if m["role"] == "user"][-2:]
+    _current_question.set(" ".join(_user_turns))
 
     # If manual filter is set, pre-retrieve and use context injection (no tool calling)
     if manual_metadata_filter and has_documents and supabase_client and user_id:

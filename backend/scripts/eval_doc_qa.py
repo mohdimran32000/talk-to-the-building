@@ -105,23 +105,30 @@ def _run_once(messages):
 
 
 def run(messages, attempts=3, delay=5):
-    # Per-case watchdog: a wedged streamed read hangs forever (observed: 0 CPU,
-    # no timeout fires on stream chunk reads) — bound each attempt to 5 min and
-    # retry with a fresh call. The abandoned worker thread dies with the process.
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
+    # Per-case watchdog with DAEMON worker threads: a wedged streamed read can
+    # hang forever, and non-daemon workers (ThreadPoolExecutor) also blocked
+    # process exit after the final attempt, stalling whole suite chains.
+    import threading, queue
     for i in range(attempts):
-        ex = ThreadPoolExecutor(max_workers=1)
+        q = queue.Queue()
+        def _work():
+            try:
+                q.put(("ok", _run_once(messages)))
+            except Exception as exc:
+                q.put(("err", exc))
+        threading.Thread(target=_work, daemon=True).start()
         try:
-            return ex.submit(_run_once, messages).result(timeout=300)
-        except Exception as e:
-            if i == attempts - 1:
-                raise
-            kind = "watchdog-timeout" if isinstance(e, _FutTimeout) else type(e).__name__
-            wait = 65 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) else delay * (i + 1)
-            print(f"  (transient error, retry {i + 1}/{attempts - 1} in {wait}s: {kind})")
-            time.sleep(wait)
-        finally:
-            ex.shutdown(wait=False)
+            kind, val = q.get(timeout=300)
+        except queue.Empty:
+            kind, val = "err", TimeoutError("watchdog: case exceeded 300s")
+        if kind == "ok":
+            return val
+        e = val
+        if i == attempts - 1:
+            raise e
+        wait = 65 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) else delay * (i + 1)
+        print(f"  (transient error, retry {i + 1}/{attempts - 1} in {wait}s: {type(e).__name__})")
+        time.sleep(wait)
 
 
 def answer_numbers(text):
