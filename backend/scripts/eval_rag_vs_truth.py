@@ -299,8 +299,11 @@ def with_retry(fn, attempts=3, delay=5):
         except Exception as e:
             if i == attempts - 1:
                 raise
-            print(f"  (transient error, retry {i + 1}/{attempts - 1}: {type(e).__name__}: {e})")
-            time.sleep(delay * (i + 1))
+            # 429s carry a mandatory cool-down (free tier: 15 req/min/model) —
+            # retrying sooner just burns an attempt.
+            wait = 65 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) else delay * (i + 1)
+            print(f"  (transient error, retry {i + 1}/{attempts - 1} in {wait}s: {type(e).__name__})")
+            time.sleep(wait)
 
 
 def main():

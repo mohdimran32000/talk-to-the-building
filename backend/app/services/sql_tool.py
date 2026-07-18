@@ -154,7 +154,10 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
             schema_desc += f"\nTable: {t['table_name']} ({t['row_count']} rows)\nColumns:\n" + "\n".join(col_descs) + "\n"
 
     # 3. Use Gemini to generate DuckDB SQL
-    client = genai.Client(api_key=get_llm_api_key())
+    # 3-minute request timeout — a wedged HTTP connection otherwise hangs the
+    # SQL generation forever (same fix as openai_client._get_client).
+    client = genai.Client(api_key=get_llm_api_key(),
+                          http_options=genai_types.HttpOptions(timeout=180_000))
     model = get_llm_model()
 
     # Build a list of exact table names for the prompt and post-processing
@@ -188,6 +191,10 @@ Rules:
 - For single-row value lookups (not aggregates), also SELECT the notes/remarks column when the table has one — source documents sometimes contain corrections (a printed value struck out and replaced by hand). The notes record this, and the answer must be able to report the current value versus the original
 - If a table has a parent-reference column (e.g. 'fed_from'), a parent row's totals already INCLUDE its children — summing all rows in an area double-counts. Sum ONLY rows whose parent is OUTSIDE the filtered set, using this exact pattern: SELECT SUM(x.tcl_kw) FROM "panels" x WHERE <area filter on x> AND NOT EXISTS (SELECT 1 FROM "panels" p WHERE p.panel = x.fed_from AND <same area filter on p>)
 - When the user asks for a single NAMED panel/board's value (its total connected load, maximum demand / MDL / diversified load, rating), read that panel's own row from the panel-schedule table (e.g. SELECT tcl_kw, mdl_kw, notes FROM "panels" WHERE panel = 'MDB-C-G2') — NEVER answer it by SUMming a per-load-type calculation table (e.g. "mdb_calc"): those rows itemize the design calculation and their sum ignores diversity, giving an inflated wrong number. This holds even if the question mentions the calculation table. Use the calculation table ONLY when the question is about a specific load type's row, diversity factors, or the design-calc breakdown itself
+- When filtering rows by an equipment/usage KEYWORD (e.g. 'cleaner', 'cooker'), apply the ILIKE filter across ALL descriptive text columns OR-ed together (e.g. load_type ILIKE '%kw%' OR remarks ILIKE '%kw%') — source schedules record such labels in whichever text column the drafter chose
+- When the question relates one panel to another ('the feeder X on/from board Y', 'the breaker rating of the feeder from Y to X'), read the FEEDER-SCHEDULE table whose rows pair a parent board column with a feeder column (e.g. "smdb_feeders" WHERE smdb='Y' AND feeder='X') — the flat panel list may have a blank row for the same name
+- For superlative/comparison questions about panels' or boards' totals ('which board has the highest connected load'), rank the panel-schedule's own total column (e.g. ORDER BY tcl_kw DESC NULLS LAST) — do NOT re-derive totals by summing the circuits table; the printed schedule totals are authoritative
+- The tables record CONNECTED LOADS and ratings (W, kW, A) — NOT energy consumption, runtime, or cost. If the question asks for something the tables do not record (kWh consumed, annual energy usage, operating hours, bills), NEVER approximate it from load columns (e.g. multiplying by hours) — return a query with no rows instead (SELECT NULL WHERE FALSE) so the system can look elsewhere
 
 User question: {question}"""
 

@@ -1,7 +1,15 @@
+import contextvars
 import json
 import logging
+import re
 from itertools import zip_longest
 from typing import Generator, Optional, List
+
+# The user question driving the current stream_response call — consumed by
+# _windowed_excerpt when trimming retrieved chunks for the answer context.
+# ContextVar so concurrent async requests can't bleed into each other.
+_current_question: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "current_question", default="")
 
 from google import genai
 from google.genai import types
@@ -44,6 +52,9 @@ OUTPUT FORMAT RULES (strict):
 - Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
 - EXCEPTION: if a note records a substantive correction to a value (struck out, superseded, handwritten replacement, revised by the authority), do surface it briefly — state the current value and mention the original (e.g. "Max Demand: 1156.36 kW (corrected by DEWA from the printed 1120.40)"). Never present a superseded value as current.
 - When excerpts contain BOTH project/site-specific records (asset registers, schedules, commissioning sheets, warranty letters) AND generic manufacturer literature (datasheets, marketing copy), answer from the project-specific records — they state what was actually installed WHERE and FOR WHAT. Use generic literature only for details the project records lack.
+- For questions about warranties, maintenance terms, or service intervals: lead with the CONCRETE values found in the excerpts (duration, start/end dates, frequency, who provides it) before any terms and conditions. If a warranty letter states a period (e.g. "12 months from ..."), that period IS the answer — never reply with only the claim conditions.
+- Never present an equipment RATING (W, kW, kVA, A) as energy CONSUMPTION (kWh), and never estimate consumption/cost/runtime from ratings — if consumption is asked and only ratings exist, say the records do not state it.
+- When the user asks for the answer "as a table" or "in a table", the answer MUST contain a markdown table — a bulleted list is not acceptable.
 - Never paste, echo, or reproduce source excerpts verbatim. Always synthesize the answer in your own words.
 - When the user asks you to explain or simplify a figure from earlier in the conversation ("explain it in simple terms"), ALWAYS restate that figure explicitly in the explanation — an explanation that never names the value it explains is incomplete.
 - Keep answers focused on what was asked. If a source has extra detail, leave it out."""
@@ -59,7 +70,7 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
     if has_documents:
         parts.append("- analyze_document: Summarize, review, or analyze a specific document in depth. Loads the FULL document. MUST be used for any summarization request.")
         parts.append("- search_documents: Find specific facts or snippets across documents. Only returns a few excerpts — NOT for summarization.")
-        parts.append("- explore_knowledge_base: Open-ended exploration that spawns a sub-agent which iteratively uses tree/glob/grep/list_files/read_document over up to 8 turns and returns a compact summary. Use when the user asks 'where is X', 'find everything about Y', or 'what does the KB say about Z' and the answer requires multi-step exploration to even find what to read.")
+        parts.append("- explore_knowledge_base: Open-ended exploration that spawns a sub-agent which iteratively uses tree/glob/grep/list_files/read_document over up to 8 turns and returns a compact summary. Use when the user asks 'find everything about Y' or 'what does the KB say about Z' and the answer requires multi-step exploration to even find what to read. NOT for single-fact lookups — those go to search_documents.")
     if has_structured_data:
         sql_line = "- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons) and for looking up specific values — but ONLY when the subject of the question lives in the available tables listed below."
         schema_summary = _format_structured_tables(structured_tables)
@@ -104,7 +115,10 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
             "compact summary. Use `analyze_document` for a specific NAMED "
             "document, `search_documents` for one-shot snippet retrieval, and "
             "`explore_knowledge_base` when the user's question requires multiple "
-            "steps to even locate what to read."
+            "steps to even locate what to read. A SINGLE-FACT question (what "
+            "brand/model, where is a device, how often is X serviced) is NOT "
+            "exploration — always use search_documents for those; it is faster "
+            "and more reliable than the exploration sub-agent."
         )
         # Phase 4 NEW: scope disambiguation in citations (TOOL-07 invariant /
         # Pitfall 11 mitigation — every tool result row carries a scope field).
@@ -712,6 +726,86 @@ def retrieve_chunks(
     return chunks[:top_k]
 
 
+def _windowed_excerpt(query: str, content: str, head: int = 900,
+                      win: int = 1300, max_windows: int = 2) -> str:
+    """Trim a retrieved chunk to its query-relevant regions for the answer
+    context. Raw OCR chunks run to 7k+ chars; lite answer models demonstrably
+    lose facts buried mid-chunk (e.g. a warranty period at offset ~5k). Keeps
+    the head plus windows around the FIRST and LAST query-term hits beyond it.
+    """
+    # Only trim genuinely huge chunks: the answer context cap (60k) fits ~12
+    # mid-sized chunks whole, and trimming a 3.5k chunk once cut the very
+    # letter the question asked about (it sat in the final 400 chars). The
+    # lite answer model only demonstrably loses facts in 5k+ OCR blobs.
+    if len(content) <= 4000:
+        return content
+    low = content.lower()
+    # Longest terms first — a rarity proxy, so 'warranty'/'switchgear' windows
+    # beat filler like 'have'/'what'. One window per distinct term's FIRST hit
+    # beyond the head: first+last-only windowing leaves a gap in the middle
+    # where the actual fact may sit.
+    terms = sorted({t for t in re.findall(r"[\w]+", query.lower()) if len(t) >= 4},
+                   key=len, reverse=True)
+    out, covered = [content[:head]], []
+    for t in terms:
+        if len(covered) >= max_windows:
+            break
+        pos = low.find(t, head)
+        if pos == -1:
+            continue
+        start = max(head, pos - 250)
+        if any(abs(start - c) < win for c in covered):
+            continue
+        covered.append(start)
+        out.append(content[start:start + win])
+    if not covered:
+        return content[:head + win]
+    return " […] ".join(out)
+
+
+def _resolve_document(supabase_client, user_id: str, doc_name: str):
+    """Fuzzy-resolve a user-supplied document name to a documents row.
+
+    Pass 1: whole-phrase ilike (existing behavior). Pass 2: the phrase rarely
+    matches verbatim ("the LV switchgear manual" vs the long real filename),
+    so AND-match each significant token instead — generic filler words like
+    "manual"/"document" are dropped.
+    """
+    q = supabase_client.table("documents").select("id, file_name") \
+        .eq("user_id", user_id).ilike("file_name", f"%{doc_name}%") \
+        .order("created_at", desc=True).limit(1).execute()
+    if q.data:
+        return q
+    # Token-overlap ranking in Python: the request often carries request verbs
+    # and filler ("summarize the LV switchgear manual for me") that no filename
+    # contains — rank files by how many meaningful tokens they share instead.
+    filler = {"manual", "manuals", "document", "documents", "doc", "file",
+              "files", "the", "for", "and", "o&m", "om", "report", "guide",
+              "summarize", "summarise", "summary", "analyze", "analyse",
+              "review", "explain", "overview", "please", "can", "you", "me",
+              "give", "show", "full", "whole", "entire", "this", "that", "of"}
+    tokens = {t for t in re.findall(r"[\w&]+", doc_name.lower())
+              if len(t) > 1 and t not in filler}
+    if not tokens:
+        return q
+    all_docs = supabase_client.table("documents").select("id, file_name") \
+        .eq("user_id", user_id).limit(200).execute()
+    best, best_score = None, 0
+    for d in (all_docs.data or []):
+        fn_tokens = set(re.findall(r"[\w&]+", d["file_name"].lower()))
+        # Substring-aware: "zip" must match the filename token "ziptaps",
+        # otherwise a generic shared word ("water") wins the wrong file.
+        score = sum(
+            1 for t in tokens
+            if any(t == ft or (len(t) >= 3 and t in ft) or (len(ft) >= 3 and ft in t)
+                   for ft in fn_tokens)
+        )
+        if score > best_score:
+            best, best_score = d, score
+    q.data = [best] if best else []
+    return q
+
+
 def _sql_result_is_empty(result_text: str) -> bool:
     """True when a query_structured_data result carries no data: either the
     explicit no-results message, or a markdown table whose data cells are all
@@ -783,6 +877,9 @@ def stream_response(
     Uses Gemini's automatic function calling — the SDK handles the tool loop
     and thought_signature internally.
     """
+    _current_question.set(
+        next((m["content"] for m in reversed(messages) if m["role"] == "user"), ""))
+
     # If manual filter is set, pre-retrieve and use context injection (no tool calling)
     if manual_metadata_filter and has_documents and supabase_client and user_id:
         last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
@@ -792,7 +889,7 @@ def stream_response(
             metadata_filter=manual_metadata_filter,
         )
         context = "\n\n---\n\n".join(
-            f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+            f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
         ) if chunks else "No relevant documents found."
         system_text = f"""You are a helpful assistant with access to the user's uploaded documents.
 Use the provided document excerpts to answer questions accurately.
@@ -952,7 +1049,7 @@ Document excerpts:
             user_id=user_id, supabase_client=supabase_client,
         )
         context = "\n\n---\n\n".join(
-            f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+            f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
         ) if chunks else "No relevant documents found."
         fallback_system = f"""You are a helpful assistant with access to the user's uploaded documents.
 Use the provided document excerpts to answer questions accurately.
@@ -1085,7 +1182,7 @@ Document excerpts:
                 from collections import Counter
                 doc_counts = Counter(c["file_name"] for c in chunks)
                 result_text = "\n\n---\n\n".join(
-                    f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                    f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
                 )
                 dominant_doc, dominant_count = doc_counts.most_common(1)[0]
                 if dominant_count / len(chunks) >= 0.6:
@@ -1139,7 +1236,7 @@ Document excerpts:
                 )
                 if chunks:
                     doc_context = "\n\n---\n\n".join(
-                        f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                        f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
                     )
                     result_text = (
                         "The structured tables returned no rows for this question. "
@@ -1163,7 +1260,7 @@ Document excerpts:
                 )
                 if chunks:
                     result_text = "\n\n---\n\n".join(
-                        f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                        f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
                     )
                     tool_name = "search_documents"
                 yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks) if chunks else 0} results"}))
@@ -1182,12 +1279,7 @@ Document excerpts:
             question = args.get("question", "")
 
             # Resolve document_name → document_id via fuzzy match
-            doc = supabase_client.table("documents") \
-                .select("id, file_name") \
-                .eq("user_id", user_id) \
-                .ilike("file_name", f"%{doc_name}%") \
-                .order("created_at", desc=True) \
-                .limit(1).execute()
+            doc = _resolve_document(supabase_client, user_id, doc_name)
 
             if not doc.data:
                 if has_structured_data:
@@ -1219,7 +1311,7 @@ Document excerpts:
                     )
                     if chunks:
                         doc_context = "\n\n---\n\n".join(
-                            f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                            f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
                         )
                         sql_part = "" if _sql_result_is_empty(result_text) else (
                             "Tabular data result:\n" + result_text + "\n\n---\n\n"
@@ -1404,6 +1496,20 @@ Document excerpts:
                 result_text = sub_agent_result or (
                     "Exploration completed without a summary."
                 )
+                # Single-fact questions misrouted here often end in an empty
+                # exploration summary — always append a direct search pass so
+                # the answer model sees the actual excerpts too.
+                last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+                extra = _execute_search_documents(
+                    search_query=last_user_msg or query_arg,
+                    metadata_filter=None,
+                    user_id=user_id,
+                    supabase_client=supabase_client,
+                )
+                if extra:
+                    result_text += "\n\n---\n\nDirect search excerpts:\n\n" + "\n\n---\n\n".join(
+                        f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in extra
+                    )
 
         else:
             logger.warning(f"Unknown tool: {tool_name}")
@@ -1467,12 +1573,7 @@ Tool ({tool_name}) results:
         doc_name = args.get("document_name", "")
         question = args.get("question", "")
 
-        doc = supabase_client.table("documents") \
-            .select("id, file_name") \
-            .eq("user_id", user_id) \
-            .ilike("file_name", f"%{doc_name}%") \
-            .order("created_at", desc=True) \
-            .limit(1).execute()
+        doc = _resolve_document(supabase_client, user_id, doc_name)
 
         if not doc.data:
             if has_structured_data:
@@ -1491,7 +1592,7 @@ Tool ({tool_name}) results:
                 )
                 if chunks:
                     doc_context = "\n\n---\n\n".join(
-                        f"[Source: {c['file_name']}]\n{c['content']}" for c in chunks
+                        f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
                     )
                     sql_part = "" if _sql_result_is_empty(result_text) else (
                         "Tabular data result:\n" + result_text + "\n\n---\n\n"

@@ -69,16 +69,23 @@ def _run_once(messages):
 
 
 def run(messages, attempts=3, delay=5):
-    """Retry transient network/API failures — an eval run must not be killed
-    by one TLS blip to Supabase or Gemini."""
+    # Per-case watchdog: a wedged streamed read hangs forever (observed: 0 CPU,
+    # no timeout fires on stream chunk reads) — bound each attempt to 5 min and
+    # retry with a fresh call. The abandoned worker thread dies with the process.
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
     for i in range(attempts):
+        ex = ThreadPoolExecutor(max_workers=1)
         try:
-            return _run_once(messages)
+            return ex.submit(_run_once, messages).result(timeout=300)
         except Exception as e:
             if i == attempts - 1:
                 raise
-            print(f"  (transient error, retry {i + 1}/{attempts - 1}: {type(e).__name__}: {e})")
-            time.sleep(delay * (i + 1))
+            kind = "watchdog-timeout" if isinstance(e, _FutTimeout) else type(e).__name__
+            wait = 65 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) else delay * (i + 1)
+            print(f"  (transient error, retry {i + 1}/{attempts - 1} in {wait}s: {kind})")
+            time.sleep(wait)
+        finally:
+            ex.shutdown(wait=False)
 
 
 LEAK_STRINGS = ["IMPORTANT (for interpreting", "SQL: `", "sql: `"]
@@ -103,6 +110,14 @@ def answer_numbers(text):
 
 
 def table_rows(text, marker):
+    if marker == "@data":
+        # Any markdown DATA row: starts with |, carries a digit, isn't the
+        # |---|---| separator. Rendering styles vary by model (per-board
+        # tables with the board name in a heading), so counting rows that
+        # name the board undercounts a complete answer.
+        return [l for l in text.splitlines()
+                if l.strip().startswith("|") and "---" not in l
+                and any(ch.isdigit() for ch in l)]
     return [l for l in text.splitlines()
             if l.strip().startswith("|") and marker in l]
 
@@ -273,7 +288,7 @@ CASES = [
         ],
         "tools_include": ["query_structured_data"],
         "tools_exclude": ["analyze_document"],
-        "min_rows": 16,
+        "min_rows": 16, "row_marker": "@data",
     },
     {
         "name": "M3 total then 'explain it in simple terms'",
@@ -307,7 +322,7 @@ CASES = [
         ],
         "tools_include": ["query_structured_data"],
         "tools_exclude": ["analyze_document"],
-        "min_rows": 16,
+        "min_rows": 16, "row_marker": "@data",
     },
     # -- SQL-vs-docs routing boundary (doc-QA audit 2026-07-17; the full set
     # -- lives in eval_doc_qa.py RB1-RB5 — these two guard the boundary from
@@ -319,7 +334,7 @@ CASES = [
         "messages": [u("what warranty do the distribution boards have?")],
         "tools_include": ["search_documents"],
         "tools_exclude": ["query_structured_data"],
-        "contains_any": ["12 month", "one year", "1 year", "1-year"],
+        "contains_any": ["12 month", "one year", "1 year", "1-year", "one-year", "one) year", "12-month"],
         "skip_if_no_docs": True,
     },
     {

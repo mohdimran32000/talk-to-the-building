@@ -36,6 +36,12 @@ Usage: cd backend && venv/Scripts/python scripts/eval_doc_qa.py [1-15 | name...]
 import os, sys, re, json, time
 from datetime import datetime, timezone
 
+# Windows consoles default to cp1252 — case names/answers contain Unicode
+# (e.g. "→"), which otherwise CRASHES the runner mid-suite with
+# UnicodeEncodeError and silently truncates full runs.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, BACKEND)
 from dotenv import load_dotenv
@@ -99,14 +105,23 @@ def _run_once(messages):
 
 
 def run(messages, attempts=3, delay=5):
+    # Per-case watchdog: a wedged streamed read hangs forever (observed: 0 CPU,
+    # no timeout fires on stream chunk reads) — bound each attempt to 5 min and
+    # retry with a fresh call. The abandoned worker thread dies with the process.
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
     for i in range(attempts):
+        ex = ThreadPoolExecutor(max_workers=1)
         try:
-            return _run_once(messages)
+            return ex.submit(_run_once, messages).result(timeout=300)
         except Exception as e:
             if i == attempts - 1:
                 raise
-            print(f"  (transient error, retry {i + 1}/{attempts - 1}: {type(e).__name__}: {e})")
-            time.sleep(delay * (i + 1))
+            kind = "watchdog-timeout" if isinstance(e, _FutTimeout) else type(e).__name__
+            wait = 65 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) else delay * (i + 1)
+            print(f"  (transient error, retry {i + 1}/{attempts - 1} in {wait}s: {kind})")
+            time.sleep(wait)
+        finally:
+            ex.shutdown(wait=False)
 
 
 def answer_numbers(text):
@@ -224,7 +239,7 @@ CASES = [
         "doc": "acs", "category": "location", "style": "conversational",
         "messages": [u("hey, where would I find the access control workstation in the building?")],
         "contains_all": ["security monitor"],
-        "contains_any": ["1st floor", "first floor"],
+        "contains_any": ["1st floor", "first floor", "1st-floor", "first-floor", "level 1", "level 01"],
     },
     {
         "name": "ACS4 same-floor controller protocol (clean/spec)",
@@ -243,7 +258,7 @@ CASES = [
         "name": "ACS6 installer warranty (clean/entity)",
         "doc": "acs", "category": "entity", "style": "clean",
         "messages": [u("What warranty did the installer IIS give on the access control system?")],
-        "contains_any": ["3 year", "three year", "3-year"],
+        "contains_any": ["3 year", "3-year", "three year", "three-year"],
     },
     {
         "name": "ACS7 fire alarm door behavior (conversational/maintenance)",
@@ -265,7 +280,7 @@ CASES = [
             m("The access control system uses **Paxton** (UK) hardware — Net2 Plus controllers with P50 proximity readers, installed by Integrated Ideal Solutions (IIS)."),
             u("and what's their manufacturer warranty?"),
         ],
-        "contains_any": ["5 year", "five year", "5-year"],
+        "contains_any": ["5 year", "5-year", "five year", "five-year"],
     },
     # ===================== CCTV =====================
     {
@@ -292,7 +307,7 @@ CASES = [
         "name": "CCTV3 server room location (clean/location)",
         "doc": "cctv", "category": "location", "style": "clean",
         "messages": [u("Where is the CCTV server room located?")],
-        "contains_any": ["1st floor", "first floor"],
+        "contains_any": ["1st floor", "first floor", "1st-floor", "first-floor", "level 1", "level 01"],
     },
     {
         "name": "CCTV4 VMS software (clean/entity)",
@@ -345,7 +360,7 @@ CASES = [
             m("There are **166 CCTV cameras** installed in total across the HWUD main campus, all Pelco Sarix fixed dome models."),
             u("and where is their server room?"),
         ],
-        "contains_any": ["1st floor", "first floor"],
+        "contains_any": ["1st floor", "first floor", "1st-floor", "first-floor", "level 1", "level 01"],
     },
     # ===================== BMS =====================
     {
@@ -413,7 +428,7 @@ CASES = [
             m("The BMS was supplied by **Siemens** (Siemens LLC Building Technologies BT SPP) — it's a Siemens Desigo system."),
             u("what warranty did they give on it?"),
         ],
-        "contains_any": ["12 month", "1 year", "one year", "february 2022"],
+        "contains_any": ["12 month", "12-month", "1 year", "one year", "one-year", "february 2022"],
     },
     # ===================== UPS =====================
     {
@@ -450,7 +465,7 @@ CASES = [
         "name": "UPS5 warranty (clean/entity)",
         "doc": "ups", "category": "entity", "style": "clean",
         "messages": [u("What is the warranty on the UPS system?")],
-        "contains_any": ["2 year", "two year", "2-year"],
+        "contains_any": ["2 year", "two year", "two-year", "2-year"],
     },
     {
         "name": "UPS6 overload fault action (conversational/maintenance)",
@@ -524,7 +539,7 @@ CASES = [
         "name": "SWGR5 GDS warranty (clean/entity)",
         "doc": "swgr", "category": "entity", "style": "clean",
         "messages": [u("How long is the warranty on the GDS switchgear panels?")],
-        "contains_any": ["12 month", "one year", "1 year", "1-year"],
+        "contains_any": ["12 month", "12-month", "one year", "one-year", "1 year", "1-year", "one) year"],
     },
     {
         "name": "SWGR6 power monitoring unit (clean/spec)",
@@ -594,7 +609,7 @@ CASES = [
         "name": "ZIP6 Culligan warranty (clean/entity)",
         "doc": "zip", "category": "entity", "style": "clean",
         "messages": [u("What warranty did Culligan give on the Zip tap installation?")],
-        "contains_any": ["24 month", "two year", "2 year", "2-year"],
+        "contains_any": ["24 month", "24-month", "two year", "two-year", "2 year", "2-year"],
     },
     {
         "name": "ZIP7 after long shutdown (conversational/maintenance)",
@@ -655,7 +670,7 @@ CASES = [
         "name": "SAN4 fit-out warranty (clean/entity)",
         "doc": "san", "category": "entity", "style": "clean",
         "messages": [u("What is the warranty on the sanitary fit-out?")],
-        "contains_any": ["1 year", "one year", "12 month", "1-year"],
+        "contains_any": ["1 year", "one year", "one-year", "12 month", "12-month", "1-year", "one) year"],
     },
     {
         "name": "SAN5 hand dryer lead time (conversational/maintenance)",
@@ -712,7 +727,7 @@ CASES = [
         "name": "WH5 100L cylinder warranty (clean/entity)",
         "doc": "wh", "category": "entity", "style": "clean",
         "messages": [u("What warranty do the 100L hot water cylinders carry?")],
-        "contains_any": ["5 year", "five year", "5-year"],
+        "contains_any": ["5 year", "5-year", "five year", "five-year"],
     },
     {
         "name": "WH6 100L manufacturer — variant spellings (clean/entity)",
@@ -727,9 +742,11 @@ CASES = [
         "contains_any": ["65114894"],
     },
     {
+        # "kWh consumption" is quantitative vocabulary → SQL-first tolerated.
         "name": "WH8 annual kWh consumption (negative)",
         "doc": "wh", "category": "negative", "style": "clean",
         "messages": [u("What is the annual kWh consumption of the water heaters?")],
+        "tools_exclude": [],
         "negative": True,
         "forbid_regex": r"\b\d[\d,]*(?:\.\d+)?\s*kwh\b",
     },
@@ -750,7 +767,8 @@ CASES = [
         "messages": [u("what warranty do the distribution boards have?")],
         "tools_any": DOC_TOOLS,
         "tools_exclude": ["query_structured_data"],
-        "contains_any": ["12 month", "one year", "1 year", "1-year"],
+        # "(one) year" covers the "01 (one) year" contract phrasing
+        "contains_any": ["12 month", "one year", "1 year", "1-year", "one) year", "12-month"],
     },
     {
         "name": "RB2 panel feed → SQL not docs",
