@@ -631,8 +631,8 @@ CASES = [
         "doc": "zip", "category": "location", "style": "format",
         "messages": [u("give me the locations of all the Zip taps as a table")],
         "tools_any": [], "tools_exclude": [],
-        "contains_any": ["coffee"],
-        "min_rows": 3, "row_marker": "offee",
+        "contains_any": ["coffee", "pantry"],
+        "min_rows": 3, "row_marker": "zip",
     },
     {
         "name": "ZIP9 energy star rating (negative)",
@@ -642,6 +642,8 @@ CASES = [
     },
     {
         # Dual-source: circuit schedule answers locations correctly too.
+        # Two REAL framings in the manual: system description says Coffee
+        # Bars/Lounges/Cafe; the commissioning table says GF/1F/3F PANTRY.
         "name": "ZIP10 count then locations (multi-turn/location)",
         "tools_any": [], "tools_exclude": [],
         "doc": "zip", "category": "location", "style": "multi-turn",
@@ -650,7 +652,7 @@ CASES = [
             m("There are **8 Zip HydroTap units** installed, supplied by Culligan International (Emirates)."),
             u("where exactly are they installed?"),
         ],
-        "contains_any": ["coffee"],
+        "contains_any": ["coffee", "pantry"],
     },
     # ===================== Sanitary Accessories =====================
     {

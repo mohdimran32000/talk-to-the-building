@@ -761,7 +761,10 @@ def _windowed_excerpt(query: str, content: str, head: int = 900,
         out.append(content[start:start + win])
     if not covered:
         return content[:head + win]
-    return " […] ".join(out)
+    # Query-matched windows FIRST: the head of an OCR chunk is often table
+    # junk, and the answer model demonstrably anchors on leading text — a
+    # decisive sentence buried mid-excerpt gets glossed over.
+    return " […] ".join(out[1:] + [out[0][:400]])
 
 
 def _resolve_document(supabase_client, user_id: str, doc_name: str):
@@ -852,7 +855,10 @@ def _execute_search_documents(
             query=search_query,
             user_id=user_id,
             supabase_client=supabase_client,
-            top_k=10,
+            # 12, not 10: with LLM reranking the borderline evidence chunk
+            # (e.g. a warranty letter scoring ~0.5) drops below a top-10 cut
+            # in a fraction of runs — two extra slots absorb the jitter.
+            top_k=12,
             metadata_filter=metadata_filter,
             folder_path=folder_path,
             scope=scope,
@@ -1163,7 +1169,11 @@ Document excerpts:
             # first, capped to the same overall budget. Deliberately unfiltered:
             # this pass is the safety net, it must not inherit a poisoned filter.
             last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-            if last_user_msg and last_user_msg.strip().lower() != search_query.strip().lower():
+            # Run the safety-net pass when the wording differs OR a metadata
+            # filter was applied — a verbatim query with a nonzero-but-wrong
+            # filtered result otherwise gets no unfiltered look at the corpus.
+            if last_user_msg and (metadata_filter or
+                                  last_user_msg.strip().lower() != search_query.strip().lower()):
                 extra = _execute_search_documents(
                     search_query=last_user_msg,
                     metadata_filter=None,
@@ -1181,7 +1191,7 @@ Document excerpts:
                         if c is not None and (c["document_id"], c["content"]) not in seen:
                             seen.add((c["document_id"], c["content"]))
                             merged.append(c)
-                chunks = merged[:12]
+                chunks = merged[:14]
             if chunks:
                 from collections import Counter
                 doc_counts = Counter(c["file_name"] for c in chunks)

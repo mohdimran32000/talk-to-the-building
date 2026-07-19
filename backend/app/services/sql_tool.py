@@ -184,6 +184,7 @@ Rules:
 - Match the FORMAT of the column samples — e.g. if floor values look like 'GF', '4F', '6F' then the 4th floor is floor = '4F' (never '%4th%' or 'fourth')
 - Columns marked 'possible values' list the complete set — filter with those exact values. Columns marked 'examples' have MANY OTHER values — if the user's term (e.g. 'FCU') is not among the examples, still filter for it directly with ILIKE '%term%'; NEVER substitute a different example value for the user's term
 - Tables often reference each other by shared identifier values (e.g. a board/panel name column in one table matching a name column in another) — use JOINs across tables when a question spans them
+- NEVER infer a panel's block or floor from its NAME pattern (db ILIKE '%-4F-%' silently returns 0 rows — naming schemes vary, e.g. 'DB-04(B)-SP-01' is a 4th-floor Block B board). Resolve block/floor filters through the panel-schedule table's own block and floor columns: WHERE db IN (SELECT panel FROM "panels" WHERE block = 'B' AND floor = '4F')
 - NEVER drop a constraint from the question. If the user names an equipment/load type (e.g. 'FCU'), the WHERE clause MUST filter on it (e.g. load_type ILIKE '%FCU%') IN ADDITION TO any floor/block/area filters — a floor filter alone returns every load type on that floor, which is wrong
 - When counting equipment/units and the table has a quantity column (e.g. 'points', 'qty', 'count'), SUM that column instead of COUNT(*) — one row can represent multiple units
 - When the user asks for a breakdown, list, itemization, or table of items, do NOT select only identifier columns — also SELECT every column that makes a row meaningful on its own: any room/area/location/description column, the quantity column (e.g. 'points', 'qty'), and the load/rating column if relevant. Example: for "breakdown of FCUs" select db, cir_no, room_area, points — not just db and cir_no
@@ -299,6 +300,24 @@ User question: {question}"""
 
         if truncated:
             md += f"\n*Showing {max_rows} of {len(result)} rows*\n"
+
+        # Deterministic totals for quantity-like columns on multi-row results:
+        # breakdown answers must end with a Total row, and the answer model
+        # reliably copies a stated total but unreliably computes one itself.
+        if len(result) >= 4:
+            qty_like = ("points", "qty", "quantity", "nos", "load_w")
+            for ci, cn in enumerate(col_names):
+                if any(k in str(cn).lower() for k in qty_like):
+                    vals = []
+                    for row in result:
+                        try:
+                            vals.append(float(str(row[ci]).replace(",", "")))
+                        except (TypeError, ValueError):
+                            pass
+                    if vals:
+                        total = sum(vals)
+                        total_str = str(int(total)) if total == int(total) else f"{total:.2f}"
+                        md += f"\nTOTAL {cn} (all {len(vals)} rows): {total_str}\n"
 
         md += f"\nSQL: `{sql}`"
 

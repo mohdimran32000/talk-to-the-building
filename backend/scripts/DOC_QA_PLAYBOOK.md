@@ -238,6 +238,11 @@ them are unfair; graders must accept the listed variants.
 - Switchgear MDB exact hyphenation, project number (MS20-0026 vs SN20-0026), per-DB factory test cells, "how many SMDBs in Building B" counts
 - Griffin's address (US/UK garbled)
 
+**Two-framing answers (grade either as correct):**
+- Zip HydroTap locations: system description says GF Recruitment Café / Coffee
+  Bars / Coffee Lounges; the commissioning table in the SAME manual says
+  GF/1F/3F/5F/6F PANTRY — accept either framing (discovered 2026-07-18).
+
 **Accepted spelling variants (grade as equal):**
 - Heatrae Sadia = "Heater Sadie" = "HEATER SADIE"
 - Heriot-Watt = Heriot Watt = "Herriot Watt" = "Heroit Watt" = "Heriot Warr"
@@ -252,21 +257,36 @@ them are unfair; graders must accept the listed variants.
 - Switchgear equipment specs / warranty / maintenance → document retrieval
 - Include at least 4 routing cases probing this boundary in both directions.
 
-## RESUME STATE (2026-07-17, session ended on Gemini spend cap)
+## AUDIT COMPLETE — 2026-07-19
 
-- All 77 doc-QA cases have passed individually; a full-suite shakeout run was
-  47/47 green before an API hang, and official pass A was 24/24 green when the
-  **Gemini project hit its monthly spending cap (429 RESOURCE_EXHAUSTED)** —
-  no eval can run until the user raises the cap at https://ai.studio/spend or
-  swaps GEMINI_API_KEY in backend/.env.
-- TO FINISH: (1) restore API quota; (2) run pass A and pass B — each =
-  eval_doc_qa.py + eval_routing.py + eval_rag_vs_truth.py +
-  eval_sql_breakdown.py, all green twice consecutively; (3) print
-  doc_qa_scorecard.py, write the scorecard into this file, commit.
-- Also pending: the user applies migrations/021_fix_vector_index.sql.
-- Answer-generation temperature is now pinned to 0.2 and Gemini calls carry a
-  3-minute timeout (both in openai_client.py) — full runs are much less flaky
-  than the first attempts were.
+**Goal met: two consecutive fully green passes** (pass TA and pass TB, run
+back-to-back on 2026-07-19), each 136/136:
+eval_doc_qa.py **77/77** + eval_routing.py **20/20** +
+eval_rag_vs_truth.py **33/33** + eval_sql_breakdown.py **6/6**.
+Migration 021 (HNSW vector index) is APPLIED — vector search is live.
+Stack: chat model gemini-3.1-flash-lite, reranker gemini-flash-lite-latest
+(answer-bearing rubric, query-windowed snippets), answer temperature 0.2.
+
+### Final scorecard (from scripts/results/doc_qa_results.jsonl, 1722 executions)
+
+- Initial pass rate (first execution per case): **54/77 (70%)**
+- Final pass rate: **77/77 (100%)** — plus routing 20/20, rag 33/33, sql 6/6
+- By document: acs 9, cctv 10, bms 8, ups 10, swgr 9(+RB 3), zip 10, san 7,
+  wh 9, sql-boundary 2 — all 100%
+- By category: spec 23, entity 19, location 9, maintenance 10, negative 11,
+  routing 5 — all 100%
+- By phrasing style: clean 57, conversational 11, multi-turn 6, typo 2,
+  format 1 — all 100%
+- Failure-layer mix across the whole audit (since-fixed): answer 91,
+  routing 28, retrieval 3 executions
+- Fixes applied: see "Audit findings so far" below + commits d56428f,
+  d04133c, 558fd51, and the final-session commit (retrieval windows,
+  rerank rubric, SQL disambiguation rules, chunk-19 split, fabrication
+  guards, dual-framing graders)
+- Retrieval-quality notes: chunk 19 of the switchgear manual was split
+  (drawings list vs GDS warranty letter) — the one chunking surgery needed;
+  Ziptap locations have TWO true framings (coffee bars vs pantries), both
+  accepted; the HybridChunker upgrade remains the structural next step.
 
 ## Audit findings so far (2026-07-17 session — read before re-running)
 

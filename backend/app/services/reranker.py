@@ -41,27 +41,26 @@ def _rerank_gemini(query: str, chunks: List[str], top_k: int) -> List[str]:
     def _snippet(chunk: str) -> str:
         head = chunk[:600]
         low = chunk.lower()
-        terms = [t for t in query.lower().split() if len(t) >= 4]
-        hits = []
-        for t in terms:
-            pos = low.find(t, 600)
-            if pos != -1:
-                hits.append(pos)
-            rpos = low.rfind(t)
-            if rpos >= 600:
-                hits.append(rpos)
-        if not hits:
-            return chunk[:1200]
-        # First AND last hits: evidence often clusters at the END of a long
-        # OCR chunk (e.g. a warranty letter at offset ~5k of 7k) while an
-        # early hit is just a heading mention.
+        # One window per DISTINCT query term's first hit (longest terms first —
+        # a rarity proxy). First+last-only windowing left a gap in the middle
+        # where the decisive fact often sits (e.g. "12 months" between an early
+        # heading mention and a late T&C paragraph).
+        terms = sorted({t for t in query.lower().split() if len(t) >= 4},
+                       key=len, reverse=True)
         windows, covered = [], []
-        for pos in (min(hits), max(hits)):
-            start = max(600, pos - 150)
-            if any(abs(start - c) < 400 for c in covered):
+        for t in terms:
+            if len(covered) >= 3:
+                break
+            pos = low.find(t, 600)
+            if pos == -1:
+                continue
+            start = max(600, pos - 200)
+            if any(abs(start - c) < 500 for c in covered):
                 continue
             covered.append(start)
             windows.append(chunk[start:start + 500])
+        if not windows:
+            return chunk[:1200]
         return head + " […] " + " […] ".join(windows)
 
     chunk_list = "\n\n".join(
@@ -70,6 +69,11 @@ def _rerank_gemini(query: str, chunks: List[str], top_k: int) -> List[str]:
     )
 
     prompt = f"""Score each chunk's relevance to the query on a scale of 0.0 (irrelevant) to 1.0 (highly relevant).
+
+Relevance means the chunk ANSWERS the query, not merely shares its topic:
+- A chunk that states the exact requested value (a duration, count, model, name, date) for the exact subject asked about scores 0.9-1.0.
+- Chunks about the same topic but a DIFFERENT subject (e.g. another vendor's warranty when the query names a specific vendor) score at most 0.4.
+- Chunks that only discuss related terms without the requested fact score at most 0.5.
 
 Query: {query}
 
