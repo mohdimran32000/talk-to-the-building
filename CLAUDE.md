@@ -50,5 +50,20 @@ RAG app with chat (default) and document ingestion interfaces. Config via admin 
 - **Eval suites (LLM-driven, slow):** `backend/scripts/eval_rag_vs_truth.py` (33 cases, supports `1-11` index-range args), `eval_routing.py` (18 cases, supports case-name args like `R3 M6`), `eval_sql_breakdown.py` (6 cases). A full pass takes 25–40 min. **Run them in short foreground chunks using those CLI filters — never as one long background job** (long background runs get killed when the session idles; each chunk banks its results so an interruption loses only that chunk). After ANY backend code change, kill ALL python/uvicorn processes on port 8001 and restart (no `--reload`; zombie workers serve stale code). Playbooks: `backend/scripts/EVAL_PLAYBOOK.md` (load-schedule SQL matrix) and `DOC_QA_PLAYBOOK.md` (O&M document QA).
 - **CRITICAL: Tests must NEVER delete all user data.** Tests must only clean up resources they created (tracked by ID). Never use blanket "delete all threads/files" cleanup. Never run `DELETE FROM` or `TRUNCATE` on production tables. Never write migrations with `DROP TABLE` on tables that hold user data.
 
+## Reference Docs
+Background and decisions that live in this repo. Read on demand — not needed for routine work.
+- `ORCHESTRATION-STUDY-ADK-LANGGRAPH.md` — why orchestration is hand-rolled Python rather than
+  ADK / LangGraph / Langflow. Verdict, the 75/25 effort split, lessons for the next project, and
+  known refactors. **Read this before re-opening the "should we use a framework?" question.**
+- `GOAL-OBSERVATIONS-FOR-LINKEDIN.md` — the eval-audit story (70% → two consecutive 100% runs)
+  plus a post-idea bank. Source material for writing, not a spec.
+- `GEMMA-LOCAL-LLM-DISCUSSION.md` — local-model (Ollama/Gemma) migration notes.
+- `backend/scripts/EVAL_PLAYBOOK.md` / `DOC_QA_PLAYBOOK.md` — how to run and resume eval suites.
+
+**Rule provenance:** the domain rules in `sql_tool.py`'s prompt each guard a specific eval case.
+The map is in a comment block above the `prompt = f"""` string (`sql_tool.py`, "PROVENANCE MAP").
+Keep tags in that comment — never inline in the prompt string, which is sent to the model verbatim.
+When a fix adds a new rule, add its row to the map.
+
 ## Progress
 Check PROGRESS.md for current module status. Update it as you complete tasks.

@@ -163,6 +163,56 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # Build a list of exact table names for the prompt and post-processing
     real_table_names = [t["table_name"] for t in tables]
 
+    # ------------------------------------------------------------------
+    # PROVENANCE MAP for the domain rules in the prompt below.
+    #
+    # Every rule from "NEVER infer a panel's block or floor" onward is a fossil
+    # of a specific eval failure. Without this map the rules can only ever be
+    # added, never removed — nobody can tell which one is load-bearing.
+    #
+    # Case numbers are 1-based positions in CASES in
+    # scripts/eval_rag_vs_truth.py. Re-run a single case with its index range,
+    # e.g.  venv/Scripts/python scripts/eval_rag_vs_truth.py 24-24
+    #
+    # Rule (first words)                     Guards                Symptom if deleted
+    # ---------------------------------------------------------------------------
+    # NEVER infer a panel's block or floor   cases 1, 2, 6, 7, 8   db ILIKE '%-4F-%' matches
+    #                                                              nothing -> silent 0 rows
+    # NEVER drop a constraint                cases 1, 7, 8         floor filter alone returns
+    #                                                              every load type on the floor
+    # SUM the quantity column not COUNT(*)   cases 1, 7, 16        one row can be many units
+    #                                                              -> undercounts FCUs/points
+    # breakdown: select meaningful columns   case 6, eval_sql_breakdown
+    #                                                              -> bare db/cir_no table
+    # ORDER BY natural reading order         eval_sql_breakdown    -> circuits out of
+    #                                                              as-printed order
+    # also SELECT notes/remarks on lookups   case 24               DEWA struck out MDL 1120.40
+    #                                                              -> answer misses correction
+    # parent-reference NOT EXISTS pattern    cases 2, 3            SMDB-B-4F feeds the 4F DBs
+    #                                                              -> double-counts the area
+    # named panel value from panel schedule  cases 20, 21, 24      the "broken telephone" bug:
+    #                                                              SUM(mdb_calc) gave 2283.40
+    #                                                              instead of 1156.36
+    #   (deliberate exception: cases 12, 13 DO read mdb_calc — they ask for one
+    #    load type's row and its diversity factor, not the panel's demand)
+    # keyword filters: category vs remarks   case 7 (cleaner)      OR-ing remarks double-counts
+    #                                                              incidental mentions
+    # TWO panels -> feeder schedule          cases 9, 10, 15       child rows have BLANK totals
+    #                                                              in panels -> wrong/empty
+    # ONE panel -> read fed_from             cases 5, 18           no joins needed
+    # superlatives from schedule totals      case 11               summing circuits gives a
+    #                                                              different, wrong total
+    # area totals from panel schedule        cases 2, 3            circuits cover only a subset
+    # never approximate kWh from loads       doc-QA kWh cases      tables record ratings (kW),
+    #                                                              not consumption (kWh)
+    #
+    # Rules above these (exact table names, quoting, DuckDB syntax, CAST) are
+    # generic SQL correctness, not domain fossils — no provenance needed.
+    #
+    # IMPORTANT: keep tags HERE, not inline in the prompt string. Text inside
+    # the f-string is sent to the model verbatim; editing it risks the evals.
+    # ------------------------------------------------------------------
+
     prompt = f"""You are a SQL expert. Generate a single DuckDB SQL query to answer the user's question.
 
 {schema_desc}
