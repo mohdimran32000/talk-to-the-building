@@ -51,14 +51,30 @@ RAG app with chat (default) and document ingestion interfaces. Config via admin 
 - **CRITICAL: Tests must NEVER delete all user data.** Tests must only clean up resources they created (tracked by ID). Never use blanket "delete all threads/files" cleanup. Never run `DELETE FROM` or `TRUNCATE` on production tables. Never write migrations with `DROP TABLE` on tables that hold user data.
 
 ## Reference Docs
-Background and decisions that live in this repo. Read on demand — not needed for routine work.
-- `ORCHESTRATION-STUDY-ADK-LANGGRAPH.md` — why orchestration is hand-rolled Python rather than
-  ADK / LangGraph / Langflow. Verdict, the 75/25 effort split, lessons for the next project, and
-  known refactors. **Read this before re-opening the "should we use a framework?" question.**
-- `GOAL-OBSERVATIONS-FOR-LINKEDIN.md` — the eval-audit story (70% → two consecutive 100% runs)
-  plus a post-idea bank. Source material for writing, not a spec.
-- `GEMMA-LOCAL-LLM-DISCUSSION.md` — local-model (Ollama/Gemma) migration notes.
+
+**This repo is PUBLIC. The `notes/` folder is a SEPARATE PRIVATE repo** (gitignored here).
+Never move a file out of `notes/` into a tracked path — that publishes it.
+
+Private notes (`notes/`) — read on demand, not needed for routine work:
+- `notes/ORCHESTRATION-STUDY-ADK-LANGGRAPH.md` — why orchestration is hand-rolled Python rather
+  than ADK / LangGraph / Langflow. Verdict, the 75/25 effort split, lessons for the next project,
+  and known refactors. **Read before re-opening the "should we use a framework?" question.**
+- `notes/GOAL-OBSERVATIONS-FOR-LINKEDIN.md` — the eval-audit story (70% → two consecutive 100%
+  runs) plus a post-idea bank. Source material for writing, not a spec.
+- `notes/GEMMA-LOCAL-LLM-DISCUSSION.md` — local-model (Ollama/Gemma) migration notes.
+
+Public docs:
 - `backend/scripts/EVAL_PLAYBOOK.md` / `DOC_QA_PLAYBOOK.md` — how to run and resume eval suites.
+
+### Committing with two repos
+`notes/` has its own git history. When a task changes files in both places, **commit twice** —
+once in the project root, once inside `notes/`. Check both before declaring work done:
+```
+git status              # project (public)
+git -C notes status     # notes (private)
+```
+If `git -C notes status` shows changes, commit them there too. Never `git add` anything under
+`notes/` from the project repo.
 
 **Rule provenance:** the domain rules in `sql_tool.py`'s prompt each guard a specific eval case.
 The map is in a comment block above the `prompt = f"""` string (`sql_tool.py`, "PROVENANCE MAP").

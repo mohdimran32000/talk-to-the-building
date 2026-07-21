@@ -34,3 +34,6 @@ backend/uvicorn.err.log
 
 # Eval result banks (doc-QA audit)
 backend/scripts/results/
+
+# Private notes (separate private repo — see CLAUDE.md Reference Docs)
+notes/
