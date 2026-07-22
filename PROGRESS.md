@@ -802,7 +802,7 @@ Episode 2 was forked from this repo's Episode 1 final state and is being develop
 ### Operational Notes
 - Servers run detached (survive session close): backend `venv\Scripts\python -m uvicorn app.main:app --port 8001`, frontend `npm run dev` (Node at `C:\Program Files\nodejs` — open a NEW terminal for PATH)
 - LangSmith debugging works via API (`LANGSMITH_PROJECT=rag-masterclass-ep2`) — list runs, drill into tool calls, read generated SQL
-- Login: admin@test.com / adminpassword123 (admin); test@test.com and testuser@example.com are regular users
+- Login: dev test accounts (one admin + two regular users) — credentials live in `notes/CREDENTIALS.md` (private repo, not published); admin password is set via `TEST_USER_ADMIN_PASSWORD` in `backend/.env`
 
 ### Eval Harness & Answer Consistency (session 2026-07-05 → 07-09)
 - **Goal-driven eval suite** in `backend/scripts/` (run from `backend/` with venv python): `eval_sql_breakdown.py` (4 cases), `eval_rag_vs_truth.py` (24 cases — RAG SQL vs hand-written ground-truth SQL over the same data), `eval_routing.py` (2 routing regressions via `stream_response`). All 30 passing, two consecutive runs.
