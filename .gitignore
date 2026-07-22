@@ -37,3 +37,17 @@ backend/scripts/results/
 
 # Private notes (separate private repo — see CLAUDE.md Reference Docs)
 notes/
+
+# Local dev tooling & personal working notes (machine-specific, not part of the project)
+.claude/agents/
+.claude/commands/gsd/
+.claude/get-shit-done/
+.claude/hooks/
+.claude/gsd-file-manifest.json
+.claude/package.json
+.mcp.json
+gemini/
+rag-tool-flow.html
+
+# Playwright test output
+frontend/test-results/
