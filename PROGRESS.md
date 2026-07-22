@@ -821,3 +821,23 @@ Episode 2 was forked from this repo's Episode 1 final state and is being develop
 - **Data fix (Supabase, additive with provenance notes):** `SMDB-B-6F` (210.21/163.96 kW) and `MCC-B-RS` (38.60/27.02) added to panels from the MDB-C-G2 feeder schedule — were missing from ingest; panels 101→103 rows
 - **Block B adjudication:** Block B alone = 1,234.30 kW TCL / 955.97 MDL (topmost panels); serving board MDB-C-G2 = 1,445.45 TCL / **1,156.36 MDL (DEWA-corrected; printed 1,120.40 superseded)** — MDB-C-G2 also feeds ~366 kW of Block C/shared, so it is NOT "Block B alone". Unresolved: 6F lab DBs reference "SMDB-B-6F-LAB" (4 spellings, in no table) → possible ~12.4 kW double count; awaiting user confirmation
 - **Next session:** run the full consistency-audit goal — copy-paste text + coverage matrix in `backend/scripts/EVAL_PLAYBOOK.md`; push (~21 commits, needs one-time GitHub sign-in via GCM); revoke GCP service-account key
+
+---
+
+## Session 2026-07-22 — README Refresh, v1.1 Checkpoint, Credential Rotation
+
+### README rewrite (public repo now matches the project)
+- Replaced the original course README with project-accurate docs: "Talk to the Building" identity, Gemini-native stack, agentic tool table (search / text-to-SQL / web / analyze_document / explorer sub-agent), architecture diagram, test + eval scorecard (112 backend, 26 Playwright, 57/57 ×2 and 136/136 ×2 evals), setup guide, and tag-history table
+- `.gitignore`: local dev tooling (GSD `.claude/` additions, `.mcp.json`, `gemini/`, `rag-tool-flow.html`) and Playwright `test-results/` now ignored; stale `frontend/test-results/.last-run.json` untracked
+
+### Version checkpoints (tags)
+- **`v1.1` = current complete state** (evals green, README refresh, security fix) — the "old vs new" split (v1.1/v1.2) was collapsed since a README-only delta isn't a version
+- Convention going forward: **next completed milestone → `v2.0`**
+- Existing tags untouched: `Module-*`, `Episode-1-Complete`, `v1.0` (file-explorer milestone)
+
+### Security: admin credential rotation
+- `admin@test.com` password was published in this file + test scripts (public repo) → **rotated in Supabase** (verified: new password signs in, old one rejected)
+- Real password lives in `backend/.env` (`TEST_USER_ADMIN_PASSWORD`) and `notes/CREDENTIALS.md` (private repo) — the hardcoded default in `test_helpers.py` is now a dead fallback
+- `frontend/playwright.config.ts` now loads `backend/.env` so the e2e suite picks up the same credential
+- Regular test users (`testuser@example.com`, `test@test.com`) intentionally not rotated — non-admin, accepted risk
+- Note: the old password remains visible in git history; rotation (not scrubbing) is what closed the risk
