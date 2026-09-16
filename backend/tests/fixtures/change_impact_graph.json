@@ -1,0 +1,26 @@
+{
+ "_why": "A synthetic dependency graph and room-asset set, shaped exactly like the real ones (typed polymorphic ids, one predicate per row, an evidence class per row) but naming a building that does not exist. test_change_impact.py loads these into DuckDB and runs the SQL pattern the sql_tool rule tells the model to write, so the pattern is proved to work rather than asserted to.",
+ "relationships": [
+  {"rel_id": "REL-0001", "subject_type": "panel", "subject_id": "SMDB-1", "predicate": "feeds", "object_type": "panel", "object_id": "DB-01", "evidence_file": "bld_panels.csv", "evidence_page": "27", "derived_by": "printed", "notes": ""},
+  {"rel_id": "REL-0002", "subject_type": "panel", "subject_id": "DB-01", "predicate": "feeds", "object_type": "circuit", "object_id": "DB-01/C3", "evidence_file": "bld_circuits.csv", "evidence_page": "44", "derived_by": "printed", "notes": ""},
+  {"rel_id": "REL-0003", "subject_type": "circuit", "subject_id": "DB-01/C3", "predicate": "feeds", "object_type": "equipment", "object_id": "CAM-4F-B-01", "evidence_file": "bld_circuits.csv", "evidence_page": "44", "derived_by": "one-to-one", "notes": ""},
+  {"rel_id": "REL-0004", "subject_type": "equipment", "subject_id": "CAM-4F-B-01", "predicate": "wired_to", "object_type": "location", "object_id": "RM-1.28", "evidence_file": "bld_cam_register.csv", "evidence_page": "49", "derived_by": "one-to-one", "notes": "the switch room the camera is wired to"},
+  {"rel_id": "REL-0005", "subject_type": "equipment", "subject_id": "CAM-4F-B-01", "predicate": "recorded_by", "object_type": "location", "object_id": "RM-1.28", "evidence_file": "bld_cam_register.csv", "evidence_page": "49", "derived_by": "one-to-one", "notes": "the VMS room"},
+  {"rel_id": "REL-0006", "subject_type": "equipment", "subject_id": "CAM-4F-B-01", "predicate": "backed_by", "object_type": "location", "object_id": "RM-1.28", "evidence_file": "bld_cam_register.csv", "evidence_page": "49", "derived_by": "owner-confirmed", "notes": "the UPS room"},
+  {"rel_id": "REL-0007", "subject_type": "equipment", "subject_id": "CAM-4F-B-01", "predicate": "located_in", "object_type": "location", "object_id": "RM-4.04", "evidence_file": "bld_equipment.csv", "evidence_page": "12", "derived_by": "printed", "notes": ""},
+  {"rel_id": "REL-0008", "subject_type": "fcu", "subject_id": "FCU-4-01", "predicate": "located_in", "object_type": "location", "object_id": "RM-4.04", "evidence_file": "bld_fcu_commissioning.csv", "evidence_page": "165", "derived_by": "printed", "notes": ""},
+  {"rel_id": "REL-0009", "subject_type": "panel", "subject_id": "DB-01", "predicate": "feeds", "object_type": "circuit", "object_id": "DB-01/C7", "evidence_file": "bld_circuits.csv", "evidence_page": "44", "derived_by": "printed", "notes": ""},
+  {"rel_id": "REL-0010", "subject_type": "circuit", "subject_id": "DB-01/C7", "predicate": "feeds", "object_type": "printed_text", "object_id": "FCU in Gallery at L04-B", "evidence_file": "bld_circuits.csv", "evidence_page": "44", "derived_by": "printed", "notes": "object is the printed text, not a register unit"},
+  {"rel_id": "REL-0011", "subject_type": "controller", "subject_id": "ACP-4F-B-03", "predicate": "controls", "object_type": "door", "object_id": "DR-0210-D5", "evidence_file": "bld_doors.csv", "evidence_page": "5", "derived_by": "printed", "notes": ""},
+  {"rel_id": "REL-0012", "subject_type": "door", "subject_id": "DR-0210-D5", "predicate": "located_in", "object_type": "location", "object_id": "RM-4.04", "evidence_file": "bld_doors.csv", "evidence_page": "5", "derived_by": "printed", "notes": ""},
+  {"rel_id": "REL-0013", "subject_type": "location", "subject_id": "L04-B", "predicate": "contains", "object_type": "location", "object_id": "RM-4.04", "evidence_file": "bld_locations.csv", "evidence_page": "1", "derived_by": "printed", "notes": ""},
+  {"rel_id": "REL-0014", "subject_type": "panel", "subject_id": "DB-02", "predicate": "feeds", "object_type": "circuit", "object_id": "DB-02/C1", "evidence_file": "bld_circuits.csv", "evidence_page": "45", "derived_by": "printed", "notes": "an unrelated board — nothing here may reach CAM-4F-B-01"}
+ ],
+ "room_assets": [
+  {"location_id": "RM-4.04", "location_resolution": "room", "display_name": "4.04 Classroom", "level_code": "04", "system": "cctv", "item": "PRO 3 IR IND DOME 2MP", "qty": "1", "source_table": "bld_equipment", "notes": ""},
+  {"location_id": "RM-4.04", "location_resolution": "room", "display_name": "4.04 Classroom", "level_code": "04", "system": "acs", "item": "CARD READER", "qty": "2", "source_table": "bld_equipment_counts", "notes": ""},
+  {"location_id": "RM-4.04", "location_resolution": "room", "display_name": "4.04 Classroom", "level_code": "04", "system": "fire-alarm", "item": "INTELLIGENT SMOKE DETECTOR", "qty": "5", "source_table": "bld_equipment_counts", "notes": ""},
+  {"location_id": "RM-4.04", "location_resolution": "room", "display_name": "4.04 Classroom", "level_code": "04", "system": "mechanical", "item": "FAN COIL UNIT", "qty": "1", "source_table": "bld_equipment", "notes": ""},
+  {"location_id": "RM-1.28", "location_resolution": "room", "display_name": "1.28 Server Room", "level_code": "01", "system": "ups", "item": "UPS 8KVA", "qty": "1", "source_table": "bld_equipment", "notes": ""}
+ ]
+}

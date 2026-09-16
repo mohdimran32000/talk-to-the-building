@@ -45,6 +45,9 @@ what a card carries:
      more when the question names a room by its code. See
      `_PLACE_SIGNAL_RES` below for the shapes and the defect this tier
      exists for.
+The change signal is NOT a fifth tier — it is a guard, like the neighbour
+rule below. See `_CHANGE_VERB_RES` and the change-guard block in
+`select_tables`.
 
 This is a deliberate, reported simplification versus the blueprint's
 "embed the cards" sketch (see task-8-report.md) — swapping in a real
@@ -57,6 +60,23 @@ appended too. `ls-014` needs `hwu_panels` AND `hwu_smdb_feeders` in the same
 schema block — a router that finds `hwu_panels` and stops there produces a
 confidently wrong per-phase answer, because child boards print blank totals
 in the panel schedule and the real figure lives only in the feeder schedule.
+
+NEITHER IS THE CHANGE GUARD, AND IT IS A GUARD RATHER THAN A TIER BECAUSE
+THAT WAS MEASURED. A change-impact question ("can I replace X", "what would
+this affect") is answered by the DEPENDENCY GRAPH, so every card whose
+columns are a graph edge is appended for one, exactly like a join neighbour.
+It was first built as a fifth SCORING tier (weight 3.5, below the
+identifier-prefix tier) and that version was replayed over all 183 eval
+questions offline: it could not reach k=3 for the very questions it exists
+for — a question naming an asset by its tag gives three of that system's own
+tables a 6 apiece — and it COST one question the table holding its answer
+(whh-001, "which company supplied and installed the 30 litre water heaters?"
+lost `hwu_om_waterheaters_asset_register` when the graph card displaced it).
+Ranking was the wrong instrument: `sql_tool` uses this list as a SET, so
+"is the graph in play" is a correctness question, not a relevance one.
+Appending instead of promoting makes the guard strictly additive — it can
+never cost a question a table it selects today, which is what the replay
+then measured (18 changed, 0 lost).
 """
 import re
 
@@ -148,6 +168,59 @@ _PLACE_WEIGHT = 4.0
 _ROOM_GRANULARITY_WEIGHT = 1.0
 _ROOM_RESOLUTION_VALUE = "room"
 
+# ---------------------------------------------------------------------------
+# THE CHANGE GUARD
+#
+# THE DEFECT: "can I replace camera CCTV-L6B-S-IDF-1?" is not a question about
+# cameras, it is a question about that camera's DEPENDENCIES — what feeds it,
+# what records it, what is backed up with it, what else sits in the same room.
+# Tiers 1-3 route it to the camera tables (the tag's prefix scores 6) and stop
+# there, so the schema block that reaches the SQL model holds the asset and
+# none of its links, and the app answers with a generic replacement checklist
+# written from general knowledge. Tier 4 does not fire either: a tag is not a
+# place.
+#
+# The signal is the QUESTION'S VERB, and the evidence on the card is its COLUMN
+# SHAPE. A table whose rows are (subject id, predicate, object id) is a
+# dependency graph — one row is one link between two things — whatever it is
+# called and whatever building it describes. That shape is the doc-prep spine's
+# own contract (doc-prep/out/hwu-spine/hwu_spine_manifest.md: "walk up from any
+# asset on `object_id`, down on `subject_id`"), and it is read off the card's
+# `columns`, exactly like `_LOCATION_COLUMNS` in tier 4: no table name is
+# matched anywhere in this module, so a second building with a differently
+# named graph table is routed by the same rule.
+#
+# A SECOND BUILDING IS THE SAME LIST: unlike `_PLACE_SIGNAL_RES` (which encodes
+# one building's room-numbering shapes), these are plain English change verbs
+# and carry nothing project-specific.
+#
+# WHY THE VERB ALONE IS NOT ENOUGH — measured over the 183 eval questions, not
+# reasoned about. A first draft of this list included `install\w*`, and in a
+# corpus of asset registers "installed" is one of the commonest words there is:
+# it fired on "how many CCTV cameras are installed in total?", "where are the
+# 30 litre water heaters installed?" and 6 more plain factual questions, each of
+# which would have carried the graph table and its 7 join neighbours into the
+# schema block for nothing. A check that cries wolf does not ship
+# (doc-prep/CLAUDE.md §12). Two fixes, both measured: `install` is gone (it is
+# not a change — it is how every asset in the corpus got there), and a plain
+# change VERB must also NAME something — a place, or an entity by its coded tag
+# — before the guard fires. An explicit IMPACT word ("what would this affect",
+# "what depends on it") is self-evidently a graph question and needs no second
+# signal.
+_CHANGE_VERB_RES = [
+    re.compile(r"\b(replac\w*|swap\w*|substitut\w*|chang\w*|upgrad\w*|retrofit\w*"
+               r"|add|adds|adding|remov\w*|decommission\w*|disconnect\w*"
+               r"|relocat\w*|modif\w*|compatib\w*|interchang\w*)\b", re.IGNORECASE),
+]
+_IMPACT_WORD_RES = [
+    re.compile(r"\b(affect\w*|impact\w*|knock-on|depend\w*|downstream|upstream)\b",
+               re.IGNORECASE),
+]
+
+# The edge shape. All three are required: a table with only an `object_id` is a
+# foreign key, not a graph — it names one end and cannot be walked backwards.
+_GRAPH_EDGE_COLUMNS = frozenset({"subject_id", "predicate", "object_id"})
+
 _STOPWORDS = {
     "the", "a", "an", "of", "is", "are", "what", "which", "how", "many",
     "for", "on", "in", "to", "and", "or", "was", "were", "does", "do",
@@ -230,6 +303,43 @@ def _names_a_room_by_code(question: str) -> bool:
     Decides whether `_ROOM_GRANULARITY_WEIGHT` applies; see the comment on
     that constant for the measurement that drew the line here."""
     return any(rx.search(question or "") for rx in _ROOM_CODE_RES)
+
+
+def _asks_about_a_change(question: str) -> bool:
+    """True when the question is about CHANGING something in the building —
+    replacing, swapping, upgrading, adding, removing, relocating, modifying or
+    matching something — or about what a change would AFFECT.
+
+    Two ways in, and they are not the same strength of evidence:
+      * an IMPACT word ('what would this affect', 'what depends on it') is on
+        its own a question about links, and fires alone;
+      * a plain change VERB fires only when the question also names something
+        the graph could be walked from — a place, or an entity by its coded tag.
+        See `_CHANGE_VERB_RES` for the 8 plain factual questions that measured
+        this condition into existence.
+
+    Matched against the RAW question like `_names_a_place`, so nothing depends
+    on the tokeniser. Word-bounded on purpose: 'add' must not fire on 'address',
+    and the stems are written out (`replac\\w*`) rather than fuzzily matched so
+    the list can be read and argued with."""
+    q = question or ""
+    if any(rx.search(q) for rx in _IMPACT_WORD_RES):
+        return True
+    if not any(rx.search(q) for rx in _CHANGE_VERB_RES):
+        return False
+    return _names_a_place(q) or bool(_question_prefixes(q))
+
+
+def _card_is_graph(card: dict) -> bool:
+    """True when this table's rows ARE dependency links — it names both ends of
+    a link and the link itself (`subject_id`, `predicate`, `object_id`).
+
+    Read off the card's own columns, never a table name, exactly like
+    `_card_is_placeable`. All three columns are required: a table carrying only
+    an `object_id` is a foreign key, which names one end and cannot be walked
+    backwards, and walking BOTH directions is the whole of what a change-impact
+    question needs (doc-prep/out/hwu-spine/hwu_spine_manifest.md)."""
+    return _GRAPH_EDGE_COLUMNS <= set(card.get("columns", []))
 
 
 def _card_is_placeable(card: dict) -> bool:
@@ -328,6 +438,9 @@ def _score(question_words: set[str], question_prefixes: set[str], card: dict,
     # deliberately on 26 of the 67 cards — it is the spine, and the whole point
     # is that a placed row is reachable. Down-weighting it by how common it is
     # would undo the tier it implements.
+    #
+    # The change guard is deliberately NOT a term here — see the module
+    # docstring for the replay that decided that.
     if names_place and _card_is_placeable(card):
         score += _PLACE_WEIGHT
         if names_room and _card_reaches_room(card):
@@ -342,6 +455,12 @@ def select_tables(question: str, cards: list[dict], k: int = 3) -> list[str]:
     ranked or capped by k — the neighbour rule is a correctness guard, not
     a relevance signal, and must not be squeezed out by it).
 
+    THE CHANGE GUARD, same shape and for the same reason. When the question
+    asks about CHANGING something, every dependency-graph card is appended too
+    — after the ranked picks, never displacing one. See the module docstring
+    for why this is a guard and not a scoring tier, and `_asks_about_a_change`
+    for when it fires.
+
     Deterministic: identical (question, cards, k) always returns the same
     list in the same order. Ties in score are broken by each card's
     position in `cards` (stable sort), so the result depends only on the
@@ -354,6 +473,7 @@ def select_tables(question: str, cards: list[dict], k: int = 3) -> list[str]:
     qprefixes = _question_prefixes(question)
     names_place = _names_a_place(question)
     names_room = names_place and _names_a_room_by_code(question)
+    asks_change = _asks_about_a_change(question)
     # Each card's subject/vocab word sets are pure functions of the card,
     # but both _document_frequency and _score need them for every card —
     # computed once per card here (keyed by identity, scoped to this call
@@ -373,6 +493,15 @@ def select_tables(question: str, cards: list[dict], k: int = 3) -> list[str]:
     by_name = {c["table"]: c for c in cards}
     top = [name for score, _, name in scored[:k] if score > 0] or \
           [name for _, _, name in scored[:k]]
+
+    # The change guard (see the docstring). Appended in `cards` order, so the
+    # result stays deterministic, and before the neighbour pass so that a graph
+    # table brings the asset tables its own declared joins name — which is how
+    # "what would this affect" reaches the thing affected.
+    if asks_change:
+        for card in cards:
+            if _card_is_graph(card) and card["table"] not in top:
+                top.append(card["table"])
 
     result = list(top)
     for name in top:

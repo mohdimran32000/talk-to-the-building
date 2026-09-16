@@ -21,6 +21,52 @@ logger = logging.getLogger(__name__)
 
 SQL_QUERY_TIMEOUT = 5  # seconds
 
+# ---------------------------------------------------------------------------
+# THE DEPENDENCY-GRAPH RULE — one domain rule, in the same voice as the ~20
+# already in the prompt, kept as a named constant purely so a test can prove it
+# reaches the prompt (test the routing, not just the detection —
+# doc-prep/CLAUDE.md §12); the text itself is interpolated verbatim like every
+# other rule.
+#
+# WHAT IT DESCRIBES, and why it cannot be left to the schema block. The schema
+# block already shows this table's columns and its enumerated predicate values,
+# so a model can SEE the graph — what it cannot see is that `subject_id` and
+# `object_id` are POLYMORPHIC (the type column decides which table an id
+# resolves to), that a dependency question must be asked in BOTH directions, or
+# that a link with no evidence column selected is half a fact. All three are
+# properties of the shape, not of this building, so the rule is written from the
+# COLUMN SHAPE and names no table: a second project's graph, under any name,
+# gets the same rule as soon as its card carries subject/predicate/object.
+#
+# Kind -> table is deliberately given as a METHOD ("the kind names the table
+# family; resolve it against the tables listed above") rather than a hard-coded
+# map. A hard-coded map is a per-building fact and would be wrong for the next
+# project, and the id kinds are already enumerated in the schema block's own
+# `possible values` for the type columns.
+DEPENDENCY_GRAPH_RULE = (
+    "- A table whose rows are a SUBJECT id, a PREDICATE and an OBJECT id (columns like "
+    "subject_id/predicate/object_id, with subject_type/object_type naming each end's KIND) is the "
+    "corpus's DEPENDENCY GRAPH: one row is one evidence-backed link between two things in the "
+    "building, and it is ONE graph for every system — never a table per system. Use it for any "
+    "question about what something depends on, what depends on it, or what changing/replacing/"
+    "adding/removing/relocating it would affect. THE TWO ID COLUMNS ARE POLYMORPHIC: read the "
+    "type column first — it names the KIND of thing the id is (a panel/board, a circuit, a "
+    "location/room, a door, a controller, a piece of equipment, an FCU, a table, or plain printed "
+    "text), and the kind says which of the tables listed above that id joins to and on which "
+    "column; kinds that are plain printed text join nothing and are quoted as printed. WALK IT IN "
+    "BOTH DIRECTIONS IN ONE QUERY — the rows whose object_id is the asset are what it depends on "
+    "(upstream) and the rows whose subject_id is the asset are what depends on it (downstream): "
+    "SELECT * FROM \"<graph table>\" WHERE subject_id = '<id>' OR object_id = '<id>'. Never one "
+    "direction alone: half the answer is worse than none. For a second hop, repeat with the ids "
+    "the first hop returned: WHERE subject_id IN (SELECT object_id FROM \"<graph table>\" WHERE "
+    "subject_id = '<id>') OR object_id IN (...). ALWAYS also SELECT the evidence columns (how the "
+    "link was derived, and the source file/page/quote) — a link without its evidence is half a "
+    "fact. Match the id EXACTLY as the graph prints it (use ILIKE when the question's spelling may "
+    "differ). Two limits: a link row is never a COUNT of assets (one circuit feeding 'Zip Tap' is "
+    "one circuit, not one tap — count the register), and the graph proves no negative — no row for "
+    "an asset means no document records a link, never that nothing depends on it."
+)
+
 
 class _QueryTimeoutError(Exception):
     """Raised when a DuckDB query is aborted for running past SQL_QUERY_TIMEOUT."""
@@ -464,6 +510,10 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # area totals from panel schedule        cases 2, 3            circuits cover only a subset
     # never approximate kWh from loads       doc-QA kWh cases      tables record ratings (kW),
     #                                                              not consumption (kWh)
+    # the dependency graph (subject/          no eval case yet —   a change-impact question is
+    #   predicate/object)                     the change-impact    answered from the asset's own
+    #                                         path, 2026-09-16     row alone, so nothing it
+    #                                                              affects is ever named
     #
     # Rules above these (exact table names, quoting, DuckDB syntax, CAST) are
     # generic SQL correctness, not domain fossils — no provenance needed.
@@ -512,6 +562,7 @@ Rules:
 - For superlative/comparison questions about panels' or boards' totals ('which board has the highest connected load'), SELECT panel, tcl_kw FROM the panel-schedule table itself with ORDER BY tcl_kw DESC NULLS LAST — NEVER compute a substitute total by summing the circuits table (not even aliased as tcl_kw); the printed schedule totals are authoritative
 - The same applies to AREA totals ('total load of Block B', 'total load of the 4th floor'): they come from the panel-schedule table using the topmost-rows NOT EXISTS pattern above — never from SUM(load_w) over the circuits table, which covers only the circuit-level subset and gives a different, wrong number
 - The tables record CONNECTED LOADS and ratings (W, kW, A) — NOT energy consumption, runtime, or cost. If the question asks for something the tables do not record (kWh consumed, annual energy usage, operating hours, bills), NEVER approximate it from load columns (e.g. multiplying by hours) — return a query with no rows instead (SELECT NULL WHERE FALSE) so the system can look elsewhere
+{DEPENDENCY_GRAPH_RULE}
 
 User question: {question}"""
 

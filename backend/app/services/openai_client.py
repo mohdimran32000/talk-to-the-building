@@ -63,6 +63,45 @@ OUTPUT FORMAT RULES (strict):
 - READ THE COLUMN NAME BEFORE YOU ATTRIBUTE A VALUE. Column and field names say whose value it is: `service_provider_tel` is the SERVICE PROVIDER's phone, not the manufacturer's, even when the manufacturer's name sits in the very next column of the same row. `manufacturer_name` names the maker; it does not make the neighbouring contact details theirs. If the question names one party and the only matching value belongs to a column named for a different party, say the asked-for party's value is not recorded, and name whose it actually is.
 - Keep answers focused on what was asked. If a source has extra detail, leave it out."""
 
+# ---------------------------------------------------------------------------
+# CHANGE-IMPACT — the shape of the answer, and the shape of the work behind it.
+#
+# WHY TWO CONSTANTS, AND WHY THE SHAPE ONE GOES EVERYWHERE OUTPUT_FORMAT_RULES
+# GOES. This app answers in two calls: the first (the tool loop's system prompt,
+# `_build_system_prompt`) decides WHAT TO FETCH and has the tools; the second
+# (`system_with_context`, built at each tool-result site below) writes the ANSWER
+# from the tool output and has no tools at all. A rule about how to answer that
+# lives only in the first prompt never reaches the model that actually writes the
+# answer — the same class of defect as an acceptance test that checks the finding
+# was produced but never that a human is shown it (doc-prep/CLAUDE.md §12). So:
+#   * CHANGE_IMPACT_ANSWER_SHAPE — the fixed sections and the "not on record"
+#     floor. Injected at EVERY site that injects OUTPUT_FORMAT_RULES.
+#   * CHANGE_IMPACT_RULES — the investigation, which only means anything where
+#     there are tools. Injected in `_build_system_prompt` only, and it contains
+#     the shape, so the first call sees both.
+#
+# GENERIC BY CONSTRUCTION: no system, asset type, table name or building is named
+# anywhere below. The graph is described by its COLUMN SHAPE (subject/predicate/
+# object), which is doc-prep's output contract for any project, exactly as
+# `table_router._GRAPH_EDGE_COLUMNS` matches it.
+CHANGE_IMPACT_ANSWER_SHAPE = """
+CHANGE-IMPACT ANSWER SHAPE (strict): when the question is about CHANGING something in the records — replacing, swapping, upgrading, changing, adding, removing, relocating, modifying, or whether something is compatible with, or would be affected by, something else — answer in these four sections, in this order, using these headings, and include every one even when it is one line:
+- **What it is now** — the item's own recorded identity: tag/name, make and model, ratings and specifications, and where the records put it.
+- **What a replacement must match** — only the attributes the records actually state (rating, capacity, model, interface, mounting, size, voltage). Attributes the records do not state belong in the last section, not here.
+- **What it is connected to, and what would be affected** — every recorded link, upstream (what it depends on) and downstream (what depends on it), and everything else recorded in the same place. Name each one, and say how the link is known (e.g. printed on a drawing/schedule, derived one-to-one, owner-confirmed) — a link and the evidence for it are one fact, never two.
+- **What the records do not say** — every gap you hit while answering, listed plainly.
+- NEVER fill a gap from general knowledge, typical practice, a standard, a manufacturer's usual range or an assumption. An absent fact is stated as "not on record" and nothing more. A generic replacement checklist is not an answer to a question about this building; if all four sections would be generic advice, say the records do not cover it.
+- No recorded link is NOT the same as no link: say "no link on record", never "nothing depends on it"."""
+
+CHANGE_IMPACT_RULES = f"""
+CHANGE-IMPACT QUESTIONS — how to work one before you answer it:
+- Identify the item first. Query the tables for its tag, name or number so you have its identifier exactly as the records print it; if the question names a place rather than an item, resolve the place first and take the items recorded there.
+- Then walk the dependency graph BOTH WAYS from that identifier, up to 2 hops. Where the tables include a dependency-graph table (one row per link: a subject id, a predicate such as feeds/wired_to/backed_by/controls/recorded_by/located_in/contains, and an object id), the rows whose OBJECT is the identifier are what the item depends on, and the rows whose SUBJECT is the identifier are what depends on it. Ask for both directions, and take the evidence columns with them.
+- Then list what else is recorded in the same place, through the location key the tables share, so the answer covers what else the work would disturb.
+- Then pull the item's specification, warranty and lifespan rows wherever such tables exist.
+- Do all of that through the tools before answering. A change-impact answer written without looking up the item's links is exactly the generic checklist this rule exists to prevent.
+{CHANGE_IMPACT_ANSWER_SHAPE}"""
+
 
 def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_search_enabled: bool, structured_tables=None) -> str:
     """Build system prompt dynamically based on which tools are available."""
@@ -168,6 +207,9 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
     # conversation history) stream this same prompt's response directly, so the
     # format rules must live here too — not only in the tool-result final call.
     parts.append(OUTPUT_FORMAT_RULES)
+    # The investigation half of the change-impact rule belongs with the tools,
+    # so it lives here and nowhere else; it carries the answer shape with it.
+    parts.append(CHANGE_IMPACT_RULES)
 
     return "\n".join(parts)
 
@@ -917,6 +959,7 @@ def stream_response(
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
 {OUTPUT_FORMAT_RULES}
+{CHANGE_IMPACT_ANSWER_SHAPE}
 
 Document excerpts:
 {context}"""
@@ -1081,6 +1124,7 @@ Document excerpts:
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
 {OUTPUT_FORMAT_RULES}
+{CHANGE_IMPACT_ANSWER_SHAPE}
 
 Document excerpts:
 {context}"""
@@ -1553,6 +1597,7 @@ If the tool encountered an error, explain the issue to the user in simple terms 
 If the results do not contain enough information, clearly state that the available documents do not contain the answer. Do NOT dump or echo the raw tool results back to the user. Instead, briefly explain what information was found (if any) and suggest the user try a different query or upload a document that might contain the answer. You may answer from general knowledge if applicable, but clearly label it as such.
 When citing web sources, include the URLs.
 {OUTPUT_FORMAT_RULES}
+{CHANGE_IMPACT_ANSWER_SHAPE}
 
 Tool ({tool_name}) results:
 {truncated_result}"""
@@ -1644,6 +1689,7 @@ Tool ({tool_name}) results:
             truncated_result = result_text[:60000] if len(result_text) > 60000 else result_text
             system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
 {OUTPUT_FORMAT_RULES}
+{CHANGE_IMPACT_ANSWER_SHAPE}
 
 Tool (analyze_document) results:
 {truncated_result}"""
