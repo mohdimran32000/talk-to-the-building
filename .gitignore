@@ -1,0 +1,63 @@
+# Environment
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local debug artifacts
+latest.json
+recent.json
+trace_tool.json
+
+# Local reference materials
+Ref Screenshots/
+
+# Detached backend server logs
+backend/uvicorn.out.log
+backend/uvicorn.err.log
+
+# Eval result banks
+backend/scripts/results/
+
+# Private working notes (kept in a separate private repo)
+notes/
+
+# Client source drawings (PDF load schedules) — NEVER publish to this public repo
+source-files/
+source-drawings/
+
+# Local dev tooling & personal working notes (machine-specific, not part of the project)
+.claude/agents/
+.claude/commands/gsd/
+.claude/get-shit-done/
+.claude/hooks/
+.claude/gsd-file-manifest.json
+.claude/package.json
+.mcp.json
+gemini/
+rag-tool-flow.html
+
+# Playwright test output
+frontend/test-results/
+
+# Router table cards — produced by the separate document-preparation step and
+# PUBLISHED TO SUPABASE (migration 025). Kept on disk only as an offline fallback,
+# never committed: the cards carry sample values from the client's own data
+# (equipment codes, room and plant-room names) and this repository is public.
+backend/app/data/table_cards.json
