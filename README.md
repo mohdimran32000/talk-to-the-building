@@ -182,3 +182,7 @@ Built in public, checkpoint by checkpoint — each tag is a working snapshot you
 ## Credits & Community
 
 This project follows [The AI Automators' Claude Code Agentic RAG Masterclass](https://www.youtube.com/watch?v=xgPWCuqLoek) — a course where you don't write the code, you direct Claude Code and course-correct. Join builders creating production-grade AI systems at [The AI Automators community](https://www.theaiautomators.com/).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
