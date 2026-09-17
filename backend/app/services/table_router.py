@@ -226,6 +226,18 @@ _STOPWORDS = {
     "for", "on", "in", "to", "and", "or", "was", "were", "does", "do",
     "give", "me", "please", "with", "at", "by", "from", "its", "this",
     "that", "there", "has", "have", "list", "show",
+    # This corpus is ONE building, so 'building' (and its synonyms) carries no
+    # routing information — every table is "in the building". Measured
+    # defect, 2026-09-16: "what are the various firefighting assets we have
+    # in the building?" ranked `hwu_locations`/`hwu_location_aliases` first
+    # (0.57 each) purely because 'building' is a literal column name on those
+    # spine cards (holding B/C values), beating `hwu_equipment` (0.43, from
+    # the vocabulary value 'firefighting') and the firefighting asset
+    # register (0.40). The SQL step then queried only the rooms table and
+    # answered with fire lobbies instead of sprinklers/extinguishers/NAF 227
+    # units. A second, multi-building corpus would need this word back —
+    # it is a fact about THIS deployment, not a fact about the router.
+    "building", "campus", "site", "premises", "facility",
 }
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9()][A-Za-z0-9()\-]*")
