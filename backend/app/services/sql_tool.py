@@ -67,6 +67,24 @@ DEPENDENCY_GRAPH_RULE = (
     "an asset means no document records a link, never that nothing depends on it."
 )
 
+# Probe pr-003 (2026-09-17): "How many fan coil units does the building have?" was
+# answered SUM(points) FROM the circuits table WHERE load_type ILIKE '%FCU%' = 550. A
+# circuit's `points` are the OUTLETS it serves - the load schedule's count of what is
+# wired, not the owner's count of what is installed. Equipment counts live in register
+# tables: one row per asset (with a qty column) or one row per room and device type
+# with a quantity. Generic by shape: no table name is used.
+EQUIPMENT_COUNT_RULE = (
+    "- COUNTING EQUIPMENT ('how many <equipment type>', 'how many units'): count from a REGISTER-"
+    "shaped table - one row per asset (SUM its qty/quantity column, or COUNT rows when qty is "
+    "text) or one row per room and device type with a quantity column. NEVER count equipment "
+    "from an electrical circuits/load-schedule table: its `points` column is the number of "
+    "OUTLETS a circuit serves and its rows are circuits, not the equipment installed - a "
+    "load-type filter there answers 'how many circuit points feed X', a different question. "
+    "When both a register and a circuits table match the type word, the register is the answer; "
+    "if the registers list the type under several rows or systems, SUM them all and keep the "
+    "type filter on the description/device column."
+)
+
 
 class _QueryTimeoutError(Exception):
     """Raised when a DuckDB query is aborted for running past SQL_QUERY_TIMEOUT."""
@@ -232,6 +250,11 @@ def _load_table_cards(user_id: str | None = None, supabase_client=None) -> list[
     return cards
 
 
+# A digit string that starts with 0 and is not a decimal ("0552002270", "003003455114",
+# "007") - an identifier. "0", "0.5", "0,5" are numbers and do not match.
+_LEADING_ZERO_CODE_RE = re.compile(r"^0\d+$")
+
+
 def _infer_column_types(cols: list, rows: list, sample_limit: int = 200) -> dict:
     """Majority-vote type inference: a column is DOUBLE when >=80% of its
     non-empty sampled values parse as numbers. Tolerates stray text like
@@ -240,6 +263,7 @@ def _infer_column_types(cols: list, rows: list, sample_limit: int = 200) -> dict
     for c in cols:
         numeric = 0
         non_empty = 0
+        has_code = False
         for row in rows[:sample_limit]:
             val = row.get(c)
             if val is None or val == "":
@@ -248,12 +272,22 @@ def _infer_column_types(cols: list, rows: list, sample_limit: int = 200) -> dict
             if isinstance(val, (int, float)):
                 numeric += 1
             elif isinstance(val, str):
+                if _LEADING_ZERO_CODE_RE.match(val.strip()):
+                    # "0552002270", "003003455114": a leading zero on a run of digits
+                    # is an identifier (phone, meter, account), never a quantity.
+                    # One such value makes the whole column text - as DOUBLE it
+                    # would print 552002270.0, a number nobody can dial (2026-09-17).
+                    has_code = True
+                    continue
                 try:
                     float(val.replace(",", ""))
                     numeric += 1
                 except ValueError:
                     pass
-        col_types[c] = "DOUBLE" if non_empty and numeric / non_empty >= 0.8 else "VARCHAR"
+        if has_code:
+            col_types[c] = "VARCHAR"
+        else:
+            col_types[c] = "DOUBLE" if non_empty and numeric / non_empty >= 0.8 else "VARCHAR"
     return col_types
 
 
@@ -276,6 +310,31 @@ def _sample_values(rows: list, col: str, limit: int = 8, max_len: int = 28, scan
             break
         seen.append(s[:max_len])
     return seen, not overflow
+
+
+def _source_lines(sql: str, tables: list, cards: list) -> str:
+    """One 'SOURCE' line per table the SQL reads, quoting that table's card `holds`
+    sentence, so the answer-writing model (which never sees the schema or the
+    cards) can say WHICH record a number came from. Probe pr-008 (2026-09-17):
+    "How many access-control doors?" came back as a bare 68 - correct, and
+    unattributable, although the doors card says in one sentence that the 68 are
+    the positions drawn on the as-built drawings, and the manual prints three
+    other counts. Empty when there are no cards (the unrouted fallback)."""
+    if not cards or not sql:
+        return ""
+    holds_by_table = {c.get("table"): (c.get("holds") or "").strip() for c in cards if c.get("table")}
+    lines = []
+    for tbl in tables:
+        name = tbl["table_name"]
+        if not holds_by_table.get(name):
+            continue
+        if not re.search(r'(?<![A-Za-z0-9_])"?' + re.escape(name) + r'"?(?![A-Za-z0-9_])', sql):
+            continue
+        holds = re.sub(r"\s+", " ", holds_by_table[name])
+        if len(holds) > 400:
+            holds = holds[:397].rstrip() + "..."
+        lines.append(f"SOURCE - {name}: {holds}")
+    return "\n".join(lines)
 
 
 def _fix_table_names(sql: str, real_table_names: list[str],
@@ -563,6 +622,7 @@ Rules:
 - The same applies to AREA totals ('total load of Block B', 'total load of the 4th floor'): they come from the panel-schedule table using the topmost-rows NOT EXISTS pattern above — never from SUM(load_w) over the circuits table, which covers only the circuit-level subset and gives a different, wrong number
 - The tables record CONNECTED LOADS and ratings (W, kW, A) — NOT energy consumption, runtime, or cost. If the question asks for something the tables do not record (kWh consumed, annual energy usage, operating hours, bills), NEVER approximate it from load columns (e.g. multiplying by hours) — return a query with no rows instead (SELECT NULL WHERE FALSE) so the system can look elsewhere
 {DEPENDENCY_GRAPH_RULE}
+{EQUIPMENT_COUNT_RULE}
 
 User question: {question}"""
 
@@ -710,6 +770,11 @@ User question: {question}"""
                 f"already INCLUDE everything fed from it — when reporting a total for an area, "
                 f"use only the topmost row(s); never add a parent's total to its children's totals."
             )
+        # Which record each number came from - travels WITH the result, like the
+        # hierarchy note above, because the answer-writing call never sees the cards.
+        sources = _source_lines(sql, tables, cards)
+        if sources:
+            md += "\n\n" + sources
         return md
 
     except Exception as e:
