@@ -292,17 +292,16 @@ def _build_search_tool() -> types.Tool:
 
 
 def _format_structured_tables(structured_tables) -> str:
-    """One-line schema summary per table: name(col1, col2, ...) — capped for prompt size.
+    """One-line schema summary per table: name(col1, col2, ...) — no cap, columns capped.
 
-    Cap raised 20 -> 40 (2026-08-19): a single building's corpus alone reaches 28 tables, and
-    a table missing from this summary is invisible to the ROUTER — it may never think to
-    call query_structured_data for that topic. execute_sql_query itself has always seen
-    every table, so this only widens the router's awareness, it does not change reach.
+    No cap (2026-09-18): the corpus is 69 tables and the list is fetched alphabetically, so a
+    cap hid 29 tables from the tool-choice step — including the panel and feeder schedules.
+    ~2k tokens for 69 tables; the SQL prompt itself is routed separately.
     """
     if not structured_tables:
         return ""
     lines = []
-    for t in structured_tables[:40]:
+    for t in structured_tables:
         cols = t.get("columns") or []
         col_str = ", ".join(str(c) for c in cols[:15])
         if len(cols) > 15:
