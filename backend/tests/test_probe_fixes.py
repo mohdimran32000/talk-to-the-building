@@ -97,6 +97,43 @@ check("a holds sentence is cut to a bounded length so it cannot flood the answer
       len(sql_tool._source_lines('SELECT 1 FROM "bld_doors"', TABLES, long_card)) < 700)
 check("the source line is appended inside execute_sql_query (it must travel with the result)",
       "_source_lines(" in inspect.getsource(sql_tool.execute_sql_query))
+
+# 2026-09-19 (final fix wave, final-review finding I3). `caveats` is a card field
+# written by doc-prep's 11_table_cards.py and documented as a card field in
+# table_router.py, and NO CODE IN THIS APP READ IT. So the count-views card's
+# "never SUM `count` across `view_id`" warning - written precisely because a SUM
+# over a long-format table produced "486 doors", "1,267 fan coil units" and "451
+# card readers" - reached the document index and never the model writing the SQL
+# or the answer. The caveat now travels with the SOURCE line, and is bounded the
+# same way: at most 3 per table, each cut to 300 characters, so a card with a long
+# caveat list cannot flood the prompt it rides in.
+CARDS_CAV = [
+    {"table": "bld_views", "holds": "486 rows, ten stacked count views.",
+     "caveats": ["Never SUM `count` across `view_id` - the rows are different views.",
+                 "A disputed view lists every printed number in `other_counts`."]},
+    {"table": "bld_equipment", "holds": "1188 equipment rows.", "caveats": []},
+]
+TABLES_CAV = [{"table_name": c["table"], "columns": ["a"]} for c in CARDS_CAV]
+src3 = sql_tool._source_lines('SELECT * FROM "bld_views"', TABLES_CAV, CARDS_CAV)
+check("a card with two caveats emits two NOTE lines for that table",
+      src3.count("NOTE - bld_views:") == 2, src3)
+check("the caveat's own text travels, not a placeholder",
+      "Never SUM `count` across `view_id`" in src3, src3)
+check("the SOURCE line still comes first, the NOTEs under it",
+      src3.splitlines()[0].startswith("SOURCE - bld_views"), src3)
+src4 = sql_tool._source_lines('SELECT * FROM "bld_equipment"', TABLES_CAV, CARDS_CAV)
+check("a card with no caveats emits no NOTE line at all", "NOTE" not in src4, src4)
+many = [{"table": "bld_views", "holds": "h",
+         "caveats": ["c" * 900, "b1", "b2", "b3", "b4"]}]
+src5 = sql_tool._source_lines('SELECT * FROM "bld_views"', TABLES_CAV, many)
+check("at most three NOTE lines per table", src5.count("NOTE - ") == 3, src5)
+check("each caveat is cut to 300 characters",
+      all(len(l.split(": ", 1)[1]) <= 300
+          for l in src5.splitlines() if l.startswith("NOTE - ")),
+      str([len(l) for l in src5.splitlines()]))
+check("a card whose caveats key is missing entirely is unaffected (the pre-2026-09-19 shape)",
+      "NOTE" not in sql_tool._source_lines('SELECT 1 FROM "bld_doors"', TABLES, CARDS),
+      sql_tool._source_lines('SELECT 1 FROM "bld_doors"', TABLES, CARDS))
 rules = openai_client.OUTPUT_FORMAT_RULES
 check("the answer rules tell the model to NAME the source when it states a count or total",
       "SOURCE" in rules and "count" in rules.lower(), "no SOURCE rule in OUTPUT_FORMAT_RULES")

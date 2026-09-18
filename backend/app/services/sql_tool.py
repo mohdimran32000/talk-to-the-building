@@ -526,6 +526,13 @@ def _result_shape(col_names: list, result: list, shown: int) -> str:
     return "\n".join(lines)
 
 
+# Bounds on the caveats that ride with a SOURCE line (see `_source_lines`). Three
+# is what the widest card in the corpus carries; 300 characters is the same cut
+# `_result_shape` uses on a breakdown line.
+CAVEATS_PER_TABLE = 3
+CAVEAT_MAX_CHARS = 300
+
+
 def _source_lines(sql: str, tables: list, cards: list) -> str:
     """One 'SOURCE' line per table the SQL reads, quoting that table's card `holds`
     sentence, so the answer-writing model (which never sees the schema or the
@@ -533,10 +540,22 @@ def _source_lines(sql: str, tables: list, cards: list) -> str:
     "How many access-control doors?" came back as a bare 68 - correct, and
     unattributable, although the doors card says in one sentence that the 68 are
     the positions drawn on the as-built drawings, and the manual prints three
-    other counts. Empty when there are no cards (the unrouted fallback)."""
+    other counts. Empty when there are no cards (the unrouted fallback).
+
+    Each SOURCE line is followed by that card's own `caveats`, as NOTE lines.
+    2026-09-19 (final-review finding I3): `caveats` was written by doc-prep and
+    documented as a card field HERE, and no code in this app read it - so the
+    count-views card's "never SUM `count` across `view_id`" warning reached the
+    document index and never the model that writes the SQL or the answer. That
+    warning exists because a SUM over a long-format table shipped "486 doors",
+    "1,267 fan coil units" and "451 card readers" - three confidently-wrong
+    totals off a table whose every row is correct. Bounded exactly like `holds`:
+    at most CAVEATS_PER_TABLE per table, each cut to CAVEAT_MAX_CHARS, so a card
+    with a long caveat list cannot flood the prompt it rides in."""
     if not cards or not sql:
         return ""
     holds_by_table = {c.get("table"): (c.get("holds") or "").strip() for c in cards if c.get("table")}
+    caveats_by_table = {c.get("table"): (c.get("caveats") or []) for c in cards if c.get("table")}
     lines = []
     for tbl in tables:
         name = tbl["table_name"]
@@ -548,6 +567,11 @@ def _source_lines(sql: str, tables: list, cards: list) -> str:
         if len(holds) > 400:
             holds = holds[:397].rstrip() + "..."
         lines.append(f"SOURCE - {name}: {holds}")
+        cavs = [re.sub(r"\s+", " ", str(c)).strip() for c in caveats_by_table.get(name) or []]
+        for cav in [c for c in cavs if c][:CAVEATS_PER_TABLE]:
+            if len(cav) > CAVEAT_MAX_CHARS:
+                cav = cav[:CAVEAT_MAX_CHARS - 3].rstrip() + "..."
+            lines.append(f"NOTE - {name}: {cav}")
     return "\n".join(lines)
 
 

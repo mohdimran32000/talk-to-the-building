@@ -143,7 +143,8 @@ print("\n7. The answer rules — unseen-rows bullet lifted out, RESULT SHAPE nev
 r = openai_client.OUTPUT_FORMAT_RULES
 check("the answer rule no longer says 'never truncate'", "never truncate" not in r)
 check("the answer rule forbids describing rows the model did not see", "not shown" in r.lower() or "were not shown" in r.lower(), r[:300])
-check("the answer rule names RESULT SHAPE as the source of totals", "RESULT SHAPE" in r)
+check("the answer rule names RESULT SHAPE as the source of the row and per-value counts",
+      "RESULT SHAPE" in r)
 check("the never-print rule for RESULT SHAPE exists",
       "never print" in r.lower() and "RESULT SHAPE" in r, r)
 
@@ -159,5 +160,28 @@ check("the unseen-rows prohibition DOES exist elsewhere in the rules, as its own
       "NEVER describe, count or generalise about rows you were not shown" in r, r)
 check("the unconditional bullet applies whatever the question's form",
       "whatever the question" in r.lower(), r)
+
+# ---------------------------------------------------------------------------
+print("\n8. Bullets 2 and 3 no longer disagree about where a total comes from (I4)")
+# ---------------------------------------------------------------------------
+# 2026-09-19 (final fix wave, final-review finding I4). Bullet 2 MANDATES a Total
+# row on any table with a quantity column; bullet 3 said "take every total and
+# per-value count from that line", naming the RESULT SHAPE line - which carries
+# row/shown counts and per-value distributions and NO SUMS AT ALL. The sums are on
+# the result's own "TOTAL <col> (all N rows)" line (sql_tool, emitted for
+# quantity-like columns on results of 4+ rows), which bullet 3 never named. So the
+# two bullets sent the answer-writing model to two different places and neither one
+# to the figure - and the fallback it is left with is summing the rows it was
+# SHOWN, which on a truncated result is a wrong total presented as the whole.
+check("the rules name the TOTAL <col> (all N rows) line as the source of sums",
+      "TOTAL <col> (all N rows)" in r, r)
+check("the old 'take every total ... from that line' wording is gone",
+      "take every total" not in r, r)
+check("RESULT SHAPE is named for the row/shown and per-value COUNTS",
+      "per-value count" in r.lower() and "RESULT SHAPE" in r, r)
+check("and it is stated that the RESULT SHAPE line carries no sums",
+      "carries no sums" in r.lower(), r)
+check("a rendered table's Total row is that TOTAL figure, never a sum over the shown rows",
+      "never a sum over the rows you were shown" in r.lower(), r)
 
 print("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED"); sys.exit(1 if FAILS else 0)
