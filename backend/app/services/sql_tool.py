@@ -86,6 +86,87 @@ EQUIPMENT_COUNT_RULE = (
 )
 
 
+# ---------------------------------------------------------------------------
+# WHAT IS IN A PLACE — Task 8 round 2 (2026-09-18), the ruler's R shape.
+#
+# Measured on the shipped runs, not reasoned about. Nine of the ten per-room
+# cards failed, and the SQL says why:
+#   * `location_id = 'L06-B'` — the LEVEL-and-block row, not the room's own id.
+#     42 level assets came back and the answer said "the records do not contain
+#     information regarding an IDF hub room" (ex-039).
+#   * `location_id = 'L02-B' AND display_name ILIKE '%MDF%'` — two filters that
+#     name two DIFFERENT rows, so: 0 rows (ex-040).
+#   * a per-system O&M supply list with no place column was filtered on its
+#     `remarks` instead: 0 rows, four times (ex-038, ex-042, ex-044, ex-045 —
+#     the routing half of those is fixed in table_router).
+#   * the folded per-room table was routed and a narrower register was used
+#     anyway: 14 of 36 units (ex-036), 18 of 23 (ex-041), 12 rows for a room
+#     holding 26 units (ex-052).
+#   * no query ever returned the place's own unit TOTAL, which is the one group
+#     ex-042, ex-044 and ex-045 each failed on after getting everything else
+#     right.
+# Written from SHAPE — a location-id column, a human-readable place-name column,
+# a quantity column — so it names no table and no building.
+ROOM_CONTENTS_RULE = (
+    "- WHAT IS IN A PLACE ('what assets are in X', 'what is installed in <room>', 'what else is "
+    "in that room'): answer from the table that already carries ONE ROW PER PLACE AND ITEM — it "
+    "has BOTH a location-id column and a human-readable place-name column (a display/room-name "
+    "column printing things like '<number> <Room Name> <Block>') — in preference to any "
+    "per-system asset register, which carries no place column at all and can only be searched "
+    "in its free text. FILTER ON THE PLACE-NAME COLUMN, with ILIKE on the place exactly as the "
+    "question prints it (e.g. <place-name column> ILIKE '%<the name in the question>%'), and "
+    "NEVER also equate the location-id column in the same WHERE: a level-and-block id is a "
+    "DIFFERENT row from that room's own id, so the two together return nothing, and the "
+    "level-and-block id on its own answers about the whole level instead of the room. Do not "
+    "build a location id out of a floor and a block — you cannot know a room's id, and the "
+    "printed name is what the question gave you. SELECT the place-name column, the "
+    "system/category column, the item/description column and the quantity column, and ORDER BY "
+    "the place-name column then the system so each place's items stay together. ALSO RETURN THE "
+    "TOTALS in the same query — the total quantity for the place and the quantity per system, "
+    "e.g. UNION ALL a labelled total row (SELECT '<place>', 'TOTAL', NULL, SUM(<quantity>) …) — "
+    "because 'what is in this place' is answered by the list AND its count, and a list with no "
+    "total makes the answer invent one or count rows instead of units. If the printed name "
+    "matches more than one place, return them all, each with its place-name column, so the "
+    "answer can say which is which rather than merging them."
+)
+
+# ---------------------------------------------------------------------------
+# A TWO-PART QUESTION ABOUT ONE NAMED THING — Task 8 round 2, the ruler's J shape.
+#
+# Measured, every one from the SQL the app wrote:
+#   * ex-046 asked "which network room and which switch" and the query selected
+#     two columns of a row that also prints the switch model and the VMS room;
+#     the answer then said "the provided records do not contain information
+#     regarding the specific switch". ex-048 the same, for the UPS room.
+#   * ex-047 invented `subject`/`subject_id` on that table to self-join with —
+#     columns that are not on it — and the query died with a Binder Error.
+#   * ex-049 counted a board's circuits in the FEEDER schedule (0) instead of
+#     the table whose rows ARE circuits (42).
+#   * ex-050, ex-051 and ex-055 returned the neighbours and never the thing's
+#     own printed rating: 143.6 / 192.63 / 1445.45 kW, each the missing group.
+# Written from SHAPE — a row with an id column, a table whose rows are the
+# children — so it names no table and no building.
+TWO_HOP_RULE = (
+    "- A QUESTION IN TWO PARTS ABOUT ONE NAMED THING ('which network room AND which switch', "
+    "'what does X feed AND what feeds X', 'which room does it control AND what else is in that "
+    "room', '… and how many circuits does it have'): START FROM THAT THING'S OWN ROW AND SELECT "
+    "EVERY COLUMN OF IT (SELECT * FROM \"<table>\" WHERE <its id column> = '<id>'), never two or "
+    "three columns picked for the first part only. These tables are wide on purpose: one row "
+    "often already carries the whole chain — the room, the equipment model, the units it is "
+    "backed up by, its class — and a narrow SELECT is exactly why an answer goes on to say the "
+    "records do not contain a value that was printed on the row it just read. NEVER INVENT A "
+    "COLUMN that is not listed above in order to make a join; if no column of that row answers "
+    "the second part, join to the table whose rows ARE those things, on the value this row "
+    "prints, in the SAME query (UNION ALL one labelled block per part is fine, with a constant "
+    "column naming which part each block answers). A COUNT of what something HAS comes from the "
+    "table whose rows are those things (count the circuit rows in the circuits table), never "
+    "from the thing's own row and never from the parent's feeder row, which holds one row per "
+    "child board and not one per circuit. And when the question asks about a thing AND its "
+    "neighbours, include THE THING'S OWN totals, ratings and notes as well as the neighbour "
+    "list: a list of what X feeds does not contain X's own rating, and the answer will say it "
+    "is not recorded."
+)
+
 class _QueryTimeoutError(Exception):
     """Raised when a DuckDB query is aborted for running past SQL_QUERY_TIMEOUT."""
 
@@ -702,6 +783,12 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # area totals from panel schedule        cases 2, 3            circuits cover only a subset
     # never approximate kWh from loads       doc-QA kWh cases      tables record ratings (kW),
     #                                                              not consumption (kWh)
+    # what is in a place: the place-name    ex-036, 039, 040,     a room is filtered by an id
+    #   column, never a built id             041, 042-045, 052     built from floor+block -> 0
+    #                                                              rows, or by the level's row
+    # two-part question -> SELECT * of       ex-046 … 051, 055     two columns of a wide row ->
+    #   the thing's own row                                        "the records do not contain"
+    #                                                              a value printed on that row
     # the dependency graph (subject/          no eval case yet —   a change-impact question is
     #   predicate/object)                     the change-impact    answered from the asset's own
     #                                         path, 2026-09-16     row alone, so nothing it
@@ -756,6 +843,8 @@ Rules:
 - The tables record CONNECTED LOADS and ratings (W, kW, A) — NOT energy consumption, runtime, or cost. If the question asks for something the tables do not record (kWh consumed, annual energy usage, operating hours, bills), NEVER approximate it from load columns (e.g. multiplying by hours) — return a query with no rows instead (SELECT NULL WHERE FALSE) so the system can look elsewhere
 {DEPENDENCY_GRAPH_RULE}
 {EQUIPMENT_COUNT_RULE}
+{ROOM_CONTENTS_RULE}
+{TWO_HOP_RULE}
 
 User question: {question}"""
 

@@ -44,7 +44,9 @@ what a card carries:
      declares it resolves rows as far as a single ROOM is worth a little
      more when the question names a room by its code. See
      `_PLACE_SIGNAL_RES` below for the shapes and the defect this tier
-     exists for.
+     exists for. A place named only by the NAME printed on its door is
+     recognised too — off the cards, never from a list in this file; see
+     `_place_names` and the tie-break in `select_tables`.
 The change signal is NOT a fifth tier — it is a guard, like the neighbour
 rule below. See `_CHANGE_VERB_RES` and the change-guard block in
 `select_tables`.
@@ -309,6 +311,88 @@ def _names_a_place(question: str) -> bool:
     return any(rx.search(question or "") for rx in _PLACE_SIGNAL_RES)
 
 
+# ---------------------------------------------------------------------------
+# TIER 4b — A PLACE NAMED BY ITS PRINTED NAME
+#
+# THE DEFECT, measured on the ruler 2026-09-18: "What assets are in the Energy
+# Laboratory?" names a room and nothing but a room, and `_names_a_place` was
+# silent — "Energy Laboratory" is neither a code shape nor one of the seven
+# place WORDS above. With the tier off, ten cards tied at 0.1111 for the third
+# routed slot and the tie fell to list position, so `hwu_om_acs_asset_register`
+# — a supply list with no location column at all — won it and the query
+# returned 0 rows. Four ruler cards (ex-038, ex-042, ex-044, ex-045) failed
+# that way, and the same shape had been misread once already as a card-ordering
+# bug: ordering the read made it reproducible, not right.
+#
+# WHY THE NAMES COME OFF THE CARDS. `_PLACE_SIGNAL_RES` above is a list of
+# lexical SHAPES, which is why it can sit in this module: '4.04' is a pattern,
+# and a second building re-derives the pattern. A room's printed NAME is not a
+# pattern — it is that building's own room register, i.e. data — and this
+# module contains no table name, no column value and no building fact anywhere.
+# So the names travel here the way every other card fact does: on a card.
+# `doc-prep/11_table_cards.py` writes `place_names` onto the card of the table
+# whose identifier column IS the location key (its one row is one place), from
+# that table's own `*_name` columns, keeping only multi-word, digit-free values.
+# A card set published before that field existed simply has no names and this
+# tier stays silent — the old behaviour exactly, which `test_table_router_place`
+# pins.
+#
+# WHY A WHOLE PHRASE, NEVER A WORD. The names are matched as bounded phrases
+# and are deliberately NOT folded into the scored vocabulary: that tier is
+# DF-weighted and matched word by word, and 'Energy', 'Central' or 'Store' as
+# routing words would be noise on questions that name no place at all. Two
+# words minimum for the same reason — this register also prints 'Store',
+# 'Library' and 'Studio'.
+# ---------------------------------------------------------------------------
+_PLACE_NAME_MIN_WORDS = 2
+
+
+def _place_names(cards: list[dict]) -> set:
+    """Every printed place name the CARDS carry, lower-cased.
+
+    Read off `place_names`, exactly like `_LOCATION_COLUMNS` is read off
+    `columns`: no name list lives in this module. Cards that do not carry the
+    field (an older publish) contribute nothing and the tier stays silent."""
+    names = set()
+    for card in cards or []:
+        for n in card.get("place_names") or []:
+            n = str(n).strip().lower()
+            if n and len(n.split()) >= _PLACE_NAME_MIN_WORDS:
+                names.add(n)
+    return names
+
+
+def _contains_phrase(haystack_lower: str, phrase_lower: str) -> bool:
+    """True when `phrase_lower` occurs in `haystack_lower` bounded on BOTH
+    sides by something that is not a letter, a digit or an underscore.
+
+    Bounded, not a bare `in`: 'Town Hall' must fire on "the Town Hall" and stay
+    silent on "how many Town Halls are there?" — a plural is a different thing
+    being asked about, not that room."""
+    i = haystack_lower.find(phrase_lower)
+    n = len(phrase_lower)
+    while i != -1:
+        before = haystack_lower[i - 1] if i else " "
+        after = haystack_lower[i + n] if i + n < len(haystack_lower) else " "
+        if not (before.isalnum() or before == "_") and \
+           not (after.isalnum() or after == "_"):
+            return True
+        i = haystack_lower.find(phrase_lower, i + 1)
+    return False
+
+
+def _names_a_place_by_name(question: str, place_names) -> bool:
+    """True when the question prints one of the building's own place names.
+
+    Matched against the RAW question like `_names_a_place`, so nothing depends
+    on the tokeniser, and case-insensitively because the register prints both
+    'Computer Laboratory' and 'COMPUTER LABORATORY'."""
+    if not place_names:
+        return False
+    q = (question or "").lower()
+    return any(_contains_phrase(q, n) for n in place_names)
+
+
 def _names_a_room_by_code(question: str) -> bool:
     """True when the question names a room by its CODE — '4.04', 'RM-4.04',
     'EX-00-055', 'D01-256' — rather than by a name or by a floor/block.
@@ -474,17 +558,47 @@ def select_tables(question: str, cards: list[dict], k: int = 3) -> list[str]:
     for when it fires.
 
     Deterministic: identical (question, cards, k) always returns the same
-    list in the same order. Ties in score are broken by each card's
-    position in `cards` (stable sort), so the result depends only on the
-    inputs, never on dict/set iteration order.
+    list in the same order. Ties in score are broken by a stated rule first —
+    on a question that names a room BY ITS PRINTED NAME, a card whose rows
+    reach room granularity wins the tie — and by each card's position in
+    `cards` after that (stable
+    sort), so the result depends only on the inputs, never on dict/set
+    iteration order.
     """
     if not cards:
         return []
 
     qwords = _question_words(question)
     qprefixes = _question_prefixes(question)
-    names_place = _names_a_place(question)
+    # Tier 4 fires on a lexical shape OR on a place name the cards carry; the
+    # ROOM refinement stays on codes only (`_ROOM_GRANULARITY_WEIGHT`'s comment
+    # records the question that measured that line, and it still holds — a
+    # printed room name is also printed in ordinary text columns).
+    place_names = _place_names(cards)
+    names_by_name = _names_a_place_by_name(question, place_names)
+    names_place = _names_a_place(question) or names_by_name
     names_room = names_place and _names_a_room_by_code(question)
+    # THE TIE-BREAK, and why it is a tie-break rather than a weight. Adding
+    # `_ROOM_GRANULARITY_WEIGHT` on a name was measured over all 263 eval
+    # questions and COST xd-002 the table its answer is in: "which board powers
+    # the ICT rack in the first-floor Block B server room?" scores
+    # `hwu_db_circuits` 4.61 against 4.58 for the room-resolving cards, and +1
+    # inverts that. A tie-break cannot: it only ever orders cards that already
+    # scored the SAME, so it can never demote a card that scored higher. It
+    # replaces "whatever position the card happens to hold in the list" — an
+    # arbitrary fact about a database read — with a stated rule: when the
+    # question names a room BY NAME, a card whose own `location_resolution`
+    # says its rows reach a room comes first. Measured: 8 of 263 selections
+    # change, 4 evidence tables gained, 0 lost.
+    #
+    # BY NAME ONLY, and that is measured too: a room named by its CODE is
+    # already separated by `_ROOM_GRANULARITY_WEIGHT`, and extending the
+    # tie-break to codes changes nothing at all over the 263 (the two variants
+    # returned identical selections) while making that weight untestable - the
+    # M2 mutation in `test_table_router_place` exists to prove the +1 is
+    # load-bearing, and a tie-break that also covers the code case would
+    # silently take over its job.
+    prefer_room = names_by_name
     asks_change = _asks_about_a_change(question)
     # Each card's subject/vocab word sets are pure functions of the card,
     # but both _document_frequency and _score need them for every card —
@@ -497,14 +611,15 @@ def select_tables(question: str, cards: list[dict], k: int = 3) -> list[str]:
 
     scored = [
         (_score(qwords, qprefixes, card, df, card_words, names_place, names_room),
+         0 if (prefer_room and _card_reaches_room(card)) else 1,
          i, card["table"])
         for i, card in enumerate(cards)
     ]
-    scored.sort(key=lambda t: (-t[0], t[1]))
+    scored.sort(key=lambda t: (-t[0], t[1], t[2]))
 
     by_name = {c["table"]: c for c in cards}
-    top = [name for score, _, name in scored[:k] if score > 0] or \
-          [name for _, _, name in scored[:k]]
+    top = [name for score, _, _, name in scored[:k] if score > 0] or \
+          [name for _, _, _, name in scored[:k]]
 
     # The change guard (see the docstring). Appended in `cards` order, so the
     # result stays deterministic, and before the neighbour pass so that a graph
