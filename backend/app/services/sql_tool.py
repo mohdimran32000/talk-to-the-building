@@ -312,6 +312,33 @@ def _sample_values(rows: list, col: str, limit: int = 8, max_len: int = 28, scan
     return seen, not overflow
 
 
+def _result_shape(col_names: list, result: list, shown: int) -> str:
+    """What the result IS, stated before the writer reads it: total rows, rows shown,
+    the distinct count of the identifier-like column, and a breakdown of every
+    low-variety column. Empty for results under 4 rows. 2026-09-18: 88 cameras x 4
+    spec rows = 352 rows, cut to 50, were reported as "352 units, all one model"."""
+    n = len(result)
+    if n < 4:
+        return ""
+    lines = [f"SHAPE - rows: {n}; shown: {min(shown, n)}"]
+    distinct = {}
+    for ci, cn in enumerate(col_names):
+        vals = [row[ci] for row in result if row[ci] is not None and str(row[ci]).strip() != ""]
+        distinct[cn] = (len(set(map(str, vals))), vals)
+    # identifier-like: the column with the most distinct values that is still not unique-per-row-of-a-join
+    ident = max(col_names, key=lambda c: distinct[c][0]) if col_names else None
+    if ident and distinct[ident][0] < n:
+        lines[0] += f" | distinct {ident}: {distinct[ident][0]}"
+    for cn in col_names:
+        k, vals = distinct[cn]
+        if 2 <= k <= 8 and cn != ident:
+            counts = {}
+            for v in vals:
+                counts[str(v)] = counts.get(str(v), 0) + 1
+            lines.append(f"{cn}: " + ", ".join(f"{v} x {c}" for v, c in sorted(counts.items(), key=lambda kv: -kv[1])))
+    return "\n".join(lines)
+
+
 def _source_lines(sql: str, tables: list, cards: list) -> str:
     """One 'SOURCE' line per table the SQL reads, quoting that table's card `holds`
     sentence, so the answer-writing model (which never sees the schema or the
@@ -735,6 +762,10 @@ User question: {question}"""
 
         if truncated:
             md += f"\n*Showing {max_rows} of {len(result)} rows*\n"
+
+        shape = _result_shape(col_names, result, max_rows)
+        if shape:
+            md += "\n" + shape + "\n"
 
         # Deterministic totals for quantity-like columns on multi-row results:
         # breakdown answers must end with a Total row, and the answer model

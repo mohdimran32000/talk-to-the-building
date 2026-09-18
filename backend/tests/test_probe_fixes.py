@@ -100,6 +100,8 @@ check("the source line is appended inside execute_sql_query (it must travel with
 rules = openai_client.OUTPUT_FORMAT_RULES
 check("the answer rules tell the model to NAME the source when it states a count or total",
       "SOURCE" in rules and "count" in rules.lower(), "no SOURCE rule in OUTPUT_FORMAT_RULES")
+check("the rule text changed 2026-09-18: 'never truncate' is gone, replaced by an unseen-rows rule",
+      "never truncate" not in rules and "were not shown" in rules.lower(), rules[:300])
 
 
 # ---------------------------------------------------------------------------
