@@ -312,30 +312,103 @@ def _sample_values(rows: list, col: str, limit: int = 8, max_len: int = 28, scan
     return seen, not overflow
 
 
+def _is_numeric_value(v) -> bool:
+    """True when a value parses as a plain number (comma thousands allowed) — a
+    breakdown of such a column reads as a product ("800 x 17" is this corpus's own
+    load-calculation notation for 17 points at 800 W each), never as a count."""
+    s = str(v).strip().replace(",", "")
+    if not s:
+        return False
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _clean_shape_value(v, max_len: int = 40) -> str:
+    """Collapse whitespace/newlines to a single space (a raw newline in a value would
+    otherwise fragment the block into an extra physical line, and — if the text after
+    it happened to start with a pipe — that line would read as a markdown table row
+    to _sql_result_is_empty), then cap the DISPLAYED value at max_len characters. The
+    value used for counting/grouping is always the uncleaned, untruncated original."""
+    s = re.sub(r"\s+", " ", str(v)).strip()
+    if len(s) > max_len:
+        s = s[: max_len - 1].rstrip() + "…"
+    return s
+
+
 def _result_shape(col_names: list, result: list, shown: int) -> str:
     """What the result IS, stated before the writer reads it: total rows, rows shown,
     the distinct count of the identifier-like column, and a breakdown of every
     low-variety column. Empty for results under 4 rows. 2026-09-18: 88 cameras x 4
-    spec rows = 352 rows, cut to 50, were reported as "352 units, all one model"."""
+    spec rows = 352 rows, cut to 50, were reported as "352 units, all one model".
+
+    Fix round 1 (2026-09-18 review): a join can return the SAME column name twice
+    (e.g. a.v / b.v), so everything below is keyed by column INDEX, never by name —
+    keying by name silently overwrote one column's distribution with the other's. A
+    breakdown counts DISTINCT identifier-column values per bucket when an
+    identifier-like column exists (352 rows / 4 spec-rows-per-camera must read as 65
+    cameras, not 260 rows), and row counts otherwise — and always NAMES which base it
+    used ("per distinct <col>" or "rows"), notation "value (N)", never "value x N"
+    (this corpus's own drawings write "800 x 17" to mean 17 points at 800 W each, so
+    "x" reads as multiplication here). All-numeric columns and columns where every
+    value occurs once (k == n, a breakdown that just restates the table) are skipped.
+    The header's "distinct" clause is omitted when the identifier column has <= 1
+    distinct value. The block is labelled RESULT SHAPE, not SHAPE, so it cannot be
+    confused with CHANGE_IMPACT_ANSWER_SHAPE in the same prompt."""
     n = len(result)
     if n < 4:
         return ""
-    lines = [f"SHAPE - rows: {n}; shown: {min(shown, n)}"]
-    distinct = {}
-    for ci, cn in enumerate(col_names):
+    lines = [f"RESULT SHAPE - rows: {n}; shown: {min(shown, n)}"]
+    ncols = len(col_names)
+    distinct = {}  # column index -> (distinct count, non-empty values)
+    for ci in range(ncols):
         vals = [row[ci] for row in result if row[ci] is not None and str(row[ci]).strip() != ""]
-        distinct[cn] = (len(set(map(str, vals))), vals)
-    # identifier-like: the column with the most distinct values that is still not unique-per-row-of-a-join
-    ident = max(col_names, key=lambda c: distinct[c][0]) if col_names else None
-    if ident and distinct[ident][0] < n:
-        lines[0] += f" | distinct {ident}: {distinct[ident][0]}"
-    for cn in col_names:
-        k, vals = distinct[cn]
-        if 2 <= k <= 8 and cn != ident:
+        distinct[ci] = (len(set(map(str, vals))), vals)
+
+    # identifier-like: the column (by INDEX) with the most distinct values
+    ident_idx = max(range(ncols), key=lambda ci: distinct[ci][0]) if ncols else None
+    ident_k = distinct[ident_idx][0] if ident_idx is not None else 0
+    use_ident = ident_idx is not None and 1 < ident_k < n
+    if use_ident:
+        lines[0] += f" | distinct {col_names[ident_idx]}: {ident_k}"
+
+    for ci, cn in enumerate(col_names):
+        if ci == ident_idx:
+            continue
+        k, vals = distinct[ci]
+        if not (2 <= k <= 8) or k == n:
+            continue
+        if vals and all(_is_numeric_value(v) for v in vals):
+            continue
+        if use_ident:
+            groups = {}
+            for row in result:
+                v = row[ci]
+                if v is None or str(v).strip() == "":
+                    continue
+                idv = row[ident_idx]
+                if idv is None or str(idv).strip() == "":
+                    continue
+                groups.setdefault(str(v), set()).add(str(idv))
+            counts = {v: len(ids) for v, ids in groups.items()}
+            basis = f"per distinct {col_names[ident_idx]}"
+        else:
             counts = {}
             for v in vals:
-                counts[str(v)] = counts.get(str(v), 0) + 1
-            lines.append(f"{cn}: " + ", ".join(f"{v} x {c}" for v, c in sorted(counts.items(), key=lambda kv: -kv[1])))
+                sv = str(v)
+                counts[sv] = counts.get(sv, 0) + 1
+            basis = "rows"
+        if not counts:
+            continue
+        parts = [f"{_clean_shape_value(v)} ({c})" for v, c in sorted(counts.items(), key=lambda kv: -kv[1])]
+        line = f"{cn} ({basis}): " + ", ".join(parts)
+        if len(line) > 300:
+            line = line[:299].rstrip() + "…"
+        if line.startswith("|"):
+            line = "- " + line
+        lines.append(line)
     return "\n".join(lines)
 
 
