@@ -59,6 +59,7 @@ class FakeSupabase:
         self.rows_by_user = rows_by_user or {}
         self.raises = raises
         self.queried_user = None
+        self.ordered_by = None
         self.calls = 0
 
     def table(self, name):
@@ -73,11 +74,24 @@ class FakeSupabase:
         self.queried_user = val
         return self
 
+    def order(self, col, **_k):
+        # 2026-09-18: the production read now asks the database to ORDER BY table_name
+        # (see tests/test_table_cards_order.py for why the order is load-bearing). A fake
+        # missing this method does not fail loudly — `_load_table_cards` catches every
+        # exception by design and degrades to the local file — so these tests would have
+        # gone on passing for the fallback while silently measuring nothing about the
+        # database path.
+        self.ordered_by = col
+        return self
+
     def execute(self):
         self.calls += 1
         if self.raises:
             raise RuntimeError("connection refused")
-        return type("R", (), {"data": self.rows_by_user.get(self.queried_user, [])})()
+        rows = list(self.rows_by_user.get(self.queried_user, []))
+        if self.ordered_by:
+            rows.sort(key=lambda r: r[self.ordered_by])
+        return type("R", (), {"data": rows})()
 
 
 def load(user_id, sb, path=None):
@@ -107,6 +121,8 @@ def main():
               all(c["table"] != "hwu_from_file" for c in cards))
         check("the query is scoped to the asking user", sb.queried_user == USER_A,
               f"queried {sb.queried_user}")
+        check("the query is ordered by table_name (deterministic router tie-break)",
+              sb.ordered_by == "table_name", f"ordered by {sb.ordered_by}")
 
         print("\n2. Cards are per user — one tenant must never see another's")
         sb = FakeSupabase({

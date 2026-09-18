@@ -202,6 +202,26 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
             "unit/device is installed (even inside equipment the tables list, like "
             "panels) go to the document tools."
         )
+        # 2026-09-18 (fix wave 1, F5). Listing every table in the menu above (the [:40]
+        # cap removal) moved the app off document search: query_structured_data 60->63 on
+        # the ext set and 58->64 on the holdout, search_documents 26->24 and 38->30
+        # (doc-prep .../task-8-diagnosis.md, proof 3). It cost two measured answers, and
+        # neither was a routing mistake — the answers simply are not in any table. ex-021
+        # asks which record settles a board's spelling; the sentence that settles it is in
+        # the LV manifest ("Block B", "owner ruling 2026-09-15"). ex-023 asks for a zip-tap
+        # model; that table is in neither routed set, so the document search was the only
+        # path to it and the app refused instead. The rule is about the SUBJECT of the
+        # question, like the three above it: when what is being asked for is what a record
+        # SAYS, the answer is that record's own sentence, and a table holding a similar
+        # number is not a substitute for it.
+        parts.append(
+            "- When the question asks WHICH RECORD says something — which record, "
+            "document, letter, ruling, manifest or drawing gives a figure, where "
+            "something is recorded, which source is authoritative, or what the manual or "
+            "the letter actually says — use search_documents, even if a table could hold "
+            "the value. The answer to those questions is the document's own sentence, "
+            "and no table carries it."
+        )
     if web_search_enabled:
         parts.append("- For current events or information not in the user's documents, use web_search.")
     parts.append("- For casual greetings or questions clearly unrelated to any tool, respond directly without calling a tool.")

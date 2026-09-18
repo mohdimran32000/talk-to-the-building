@@ -170,13 +170,30 @@ def _cards_from_file() -> list[dict]:
 
     Kept so local development and any deployment without the table still work, and so
     that a database outage degrades to stale-but-useful rather than to nothing.
+
+    Sorted by table name for the same reason the database read is ordered — see
+    `_load_table_cards`. The two sources must agree, or a fallback would silently
+    re-rank every tied question the moment the database went away.
     """
     try:
-        return json.loads(_TABLE_CARDS_PATH.read_text(encoding="utf-8"))
+        return _ordered(json.loads(_TABLE_CARDS_PATH.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as e:
         logger.warning(f"table_router: could not load {_TABLE_CARDS_PATH} ({e}); "
                        f"falling back to the unrouted schema block")
         return []
+
+
+def _ordered(cards) -> list[dict]:
+    """Cards sorted by table name, tolerating anything that is not a well-formed card.
+
+    `table_router.select_tables` breaks score ties by each card's POSITION in this list
+    (`scored.sort(key=lambda t: (-t[0], t[1]))`), so the list's order is part of the
+    router's answer. Sorting here is what makes that answer reproducible.
+    """
+    if not isinstance(cards, list):
+        return []
+    return sorted((c for c in cards if isinstance(c, dict)),
+                  key=lambda c: str(c.get("table", "")))
 
 
 def _load_table_cards(user_id: str | None = None, supabase_client=None) -> list[dict]:
@@ -222,16 +239,32 @@ def _load_table_cards(user_id: str | None = None, supabase_client=None) -> list[
     cards: list[dict] = []
     if user_id and supabase_client is not None:
         try:
+            # 🔴 `.order("table_name")` is load-bearing, not tidiness (2026-09-18,
+            # task-8-diagnosis.md proof 2). Without it PostgREST returns heap order, and
+            # `11_table_cards.py --publish` does delete() + upsert(), so every republish
+            # rewrote it. `table_router.select_tables` breaks score ties by a card's
+            # position in this list, and the third routed slot is a TEN-WAY tie at 0.1111
+            # on the room questions - so republishing the cards, changing not one byte of
+            # any card, moved ex-038/ex-044/ex-045 off `hwu_room_assets` and onto
+            # `hwu_om_acs_asset_register`, which returns 0 rows. Shuffling the 70 live
+            # cards 40 times changes the top-3 on 39 of 70 questions. Ordering the read
+            # does not make the tie-break RIGHT (that is a separate, measured change); it
+            # makes it the SAME every time, which is the precondition for measuring it.
             res = (supabase_client.table("table_cards")
                    .select("table_name, card")
                    .eq("user_id", user_id)
+                   .order("table_name")
                    .execute())
             rows = getattr(res, "data", None) or []
             # A row whose `card` is not an object is skipped rather than fatal: the
             # router's own guard would survive it, but failing here would defeat the
             # point of the fallback chain.
-            cards = [r["card"] for r in rows
-                     if isinstance(r, dict) and isinstance(r.get("card"), dict)]
+            # Re-sorted rather than trusted: the ORDER BY above is what the database is
+            # asked for, and this is what the router is given. A client whose chain
+            # ignores `.order` (or a row whose card names a different table) can then
+            # never leave the list in an order the next deploy would not reproduce.
+            cards = _ordered([r["card"] for r in rows
+                              if isinstance(r, dict) and isinstance(r.get("card"), dict)])
             if rows and not cards:
                 logger.warning("table_router: table_cards rows present but none parsed "
                                "as card objects; falling back to the local file")
