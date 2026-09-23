@@ -258,11 +258,6 @@ def sql_is_aggregate(sql: str) -> bool:
     return False
 
 
-def result_is_single_cell(result_text: str) -> bool:
-    """One column, one row — the shape a quantity answer comes back in."""
-    return len(result_columns(result_text)) == 1 and result_rows(result_text) == 1
-
-
 # --------------------------------------------------------------------------- card reading
 
 def cards_in_sql(sql: str, routed_cards) -> list:
@@ -424,11 +419,14 @@ def inspect_result(result_text: str, question: str, routed_cards) -> list:
             "",
         ))
 
-    # Only when the tables answered WITH a quantity: a question containing "total" whose
-    # SQL returned a list of rows states no quantity to cross-check, and heading three
-    # excerpts "other records that state this quantity" above such a result would be a lie.
-    if (asks_count(question) and not empty
-            and (aggregate or result_is_single_cell(result_text))):
+    # A quantity question whose tables answered gets exactly one cross-check, whatever shape
+    # the answer came back in: a single cell, a grouped count, or — the commonest shape here,
+    # and the one this corpus's disputed quantities all take — a plain row list whose total
+    # is stated by the RESULT SHAPE or truncation line rather than computed by the query.
+    # Fix round 3: an earlier narrowing to the first two shapes silenced the third, which is
+    # the one the cross-check exists for. Silence is for a question that asks no count, and
+    # for an empty result, which goes to the document fallback instead.
+    if asks_count(question) and not empty and cols:
         issues.append(Issue(
             COUNT_CROSSCHECK,
             "Quantity question — cross-checking the documents",

@@ -673,14 +673,36 @@ check("TRUNCATED_NO_SHAPE reaches Investigation.issues",
 check("and the trailer", "TRUNCATED_NO_SHAPE" in inv.result_text, inv.result_text[-160:])
 check("without causing a re-query", len(ex.questions) == 1, ex.questions)
 
-# F8 — a quantity question whose SQL answered with a LIST is not cross-checked
+# NEW-1 (fix round 3) — the round-1 narrowing to single-cell/aggregate results silenced the
+# cross-check on the shape the original review had validated as CORRECT: a quantity question
+# whose SQL answers with a plain ROW LIST, the total readable only from the truncation or
+# RESULT SHAPE line. That is this corpus's commonest quantity shape and the one the
+# cross-check exists for (its disputed counts are all of this kind). The rule is now the
+# spec's own: a count question whose tables answered gets one cross-check. Silence is for
+# questions that do not ask a count — and for an empty result, which goes to the fallback.
+f_case = table_result(["place_number", "place_name"], [[f"1.{i:02d}", "x"] for i in range(50)],
+                      'SELECT place_number, place_name FROM "bld_places" WHERE level_code = \'L01\'',
+                      "*Showing 50 of 121 rows*\n\nRESULT SHAPE - rows: 121; shown: 50")
+iss_f = sql_loop.inspect_result(f_case, "how many places are on the first floor", [CARD_PLACES])
+check("a count question answered by a row list IS cross-checked",
+      [i.kind for i in iss_f] == [sql_loop.COUNT_CROSSCHECK], [i.kind for i in iss_f])
+check("and it still causes no re-query", sql_loop.first_requery_issue(iss_f) is None)
+# case h, the round-1 fix's own case: with the rule above it fires too, and that is wanted —
+# "total load of block B" is a quantity question whatever shape the SQL answered in.
 listy = table_result(["unit_tag", "kw"], [["U-1", 3], ["U-2", 4], ["U-3", 5], ["U-4", 6]],
                      'SELECT unit_tag, kw FROM "bld_units" WHERE block = \'B\'')
-check("no cross-check on a multi-row list",
-      not any(i.kind == sql_loop.COUNT_CROSSCHECK
-              for i in sql_loop.inspect_result(listy, "what is the total load of block B?", [CARD_LIST])),
+check("a total question answered by a list is cross-checked too",
+      [i.kind for i in sql_loop.inspect_result(listy, "what is the total load of block B?", [CARD_LIST])]
+      == [sql_loop.COUNT_CROSSCHECK],
       [i.kind for i in sql_loop.inspect_result(listy, "what is the total load of block B?", [CARD_LIST])])
-check("but a single-cell total is cross-checked",
+check("but the same list under a question that asks no count is silent",
+      not any(i.kind == sql_loop.COUNT_CROSSCHECK
+              for i in sql_loop.inspect_result(listy, "which units are in block B?", [CARD_LIST])),
+      [i.kind for i in sql_loop.inspect_result(listy, "which units are in block B?", [CARD_LIST])])
+check("and an EMPTY result is not cross-checked — it goes to the document fallback",
+      not any(i.kind == sql_loop.COUNT_CROSSCHECK for i in sql_loop.inspect_result(
+          empty_result('SELECT COUNT(*) FROM "bld_units"'), "how many units are there?", [CARD_LIST])))
+check("a single-cell total is cross-checked",
       any(i.kind == sql_loop.COUNT_CROSSCHECK for i in sql_loop.inspect_result(
           table_result(["total_kw"], [[5785.87]], 'SELECT SUM(kw) AS total_kw FROM "bld_units"'),
           "what is the total load of the site?", [CARD_LIST])))
