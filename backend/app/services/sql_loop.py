@@ -16,10 +16,11 @@ different documents.
 Three binding properties, each pinned by `tests/test_sql_loop.py`:
 
 * GENERIC — no table, column value, system or building is named anywhere below. The
-  identifier a list must carry comes from the routed card's `identifier_column`, or failing
-  that from column-name shape (`*_number`, `*_id`, `*_tag`, `*_name`). The question-shape
-  regexes are English shapes only; the aggregate test is SQL keywords only. Section 18 of
-  the test scans this file for the names it must not contain.
+  identifier a list must carry comes from the routed card's `identifier_column` or from
+  column-name shape alone (`*_number`, `*_id`, `*_tag`; `*_name` can be asked for but never
+  counts as satisfying, see `NAMEABLE_SUFFIXES`). The question-shape regexes are English
+  shapes only; the aggregate test is SQL keywords only. Section 18 of the test scans this
+  file for the names it must not contain.
 * DETERMINISTIC — every issue is detected by code. The model is never asked "is this
   right?", because a model that wrote a bad query is not the thing to ask whether the query
   was bad.
@@ -46,10 +47,12 @@ ANY consulted card's identifier or ANY identifying-shaped column is present, so 
 never punishes a writer that obeyed the generation-time rule; the column it asks for is the
 best PRINTED candidate rather than whatever key a card happens to declare; an unparseable
 SQL yields NO cards rather than all of them; and a wall-clock budget, a repeat-issue guard
-and per-step outcome events were added.
+and per-step outcome events were added. Fix round 2 gave the budget its own setting
+(`SQL_LOOP_TIMEOUT`, default 60 s) and took `_name` out of what makes a list nameable.
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from collections import namedtuple
@@ -91,11 +94,12 @@ FAILED = "FAILED"
 #: non-citation columns than this has something to widen to.
 MAX_NARROW_COLUMNS = 3
 
-#: What makes a list nameable. The generation-time rule tells the writer to select "the
-#: column the schema marks as the identifier or whose name ends in _number/_id/_tag/_name",
-#: so a result carrying any of those has complied and must not be re-queried for it. Shape,
-#: not vocabulary: no actual column is named here.
-NAMEABLE_SUFFIXES = ("_number", "_id", "_tag", "_name")
+#: What makes a list nameable — a column a reader can ACT on: a printed number, a key or a
+#: tag, or the identifier the card itself declares. A `_name` column is deliberately NOT
+#: here, although the generation-time rule offers it as one option: a name is a LABEL, and
+#: the failure this loop exists for is precisely a list of labels with no numbers against
+#: them. Shape, not vocabulary: no actual column is named here.
+NAMEABLE_SUFFIXES = ("_number", "_id", "_tag")
 
 #: When the issue DOES fire, which column to ask for, best first: a printed number, then a
 #: printed tag, then a printed name — and only then the key the card declares, which in this
@@ -125,9 +129,12 @@ EMPTY_FALLBACK_SUFFIX = ("\n\n(If the excerpts do not contain the answer either,
 
 FIRST_STEP_DETAIL = "Querying the structured tables"
 
-#: Used only if `sql_tool` cannot be imported (it pulls in the model SDK); the real budget
-#: is `SQL_QUERY_TIMEOUT`, read below.
-DEFAULT_BUDGET_SECONDS = 5.0
+#: The investigation's own wall-clock budget, in seconds, from `SQL_LOOP_TIMEOUT`. It is
+#: NOT `SQL_QUERY_TIMEOUT`: that one caps a single DuckDB execution (5 s) and always did,
+#: whereas a loop step is dominated by the SQL-generation call, which on its own routinely
+#: outlives 5 s — spending the per-execution cap here would quietly make the loop one-shot.
+SQL_LOOP_TIMEOUT_ENV = "SQL_LOOP_TIMEOUT"
+DEFAULT_BUDGET_SECONDS = 60.0
 
 # --------------------------------------------------------------------------- question shapes
 
@@ -460,14 +467,19 @@ def investigation_trailer(step_count: int, kinds) -> str:
 
 
 def investigation_budget_seconds() -> float:
-    """The wall-clock budget for the whole investigation (spec §4: "wall-clock guard
-    reuses SQL_QUERY_TIMEOUT"). Read the way `sql_tool` reads it, and lazily, so that
-    importing this module does not drag in the model SDK."""
-    try:
-        from app.services.sql_tool import SQL_QUERY_TIMEOUT
-        return float(SQL_QUERY_TIMEOUT)
-    except Exception:
+    """The wall-clock budget for the whole investigation, in seconds: the `SQL_LOOP_TIMEOUT`
+    environment setting, default 60. Anything unreadable — or a value so small it would
+    disable the loop outright — falls back to the default, because a mistyped setting must
+    slow the loop down, never silently switch it off. Read at call time, so a deployment can
+    change it without a restart of this module's import."""
+    raw = os.environ.get(SQL_LOOP_TIMEOUT_ENV)
+    if raw is None or not str(raw).strip():
         return DEFAULT_BUDGET_SECONDS
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_BUDGET_SECONDS
+    return value if value > 0 else DEFAULT_BUDGET_SECONDS
 
 
 def _top_excerpts(text: str) -> str:

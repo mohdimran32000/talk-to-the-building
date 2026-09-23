@@ -511,13 +511,24 @@ a2 = table_result(["place_number", "place_name", "area_m2"], [["1.01", "Studio",
 check("a result carrying a _number column is nameable — no issue",
       sql_loop.inspect_result(a2, q20, [CARD_PLACES]) == [],
       [i.kind for i in sql_loop.inspect_result(a2, q20, [CARD_PLACES])])
-# (a) a _name column also satisfies LIST_IDENTIFIER_RULE's own list, so the loop is silent.
-# This is the controller's ruling taken literally; flagged in the report, one constant to flip.
+# (a) THE OWNER'S OWN CASE, 2026-09-23: a list of places with names and no numbers. Fix
+# round 2 ruling — a printed name is a LABEL, not an identifier a person can act on, so
+# "_name" is not in NAMEABLE_SUFFIXES and this list is re-queried for its number.
 a1 = table_result(["place_name", "area_m2"], [["Studio", 30]],
                   'SELECT place_name, area_m2 FROM "bld_places"')
-check("a _name column also counts as nameable (LIST_IDENTIFIER_RULE's own list)",
-      sql_loop.inspect_result(a1, q20, [CARD_PLACES]) == [],
-      [i.kind for i in sql_loop.inspect_result(a1, q20, [CARD_PLACES])])
+iss_a1 = sql_loop.inspect_result(a1, q20, [CARD_PLACES])
+im_a1 = next((i for i in iss_a1 if i.kind == sql_loop.IDENTIFIER_MISSING), None)
+check("a list of names with no number is NOT nameable — it fires", im_a1 is not None,
+      [i.kind for i in iss_a1])
+check("and it asks for the printed number", im_a1 is not None and "`place_number`" in im_a1.instruction,
+      im_a1.instruction if im_a1 else "")
+check("a _name column alone does not make a list nameable",
+      not sql_loop.result_is_nameable(["place_name", "area_m2"], [CARD_PLACES]))
+check("a _number, an _id or a _tag does",
+      all(sql_loop.result_is_nameable([c], [CARD_PLACES])
+          for c in ("place_number", "other_id", "thing_tag")))
+check("and so does the card's own declared identifier",
+      sql_loop.result_is_nameable(["place_id", "area_m2"], [CARD_PLACES]))
 # (a3) nothing nameable at all: it fires, and asks for the PRINTED number, not the key
 a3 = table_result(["area_m2", "department"], [[30, "X"]],
                   'SELECT area_m2, department FROM "bld_places"')
@@ -614,8 +625,29 @@ class FakeClock:
     def __call__(self):
         return self.times.pop(0) if len(self.times) > 1 else self.times[0]
 
-check("the budget is SQL_QUERY_TIMEOUT", sql_loop.investigation_budget_seconds() == 5.0,
-      sql_loop.investigation_budget_seconds())
+# Fix round 2 ruling: the investigation has its OWN budget. SQL_QUERY_TIMEOUT stays the
+# per-execution cap it always was (5 s) — using it here would have made the loop one-shot in
+# production, because one SQL-generation call alone routinely outlives it.
+import os as _os
+_saved = _os.environ.pop("SQL_LOOP_TIMEOUT", None)
+try:
+    check("the default budget is 60 seconds", sql_loop.investigation_budget_seconds() == 60.0,
+          sql_loop.investigation_budget_seconds())
+    _os.environ["SQL_LOOP_TIMEOUT"] = "20"
+    check("the env setting is read", sql_loop.investigation_budget_seconds() == 20.0,
+          sql_loop.investigation_budget_seconds())
+    _os.environ["SQL_LOOP_TIMEOUT"] = "soon"
+    check("garbage falls back to the default", sql_loop.investigation_budget_seconds() == 60.0,
+          sql_loop.investigation_budget_seconds())
+    _os.environ["SQL_LOOP_TIMEOUT"] = "0"
+    check("so does a value that would disable the loop outright",
+          sql_loop.investigation_budget_seconds() == 60.0, sql_loop.investigation_budget_seconds())
+finally:
+    _os.environ.pop("SQL_LOOP_TIMEOUT", None)
+    if _saved is not None:
+        _os.environ["SQL_LOOP_TIMEOUT"] = _saved
+check("and it is NOT the per-execution SQL_QUERY_TIMEOUT",
+      sql_loop.investigation_budget_seconds() != 5.0)
 ex = FakeExec([empty_result(sql2), good])
 inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch("DOCTEXT"),
                                      routed_cards=[CARD_LIST], max_steps=3,
