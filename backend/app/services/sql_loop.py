@@ -43,12 +43,24 @@ Fix round 1 (review of commit `3e5f71e`) changed five things about detection, al
 because the module had only ever been exercised against synthetic cards: an AGGREGATE result
 is exempt from the column-shaped issues (a grouped breakdown has no per-entity identifier by
 construction, and re-querying one destroys a correct answer); a list counts as nameable when
-ANY consulted card's identifier or ANY identifying-shaped column is present, so the loop
-never punishes a writer that obeyed the generation-time rule; the column it asks for is the
-best PRINTED candidate rather than whatever key a card happens to declare; an unparseable
-SQL yields NO cards rather than all of them; and a wall-clock budget, a repeat-issue guard
-and per-step outcome events were added. Fix round 2 gave the budget its own setting
-(`SQL_LOOP_TIMEOUT`, default 60 s) and took `_name` out of what makes a list nameable.
+ANY consulted card's identifier or ANY identifying-shaped column is present, so a writer that
+picked a different identifier from the one a card declares is not re-queried for it; the
+column it asks for is the best PRINTED candidate rather than whatever key a card happens to
+declare; an unparseable SQL yields NO cards rather than all of them; and a wall-clock budget,
+a repeat-issue guard and per-step outcome events were added. Fix round 2 gave the budget
+its own setting (`SQL_LOOP_TIMEOUT`, default 60 s) and took `_name` out of what makes a
+list nameable.
+
+That last one is a DELIBERATE gap between the two prompts, and this docstring used to deny
+it, so it is spelled out: `sql_tool.LIST_IDENTIFIER_RULE` offers `_name` to the writer as one
+valid identifier, and `NAMEABLE_SUFFIXES` here does not accept it. A query that returns only
+a name column therefore obeys the generation-time rule and is still re-queried. That is the
+intended behaviour, not an oversight - the failure this loop exists for is precisely a list
+of LABELS with no number, key or tag against them, and a name is a label (see
+`NAMEABLE_SUFFIXES`, and `IDENTIFIER_RANK`, which will still ASK for a name when the table
+prints nothing better). The cost of the gap is one wasted re-query on a table whose only
+identifying column is a name; the cost of closing it the other way is the loop going silent
+on the exact answer shape it was built to catch.
 
 FIX WAVE 1 (the Task 5 diagnosis, 2026-09-23) is the first change made from MEASUREMENT
 rather than from review: the loop ran over 164 real questions against the same 164 with it

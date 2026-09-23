@@ -127,5 +127,30 @@ check("both new rules follow TWO_HOP_RULE in the prompt, not woven into the "
       SRC.index("TWO_HOP_RULE") < SRC.index("LIST_IDENTIFIER_RULE") < SRC.index("ALL_PARAMETERS_RULE")
       if "LIST_IDENTIFIER_RULE" in SRC and "ALL_PARAMETERS_RULE" in SRC else False)
 
+print(chr(10) + "5. A list never opens with the rows that have no identifier")
+# The owner's own question on 2026-09-23 - "what are the rooms on the first floor?" -
+# came back as 50 rows whose Room Number cell was EMPTY. Nothing was wrong with the
+# routing or the loop: LIST_IDENTIFIER_RULE had done its job and room_number was
+# selected, but the query ended `ORDER BY room_number`, and an empty string sorts
+# before every real number, so the 50 rows shown were exactly the 50 with no number.
+# The fix is one sentence of SQL, not a model: sort the blanks LAST.
+check("ORDER_BY_BLANKS_RULE exists", hasattr(sql_tool, "ORDER_BY_BLANKS_RULE"))
+ob = getattr(sql_tool, "ORDER_BY_BLANKS_RULE", "")
+check("it is about ORDER BY on an identifier column",
+      "order by" in ob.lower() and "identifier" in ob.lower(), ob[:300])
+check("it says NULLS LAST", "NULLS LAST" in ob, ob[:300])
+check("it handles the BLANK, not just the NULL (an empty string sorts first)",
+      "NULLIF(" in ob, ob[:300])
+check("it says last, never first", "last" in ob.lower() and "first" in ob.lower(), ob[:300])
+check("it names no table, column or building of this project",
+      not any(t in ob for t in ("hwu_", "Heriot", "RM-", "room_number", "MDB-C", "SMDB")),
+      ob[:300])
+check("it is in the SQL-generation prompt", "ORDER_BY_BLANKS_RULE" in SRC)
+check("it is appended after the two rules it completes, not woven into the f-string body",
+      SRC.index("LIST_IDENTIFIER_RULE") < SRC.index("ORDER_BY_BLANKS_RULE")
+      if "ORDER_BY_BLANKS_RULE" in SRC else False)
+check("the provenance map carries an entry for it",
+      "blanks/NULLs last" in SRC)
+
 print(f"{chr(10)}{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

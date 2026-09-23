@@ -190,6 +190,21 @@ ALL_PARAMETERS_RULE = (
     "parameter is asked for), so the answer can list all of them."
 )
 
+# Measured, not proactive, unlike the two above: the owner asked "what are the rooms on
+# the first floor?" on 2026-09-23 and got 50 rows whose room-number cell was EMPTY. The
+# identifier column HAD been selected - the rule above worked - and the query ended
+# `ORDER BY <that column>`, where an empty string sorts before every real value, so the
+# rows shown were exactly the ones with no identifier. Written from SHAPE, like the
+# others: no table, column or building is named.
+ORDER_BY_BLANKS_RULE = (
+    "- ORDER BY on an identifier column must put the rows that have NO identifier LAST, "
+    "never first: write ORDER BY NULLIF(<that column>, '') NULLS LAST (a blank cell is an "
+    "empty string, which sorts BEFORE every real value, so a plain ORDER BY opens the list "
+    "with the unidentified rows and a row limit then shows only those). Keep those rows \u2014 "
+    "they belong in the list \u2014 at the end of it."
+)
+
+
 class _QueryTimeoutError(Exception):
     """Raised when a DuckDB query is aborted for running past SQL_QUERY_TIMEOUT."""
 
@@ -894,6 +909,11 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # spec table: every parameter row        no eval case yet —   a filtered spec query returns
     #   for the matching entities             spec 2026-09-23      one parameter instead of the
     #                                         item 1, proactive     full spec list
+    # ORDER BY an identifier: sort           ey-001, and the       ORDER BY <id> puts the blank
+    #   blanks/NULLs last                     owner's own          cells first -> a list of 50
+    #                                         question of          rows with no identifier at
+    #                                         2026-09-23           all, which is the opposite
+    #                                                              of what was asked for
     #
     # Rules above these (exact table names, quoting, DuckDB syntax, CAST) are
     # generic SQL correctness, not domain fossils — no provenance needed.
@@ -947,6 +967,7 @@ Rules:
 {ROOM_CONTENTS_RULE}
 {TWO_HOP_RULE}
 {LIST_IDENTIFIER_RULE}
+{ORDER_BY_BLANKS_RULE}
 {ALL_PARAMETERS_RULE}
 
 User question: {question}"""
