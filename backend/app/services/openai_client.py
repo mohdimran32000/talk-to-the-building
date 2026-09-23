@@ -45,12 +45,22 @@ def _get_client() -> genai.Client:
 
 SYSTEM_PROMPT_NO_DOCS = "You are a helpful assistant. Answer the user's questions clearly and concisely."
 
+# WHY THE RESULT SHAPE BULLET'S LAST CLAUSE IS KEPT THOUGH ITS SHAPE CANNOT ARISE
+# (Task 4 review, M-3). "When the result shows several investigation steps, answer
+# from the LAST result only" describes a result the writer is never handed:
+# `sql_loop` returns the LAST step's text and discards the earlier ones. It stays
+# because what the writer CAN see is the trailer, "INVESTIGATION - steps: 3", and a
+# writer that reads that line as evidence it is looking at a merged transcript of
+# three queries has to be told, in the rules, that it is not. The clause costs one
+# sentence; the alternative is relying on the model not to misread a line we put
+# there ourselves.
 OUTPUT_FORMAT_RULES = """
 OUTPUT FORMAT RULES (strict):
 - Never output raw HTML in your answer. Tags like <table>, <tr>, <td>, <th>, <br>, <span>, <div> are forbidden. If the source excerpts contain HTML, extract the data into clean markdown.
 - For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render the rows you were given as a clean markdown table. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity). MANDATORY: when a quantity/points column is present, the table's last row MUST be a Total row, and the sentence introducing or closing the table MUST state that total explicitly. That Total is the figure on the result's own "TOTAL <col> (all N rows)" line whenever the result carries one — never a sum over the rows you were shown, which may be only part of the result. If the result carries no such line, sum the rows you were given and say that the total covers only those rows.
 - If a tool result says "Showing M of N rows" or carries a "RESULT SHAPE" line, say how many rows exist and how many you were shown. The RESULT SHAPE line is where the row and shown counts and every per-value count come from; it carries no sums. Every total comes from the result's own "TOTAL <col> (all N rows)" line instead. NEVER describe, count or generalise about rows you were not shown — whatever the question's form. Never print the words RESULT SHAPE or TOTAL, those lines themselves or the "value (N)" notation — state those numbers in plain words. When the result shows several investigation steps, answer from the LAST result only — the earlier ones were superseded.
 - Never reveal internal notes from tool results. Lines like "SQL: `...`", a line beginning "INVESTIGATION - steps:" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
+- When a tool result carries a section of document excerpts added as a cross-check to a count or total, the TABLE figure (with its SOURCE) is the answer; the excerpts are OTHER records that may print a different figure — name each such figure and where it is printed, in one sentence, after the answer; never replace the table figure with an excerpt figure.
 - A tool result may end with one or more "SOURCE - <table>: ..." lines saying which record each number was read from. When you state a count, total or any other figure from that result, NAME the record it came from in plain words (e.g. "68 door positions, counted from the as-built access-control drawings"; "421 units, from the mechanical asset register"), because the building's documents often print more than one figure for the same thing. Never print the table name or the word SOURCE itself.
 - Identifiers are copied character for character: phone numbers, meter and account numbers, serials, tags and part numbers keep every leading zero, space, dash and letter exactly as the result shows them. Never reformat one as a number.
 - Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
@@ -1303,8 +1313,8 @@ Document excerpts:
 
         elif tool_name == "query_structured_data":
             from app.services.sql_tool import execute_sql_query, route_tables
-            from app.services.sql_loop import (COUNT_CROSSCHECK, EMPTY,
-                                               iter_sql_investigation)
+            from app.services.sql_loop import (COUNT_CROSSCHECK, CROSSCHECK_EXCERPTS,
+                                               EMPTY, iter_sql_investigation)
             question = args.get("question", "")
             # The router's paraphrase can drop parts of the user's intent
             # (e.g. "total load" reduced to "which panels") — always give the
@@ -1333,6 +1343,35 @@ Document excerpts:
             # the step ever got. Emitting both would put a new event on the
             # trajectory the ruler scores.
             found_count = [0]
+            step_counter = [0]
+
+            def _execute_sql_for_loop(sql_question, sql_user_id, sql_sb) -> str:
+                """`execute_sql_query`, with an exception on a RE-query turned into the
+                failure text the loop already knows how to route (Task 4 review, I-1).
+
+                `execute_sql_query` catches its own DuckDB errors, but its `try` opens
+                BELOW the SQL-generation call and BELOW the `structured_data` fetch — so a
+                Gemini 429/503 or a PostgREST error raises out of it. Today that could
+                happen once per question and the outer dispatch turned it into an SSE
+                error. With the loop it can happen on step 2 of a question whose step 1
+                already decided to look again — and today that same question reached the
+                document fallback and was ANSWERED. Losing that answer is a regression the
+                loop would have introduced, and on the paid AFTER run it would read as a
+                quality change rather than as a new failure mode.
+
+                Step 1 is deliberately left unguarded: the outer dispatch has always
+                handled it, and guarding it would move the `max_steps=1` behaviour that
+                §5 of the wiring test pins."""
+                step_counter[0] += 1
+                if step_counter[0] == 1:
+                    return execute_sql_query(sql_question, sql_user_id, sql_sb)
+                try:
+                    return execute_sql_query(sql_question, sql_user_id, sql_sb)
+                except Exception as e:
+                    logger.warning(f"sql_loop: step {step_counter[0]} raised "
+                                   f"({type(e).__name__}: {e}); treating it as a failed "
+                                   f"query so the documents still get a chance")
+                    return f"SQL query failed: {e}"
 
             def _search_documents_for_loop(query: str) -> str:
                 """The loop's `search`: today's excerpt block, plus the chunk count
@@ -1352,7 +1391,16 @@ Document excerpts:
                 )
 
             try:
-                routed_cards = route_tables(question, user_id, supabase_client)
+                # I-3: the cards the inspector reasons about must be cards the SQL
+                # writer could actually have used. `execute_sql_query` narrows to the
+                # LIVE tables and falls back to the full schema when the selection
+                # matches none, so a card for a table that is not live was never on
+                # offer; demanding a column of it would spend a step for nothing.
+                routed_cards = route_tables(
+                    question, user_id, supabase_client,
+                    live_table_names=[t.get("table_name")
+                                      for t in (structured_tables or [])
+                                      if isinstance(t, dict) and t.get("table_name")])
             except Exception as e:
                 logger.warning(f"sql_loop: could not route the cards "
                                f"({type(e).__name__}: {e}); the investigation "
@@ -1363,7 +1411,7 @@ Document excerpts:
             searched_kind = None
             for _evt, _payload in iter_sql_investigation(
                 question, user_id, supabase_client,
-                execute=execute_sql_query,
+                execute=_execute_sql_for_loop,
                 # No documents means no fallback and no cross-check, exactly as
                 # today's two `and has_documents` guards did.
                 search=_search_documents_for_loop if has_documents else None,
@@ -1387,14 +1435,17 @@ Document excerpts:
                         }))
                 elif _evt == "step_done":
                     issues_found = _payload["issues_found"]
+                    rows = _payload["rows"]
+                    # "1 rows" is the kind of detail that makes a careful reader
+                    # distrust the numbers printed next to it (M-2).
+                    counted = f"step {_payload['step']}: {rows} row{'' if rows == 1 else 's'}"
                     if issues_found:
-                        detail = (f"step {_payload['step']}: {_payload['rows']} rows "
-                                  f"— {issues_found[0]}")
+                        detail = f"{counted} — {issues_found[0]}"
                     elif _payload["step"] == 1:
                         # Today's wording for the one-step case, unchanged.
                         detail = "Query executed"
                     else:
-                        detail = f"step {_payload['step']}: {_payload['rows']} rows"
+                        detail = counted
                     pending_done = ("tool_done", json.dumps({
                         "tool": "query_structured_data", "detail": detail}))
                 elif _evt == "crosscheck":
@@ -1434,10 +1485,17 @@ Document excerpts:
                     # supplied the text, "query_structured_data" otherwise.
                     tool_name = _payload.source_tool
                     if searched_kind is not None:
+                        # A cross-check retrieves up to 12 chunks and APPENDS at most
+                        # CROSSCHECK_EXCERPTS of them; reporting 12 would tell the user
+                        # (and the trace) that twelve records were weighed against the
+                        # table's figure when three were (M-1). A terminal fallback
+                        # appends everything it retrieved, so it reports everything.
+                        reached = (min(found_count[0], CROSSCHECK_EXCERPTS)
+                                   if searched_kind == COUNT_CROSSCHECK else found_count[0])
                         yield ("tool_done", json.dumps({
                             "tool": ("search_documents"
                                      if searched_kind == COUNT_CROSSCHECK else tool_name),
-                            "detail": f"Found {found_count[0]} results",
+                            "detail": f"Found {reached} results",
                         }))
 
         elif tool_name == "web_search":

@@ -371,8 +371,19 @@ inv = sql_loop.run_sql_investigation(q6, "u1", None, execute=ex, search=se,
 check("only one SQL call — a count is never re-queried", len(ex.questions) == 1, ex.questions)
 check("exactly one retrieval call", len(se.queries) == 1, se.queries)
 check("the SQL result is still there", r6 in inv.result_text, inv.result_text[:120])
-check("the excerpts are labelled as other records stating the quantity",
+check("the excerpts are labelled as a cross-check",
       sql_loop.CROSSCHECK_HEADING in inv.result_text, inv.result_text[-400:])
+# Fix round 1 (Task 4 review, finding I-2): the heading used to read "Other
+# records that state this quantity:", which over-claims. These excerpts are the
+# top hits of an unfiltered keyword search — they need not state any quantity at
+# all, and a writer trusting the old heading could present an unrelated number as
+# a rival count. Pinned literally, not only symbolically, so the wording cannot
+# drift back without turning a check red.
+check("the heading says the excerpts MENTION the quantity and may be unrelated",
+      sql_loop.CROSSCHECK_HEADING == "Cross-check: document excerpts that mention "
+      "this quantity (top matches, may be unrelated)", sql_loop.CROSSCHECK_HEADING)
+check("and it never claims they STATE it",
+      "state this quantity" not in sql_loop.CROSSCHECK_HEADING, sql_loop.CROSSCHECK_HEADING)
 check("at most three excerpts are kept",
       "EXC" in inv.result_text and "EXD" not in inv.result_text, inv.result_text[-400:])
 check("Investigation.crosscheck carries the excerpt text", inv.crosscheck and "EXA" in inv.crosscheck,

@@ -656,7 +656,8 @@ def _fix_table_names(sql: str, real_table_names: list[str],
     return sql
 
 
-def route_tables(question: str, user_id: str, supabase_client) -> list[dict]:
+def route_tables(question: str, user_id: str, supabase_client,
+                 live_table_names=None) -> list[dict]:
     """The CARDS the router picks for `question` - the same selection
     `execute_sql_query` makes below, returned as cards rather than as the
     `structured_data` rows it narrows.
@@ -664,9 +665,24 @@ def route_tables(question: str, user_id: str, supabase_client) -> list[dict]:
     `sql_loop.inspect_result` needs the cards, not the tables: what it asks of a
     result is whether the identifier column a card DECLARES came back, and which
     of that card's columns are worth widening to. Deliberately the same two calls
-    in the same order, with the same two fallbacks - no cards, or a cards file of
-    the wrong shape, yields `[]`, which the inspector documents as "the
-    column-shaped issues never fire".
+    in the same order, with the same fallbacks - no cards, or a cards file of the
+    wrong shape, yields `[]`, which the inspector documents as "the column-shaped
+    issues never fire".
+
+    `live_table_names` is the third of those fallbacks, and it is the one that
+    keeps the inspector honest. `execute_sql_query` narrows `tables` by the
+    selection and, when the selection matches NO live table, falls back to the
+    full schema - so a card whose table is not live was never shown to the SQL
+    writer. The cards drifting behind the corpus is an observed condition, not a
+    hypothetical (see `_load_table_cards`: "drifted four tables behind the live
+    corpus"), and in that state an unfiltered card list lets the loop demand an
+    identifier column of a table nobody queried, spending a whole step on an
+    instruction that cannot be obeyed. Filtering here mirrors the narrowing
+    there; an empty intersection yields `[]`, mirroring the full-schema fallback,
+    which the inspector reads as "no cards".
+
+    An EMPTY or omitted `live_table_names` means the caller does not know which
+    tables are live, which is not the same as none being live: it filters nothing.
     """
     cards = _load_table_cards(user_id, supabase_client)
     if not cards:
@@ -677,7 +693,15 @@ def route_tables(question: str, user_id: str, supabase_client) -> list[dict]:
         logger.warning(f"table_router: routing failed ({type(e).__name__}: {e}); "
                        f"the investigation runs without cards")
         return []
-    return [c for c in cards if c.get("table") in selected]
+    routed = [c for c in cards if c.get("table") in selected]
+    live = {str(t) for t in (live_table_names or []) if t}
+    if live:
+        routed = [c for c in routed if c.get("table") in live]
+        if not routed:
+            logger.warning("table_router: the routed cards name no live table "
+                           "(cards out of sync with structured_data?); the "
+                           "investigation runs without cards")
+    return routed
 
 
 @traceable(name="query_structured_data", run_type="tool")

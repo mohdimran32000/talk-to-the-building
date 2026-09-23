@@ -55,6 +55,7 @@ def check(name, cond, detail=""):
 
 from app.services import settings as settings_mod  # noqa: E402
 from app.services import sql_tool  # noqa: E402
+from app.services import sql_loop  # noqa: E402
 from app.services import openai_client as oc  # noqa: E402
 from app.services import llm_usage as llm_usage_mod  # noqa: E402
 
@@ -192,6 +193,41 @@ if hasattr(sql_tool, "route_tables"):
           [c.get("table") for c in from_file])
     _reset_cards_cache()
 
+    # I-3. The cards can drift behind the corpus - observed, and documented in
+    # `_load_table_cards` ("drifted four tables behind the live corpus"). When
+    # the router's pick matches NO live table `execute_sql_query` falls back to
+    # the full schema, so the writer never saw that card; if `route_tables`
+    # returned it anyway the inspector could demand a column of a table nobody
+    # queried, spending a whole step on an instruction that cannot be obeyed.
+    def _route_live(live):
+        """route_tables with a live-table set, or the exception it raised."""
+        _reset_cards_cache()
+        try:
+            return sql_tool.route_tables("which units are on the level", "u-1",
+                                         _FakeSupabase([CARD_A, CARD_B]),
+                                         live_table_names=live)
+        except Exception as e:  # noqa: BLE001 - reported as the check's failure
+            return e
+
+    stale = _route_live(["bld_gamma_other"])
+    check("a routed card naming a table that is not live -> [] (mirrors "
+          "execute_sql_query's 'selection matched no live tables' fallback)",
+          stale == [], repr(stale))
+
+    partial = _route_live(["bld_alpha_units"])
+    check("a partly-live selection keeps exactly the live cards, as "
+          "execute_sql_query keeps the live tables",
+          isinstance(partial, list)
+          and [c["table"] for c in partial] == ["bld_alpha_units"], repr(partial))
+
+    _reset_cards_cache()
+    unknown = sql_tool.route_tables("which units are on the level", "u-1",
+                                    _FakeSupabase([CARD_A, CARD_B]))
+    check("no live names given -> no filtering at all (an unknown live set is "
+          "not an empty one; the caller may not know it)",
+          [c["table"] for c in unknown][:1] == ["bld_alpha_units"],
+          [c.get("table") for c in unknown])
+
     _reset_cards_cache()
     _real_load = sql_tool._load_table_cards
     sql_tool._load_table_cards = lambda *a, **k: [{"no_table_key_here": True}]
@@ -231,13 +267,26 @@ def _branch_source():
 
 branch = _branch_source()
 check("the branch was found in stream_response", bool(branch))
-check("the branch no longer calls execute_sql_query( directly",
-      "execute_sql_query(" not in branch,
-      [l for l in branch.splitlines() if "execute_sql_query(" in l])
+sql_calls = [l.strip() for l in branch.splitlines() if "execute_sql_query(" in l]
+check("the one-shot call is gone - the branch never assigns a SQL result "
+      "directly", "result_text = execute_sql_query(" not in branch, sql_calls)
+# Fix round 1 (I-1) put a named guard around the executor, and that guard has to
+# call `execute_sql_query`. So the rule is not "never name it" but "reach it only
+# through the wrapper the loop is handed": every call site is a `return` inside
+# `_execute_sql_for_loop`, and what goes into `execute=` is the wrapper.
+check("execute_sql_query is reached only from inside the guarded executor, "
+      "never called inline",
+      bool(sql_calls)
+      and all(c.startswith("return execute_sql_query(") for c in sql_calls), sql_calls)
+check("and what the investigation is handed is that guarded executor",
+      "execute=_execute_sql_for_loop," in branch,
+      [l for l in branch.splitlines() if "execute=" in l])
 check("the branch calls iter_sql_investigation(",
       "iter_sql_investigation(" in branch)
 check("the branch passes the routed cards in",
       "routed_cards=" in branch)
+check("the branch tells route_tables which tables are actually live (I-3)",
+      "live_table_names=" in branch)
 check("the branch takes its step budget from the setting",
       "get_sql_loop_max_steps()" in branch)
 check("the old inline empty-result fallback block is gone",
@@ -272,6 +321,33 @@ check("the RESULT SHAPE bullet exists", bool(shape_bullet))
 check("the RESULT SHAPE bullet tells the writer to answer from the LAST "
       "result when several investigation steps ran",
       "LAST" in shape_bullet and "step" in shape_bullet.lower(), shape_bullet[-260:])
+
+# I-2. The cross-check excerpts used to arrive with nothing saying what they are
+# FOR. The table figure is the answer; the excerpts are rivals to name, and they
+# are the top hits of an unfiltered keyword search, so some of them print no
+# figure at all. Without this the S/C shape the new cards grade ("421, from the
+# mechanical register; the BMS manual prints 424") depended on the model's
+# goodwill.
+crosscheck_bullet = next((l for l in rules.splitlines()
+                          if "cross-check" in l and "excerpt" in l.lower()), "")
+check("there is a bullet about cross-check excerpts", bool(crosscheck_bullet))
+check("it says the TABLE figure is the answer",
+      "TABLE figure" in crosscheck_bullet, crosscheck_bullet[:200])
+check("it says the excerpts are OTHER records that may print a different figure",
+      "OTHER records" in crosscheck_bullet
+      and "different figure" in crosscheck_bullet, crosscheck_bullet[:300])
+check("it says to name each such figure and where it is printed",
+      "where it is printed" in crosscheck_bullet, crosscheck_bullet[:400])
+check("it forbids replacing the table figure with an excerpt figure",
+      "never replace the table figure" in crosscheck_bullet, crosscheck_bullet[-200:])
+
+# The heading the loop writes over those excerpts used to over-claim: it said the
+# excerpts state the quantity, when they need not mention a quantity at all.
+check("sql_loop's cross-check heading no longer claims the excerpts state the "
+      "quantity",
+      sql_loop.CROSSCHECK_HEADING ==
+      "Cross-check: document excerpts that mention this quantity "
+      "(top matches, may be unrelated)", sql_loop.CROSSCHECK_HEADING)
 
 
 # ===========================================================================
@@ -351,7 +427,13 @@ def run_stream(*, user_msg, model_question, sql_results, chunks, max_steps,
     def fake_execute(question, user_id, sb):
         asked.append(question)
         i = min(len(asked) - 1, len(sql_results) - 1)
-        return sql_results[i]
+        scripted = sql_results[i]
+        # A scripted BaseException means "this call raises" - `execute_sql_query`
+        # really can, because its own try/except starts below the SQL-generation
+        # call and below the structured_data fetch.
+        if isinstance(scripted, BaseException):
+            raise scripted
+        return scripted
 
     def fake_search(search_query, metadata_filter, user_id, supabase_client=None,
                     folder_path=None, scope=None):
@@ -371,6 +453,10 @@ def run_stream(*, user_msg, model_question, sql_results, chunks, max_steps,
         "route": getattr(sql_tool, "route_tables", None),
         "steps": os.environ.get("SQL_LOOP_MAX_STEPS"),
     }
+    # Cleared BEFORE the run, not only set after it: when stream_response raises,
+    # `events` is never assigned, and a stale list from the previous run would
+    # let a check about THIS run pass on the last one's events.
+    run_stream.last_events = []
     oc._get_client = lambda: _Client()
     oc.get_llm_model = lambda: "fake-model"
     oc.get_text_to_sql_enabled = lambda: True
@@ -405,6 +491,7 @@ def run_stream(*, user_msg, model_question, sql_results, chunks, max_steps,
             os.environ["SQL_LOOP_MAX_STEPS"] = saved["steps"]
 
     tools = [(k, json.loads(v)) for k, v in events if k in ("tool_start", "tool_done")]
+    run_stream.last_events = events
     return tools, asked, searched
 
 
@@ -534,6 +621,31 @@ check("6b. a quantity question cross-checks the documents once, as a "
 check("6b. the cross-check is ONE retrieval call and no extra SQL",
       len(asked_cc) == 1 and len(searched_cc) == 1, (asked_cc, searched_cc))
 
+# M-1. Retrieval returns up to 12 chunks; `sql_loop._top_excerpts` appends 3.
+# Reporting 12 tells the user - and the trace - that twelve records were weighed
+# against the table's figure when three were.
+MANY = [{"file_name": f"doc{i}.md", "content": f"record {i} prints a count"}
+        for i in range(12)]
+got_m1, _, _ = run_stream(
+    user_msg=COUNT_Q, model_question=COUNT_Q,
+    sql_results=[GOOD_RESULT], chunks=MANY, max_steps=3)
+check("6c. the cross-check reports the excerpts APPENDED (3), not the chunks "
+      "retrieved (12)",
+      got_m1[-1:] == [("tool_done", {"tool": "search_documents",
+                                     "detail": "Found 3 results"})], got_m1[-1:])
+
+# M-2. A user-visible string. "1 rows" is the kind of detail that makes a
+# careful reader distrust the numbers next to it.
+ONE_ROW = ("| panel | level |\n| --- | --- |\n| P-1 | 3 |\n\n"
+           "SQL: `SELECT panel, level FROM \"bld_alpha_units\"`")
+got_m2, _, _ = run_stream(
+    user_msg=COUNT_Q, model_question=COUNT_Q,
+    sql_results=[ONE_ROW], chunks=CHUNKS, max_steps=3)
+check("6d. one row is reported as '1 row', not '1 rows'",
+      got_m2[1:2] == [("tool_done", {"tool": "query_structured_data",
+                                     "detail": "step 1: 1 row — COUNT_CROSSCHECK"})],
+      got_m2[1:2])
+
 
 # ===========================================================================
 # 7. The one intentional divergence, pinned rather than hidden
@@ -556,6 +668,69 @@ check("7. the dispatcher's tool_start still carries the model's own args, "
       "untouched by the augmentation",
       got_7[:1] == [("tool_start", {"tool": "query_structured_data",
                                     "args": {"question": PARAPHRASE}})], got_7[:1])
+
+
+# ===========================================================================
+# 8. I-1 — a re-query that RAISES must not destroy an answer today would give
+# ===========================================================================
+print("\n8. A raising re-query falls back to the documents, never to an error")
+
+# `execute_sql_query` catches DuckDB failures and returns "SQL query failed: ...",
+# but its try/except starts BELOW the SQL-generation call and BELOW the
+# structured_data fetch - so a Gemini 429/503 or a PostgREST error raises out of
+# it. Today that could happen once per question and the outer dispatch handled
+# it; with the loop it can happen on step 2 or 3, on a question step 1 had
+# already sent to the document fallback. Unguarded, the user gets an SSE error
+# where today they got an answer, and the AFTER arm of the paid run counts it as
+# a quality change.
+BOOM = RuntimeError("duckdb blew up on step 2")
+
+raised_out = None
+try:
+    got_8, asked_8, searched_8 = run_stream(
+        user_msg=QUESTION, model_question=QUESTION,
+        sql_results=[EMPTY_RESULT, BOOM], chunks=CHUNKS, max_steps=3)
+except BaseException as e:  # noqa: BLE001 - not propagating IS the assertion
+    raised_out, got_8, asked_8, searched_8 = e, [], [], []
+
+check("8. the exception does not escape stream_response", raised_out is None,
+      repr(raised_out))
+check("8. two SQL calls were made (the second is the one that raised)",
+      len(asked_8) == 2, len(asked_8))
+check("8. the run ends through the FAILED document fallback - the same "
+      "sequence today's code reached with one failed query",
+      got_8 == [
+          ("tool_start", {"tool": "query_structured_data", "args": {"question": QUESTION}}),
+          ("tool_done", {"tool": "query_structured_data",
+                         "detail": "step 1: 0 rows — EMPTY"}),
+          ("tool_start", {"tool": "query_structured_data",
+                          "args": {"question": QUESTION, "step": 2, "issue": "EMPTY"}}),
+          ("tool_done", {"tool": "query_structured_data",
+                         "detail": "SQL failed, falling back"}),
+          ("tool_start", {"tool": "search_documents", "args": {"query": QUESTION}}),
+          ("tool_done", {"tool": "search_documents", "detail": "Found 2 results"}),
+      ], got_8)
+check("8. the documents were searched, on the user's own wording",
+      searched_8 == [QUESTION], searched_8)
+check("8. the stream still closes with a done event",
+      getattr(run_stream, "last_events", [])[-1:] == [("done", "")],
+      getattr(run_stream, "last_events", [])[-1:])
+check("8. and the answer writer is handed the document excerpts, not a "
+       "traceback",
+      any(k == "token" for k, _ in getattr(run_stream, "last_events", [])),
+      [k for k, _ in getattr(run_stream, "last_events", [])])
+
+# Step 1 stays unguarded: the outer dispatch has always handled it, and guarding
+# it would change the max_steps=1 identity the whole of section 5 pins.
+raised_1 = None
+try:
+    run_stream(user_msg=QUESTION, model_question=QUESTION,
+               sql_results=[BOOM], chunks=CHUNKS, max_steps=3)
+except BaseException as e:  # noqa: BLE001
+    raised_1 = e
+check("8. a step-1 exception still propagates to the dispatch, exactly as "
+      "today (guarding it would move the max_steps=1 behaviour)",
+      raised_1 is BOOM, repr(raised_1))
 
 
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")

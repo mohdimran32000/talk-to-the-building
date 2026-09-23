@@ -118,7 +118,17 @@ CITATION_SUFFIXES = ("_source", "_resolution")
 #: separator the caller's search wrapper puts between them.
 CROSSCHECK_EXCERPTS = 3
 EXCERPT_SEPARATOR = "\n\n---\n\n"
-CROSSCHECK_HEADING = "Other records that state this quantity:"
+
+#: The heading the cross-check excerpts ride under. It says MENTION, and it says the
+#: matches may be unrelated, because that is what they are: the top hits of an
+#: unfiltered keyword search, which need not print a quantity at all. Fix round 1 of the
+#: Task 4 review (I-2) replaced "Other records that state this quantity:", which promised
+#: the writer something retrieval cannot deliver — and a writer that believes a heading
+#: will quote an unrelated number as a rival count. The answer-side rule that goes with it
+#: lives in `openai_client.OUTPUT_FORMAT_RULES`: the TABLE figure is the answer, these are
+#: records to name beside it.
+CROSSCHECK_HEADING = ("Cross-check: document excerpts that mention this quantity "
+                      "(top matches, may be unrelated)")
 
 #: The terminal fallbacks, worded exactly as the caller worded them before this module
 #: existed, so `max_steps=1` is byte-identical to that behaviour.
