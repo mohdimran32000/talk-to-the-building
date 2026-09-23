@@ -164,10 +164,12 @@ ns = next((i for i in issues if i.kind == sql_loop.NARROW_SELECT), None)
 check("NARROW_SELECT is raised", ns is not None, [i.kind for i in issues])
 check("no IDENTIFIER_MISSING — the identifier IS in the result",
       not any(i.kind == sql_loop.IDENTIFIER_MISSING for i in issues), [i.kind for i in issues])
-check("the instruction names the table", ns is not None and "bld_assets" in ns.instruction,
+# Fix wave 1 (section 27): NARROW_SELECT is a FINDING - still detected, still reported,
+# never acted on. The measurement that withdrew its instruction is quoted there.
+check("it carries no re-query instruction", ns is not None and ns.instruction == "",
       ns.instruction if ns else "")
-check("the instruction asks for every non-citation column",
-      ns is not None and "non-citation column" in ns.instruction, ns.instruction if ns else "")
+check("and its detail still says how narrow the selection was",
+      ns is not None and "2" in ns.detail and "8" in ns.detail, ns.detail if ns else "")
 check("source_page is not counted as a selectable column",
       "source_page" not in sql_loop.non_citation_columns(CARD_WIDE),
       sql_loop.non_citation_columns(CARD_WIDE))
@@ -298,7 +300,10 @@ check("the answer text now says it came from the documents",
 
 # 12b — the CAP itself, with a different issue kind at each step so the repeat guard cannot
 # be what stops it: empty -> a list with no identifier -> the same, cut off by max_steps.
-noident = table_result(["level_code", "kind"], [["L1", "a"]],
+# TWO rows: fix wave 1 made a ONE-row result the answer rather than a list missing its
+# labels, so a one-row fixture would no longer raise IDENTIFIER_MISSING and could not pin
+# the cap. Nothing else about the case changed.
+noident = table_result(["level_code", "kind"], [["L1", "a"], ["L1", "b"]],
                        'SELECT level_code, kind FROM "bld_units"')
 ex = FakeExec([empty_result(sql2), noident, noident])
 inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch(),
@@ -525,7 +530,7 @@ check("a result carrying a _number column is nameable — no issue",
 # (a) THE OWNER'S OWN CASE, 2026-09-23: a list of places with names and no numbers. Fix
 # round 2 ruling — a printed name is a LABEL, not an identifier a person can act on, so
 # "_name" is not in NAMEABLE_SUFFIXES and this list is re-queried for its number.
-a1 = table_result(["place_name", "area_m2"], [["Studio", 30]],
+a1 = table_result(["place_name", "area_m2"], [["Studio", 30], ["Store", 12]],
                   'SELECT place_name, area_m2 FROM "bld_places"')
 iss_a1 = sql_loop.inspect_result(a1, q20, [CARD_PLACES])
 im_a1 = next((i for i in iss_a1 if i.kind == sql_loop.IDENTIFIER_MISSING), None)
@@ -541,7 +546,7 @@ check("a _number, an _id or a _tag does",
 check("and so does the card's own declared identifier",
       sql_loop.result_is_nameable(["place_id", "area_m2"], [CARD_PLACES]))
 # (a3) nothing nameable at all: it fires, and asks for the PRINTED number, not the key
-a3 = table_result(["area_m2", "department"], [[30, "X"]],
+a3 = table_result(["area_m2", "department"], [[30, "X"], [12, "Y"]],
                   'SELECT area_m2, department FROM "bld_places"')
 iss20 = sql_loop.inspect_result(a3, q20, [CARD_PLACES])
 im20 = next((i for i in iss20 if i.kind == sql_loop.IDENTIFIER_MISSING), None)
@@ -557,7 +562,8 @@ iss_b = sql_loop.inspect_result(b, "list the specs of all assets", [CARD_WIDE, C
 check("the spec join raises NARROW_SELECT, not IDENTIFIER_MISSING",
       [i.kind for i in iss_b] == [sql_loop.NARROW_SELECT], [i.kind for i in iss_b])
 # F7 — an identifier with a space is quoted so the re-query is valid SQL
-sp = table_result(["Name", "Description"], [["n", "d"]], 'SELECT "Name", "Description" FROM "bld_spaced"')
+sp = table_result(["Name", "Description"], [["n", "d"], ["n2", "d2"]],
+                  'SELECT "Name", "Description" FROM "bld_spaced"')
 iss_sp = sql_loop.inspect_result(sp, "list all the things", [CARD_SPACED])
 im_sp = next((i for i in iss_sp if i.kind == sql_loop.IDENTIFIER_MISSING), None)
 check("an identifier containing a space is double-quoted, not left in backticks alone",
@@ -567,7 +573,8 @@ check("an identifier containing a space is double-quoted, not left in backticks 
 print("\n21. F4 — the priority order, pinned by a result that raises two issues")
 # ---------------------------------------------------------------------------
 q21 = "list the details of every asset"
-both = table_result(["model", "make"], [["M-9", "K"]], 'SELECT model, make FROM "bld_assets"')
+both = table_result(["model", "make"], [["M-9", "K"], ["M-8", "J"]],
+                    'SELECT model, make FROM "bld_assets"')
 iss21 = sql_loop.inspect_result(both, q21, [CARD_WIDE])
 check("both issues are raised", len(iss21) == 2, [i.kind for i in iss21])
 check("IDENTIFIER_MISSING before NARROW_SELECT",
@@ -576,7 +583,8 @@ check("IDENTIFIER_MISSING before NARROW_SELECT",
 check("and the loop acts on IDENTIFIER_MISSING",
       sql_loop.first_requery_issue(iss21).kind == sql_loop.IDENTIFIER_MISSING)
 # EMPTY outranks both — an all-NULL row still shows which columns were selected
-both_empty = table_result(["model", "make"], [[None, None]], 'SELECT model, make FROM "bld_assets"')
+both_empty = table_result(["model", "make"], [[None, None], [None, None]],
+                          'SELECT model, make FROM "bld_assets"')
 iss21b = sql_loop.inspect_result(both_empty, q21, [CARD_WIDE])
 check("EMPTY comes first of the three",
       [i.kind for i in iss21b] == [sql_loop.EMPTY, sql_loop.IDENTIFIER_MISSING, sql_loop.NARROW_SELECT],
@@ -595,7 +603,8 @@ check("so the right card is consulted",
       [c["table"] for c in sql_loop.cards_in_sql(sql_loop.result_sql(multi), [CARD_WIDE, CARD_PLACES])]
       == ["bld_places"])
 # and when the SQL names none of the routed tables, the identifier issue degrades to silence
-elsewhere = table_result(["area_m2", "department"], [[30, "X"]], 'SELECT area_m2, department FROM "other"')
+elsewhere = table_result(["area_m2", "department"], [[30, "X"], [12, "Y"]],
+                         'SELECT area_m2, department FROM "other"')
 check("a SQL naming no routed table raises no identifier issue",
       not any(i.kind == sql_loop.IDENTIFIER_MISSING
               for i in sql_loop.inspect_result(elsewhere, q20, [CARD_PLACES, CARD_WIDE])),
@@ -736,10 +745,116 @@ check("and the SQL still got the tool's question", ex.questions[0] == "paraphras
 # F14 — the widening ask is bounded and says which rows
 ns25 = next(i for i in sql_loop.inspect_result(both, q21, [CARD_WIDE])
             if i.kind == sql_loop.NARROW_SELECT)
-check("NARROW_SELECT caps the ask at the card's non-citation columns",
-      "at most 8 columns" in ns25.instruction, ns25.instruction)
-check("and asks only for the matching rows",
-      "for the matching rows only" in ns25.instruction, ns25.instruction)
+# F14 asked that the widening instruction be bounded and say which rows. Fix wave 1
+# withdrew the instruction entirely (section 27), so what is left to pin is that there is
+# none - and that the finding still reports the two counts a reader would want.
+check("NARROW_SELECT asks for nothing at all", ns25.instruction == "", ns25.instruction)
+check("and its detail names the columns shown and the columns available",
+      "2" in ns25.detail and "8" in ns25.detail, ns25.detail)
+
+# ===========================================================================
+# FIX WAVE 1 — the Task 5 diagnosis (2026-09-23). The loop was measured over 164
+# real questions: its 44 re-queries bought 4 cards and lost 3. Each check below
+# was written and watched fail before the module changed, and each one removes a
+# firing the measurement showed paying nothing.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+print("\n26. W1 — _COUNT_RE reaches the plural forms real questions are asked in")
+# ---------------------------------------------------------------------------
+# Measured: two cards written FOR the cross-check never got one, because
+# `\btotal\b` does not match "totals" and `\bcount\b` does not match "counts".
+check("'counts' is a quantity question",
+      sql_loop.asks_count("what are the FCU counts for each level?"))
+check("'totals' is a quantity question",
+      sql_loop.asks_count("what different door totals do the records print?"))
+check("the singular forms still match", all(sql_loop.asks_count(q) for q in
+      ["how many units", "the total load", "the number of units", "count the units"]))
+# Deliberately NOT added, both from the diagnosis: "how much" is a rating/cost
+# question, and a bare "numbers" is how this corpus asks for serials and part
+# numbers — cross-checking either buys a retrieval call and no rival quantity.
+check("'how much load' is still NOT a count question",
+      not sql_loop.asks_count("how much load does the fourth floor draw?"))
+check("a serial-number question is still NOT a count question",
+      not sql_loop.asks_count("what are the serial numbers of the UPS units?"))
+check("and neither is a refuse-shaped question naming model numbers",
+      not sql_loop.asks_count("do the records give the model numbers of the pumps?"))
+
+# ---------------------------------------------------------------------------
+print("\n27. W2 — NARROW_SELECT is a FINDING: reported, never re-queried")
+# ---------------------------------------------------------------------------
+# Measured: it fired 3 times in 164 questions for 0 wins and 1 loss — it replaced
+# a COMPLETE key/value answer with a narrower one, because the loop keeps the LAST
+# result and has no "keep the better one" rule. It stays detected and reported.
+q27 = "what are the specs of every asset?"
+sql27 = ('SELECT a.asset_tag, s.value AS spec_value FROM "bld_assets" a '
+         'JOIN "bld_specs" s ON s.subject = a.asset_tag')
+r27 = table_result(["asset_tag", "spec_value"], [["A-1", "2MP"], ["A-2", "4MP"]], sql27)
+iss27 = sql_loop.inspect_result(r27, q27, [CARD_WIDE, CARD_SPECS])
+check("NARROW_SELECT is still detected", [i.kind for i in iss27] == [sql_loop.NARROW_SELECT],
+      [i.kind for i in iss27])
+check("but it carries no instruction", iss27 and iss27[0].instruction == "",
+      [i.instruction for i in iss27])
+check("so the loop finds nothing to act on", sql_loop.first_requery_issue(iss27) is None)
+ex = FakeExec([r27, r27])   # a spare, so an unwanted re-query is COUNTED, not an abort
+inv = sql_loop.run_sql_investigation(q27, "u1", None, execute=ex, search=FakeSearch(),
+                                     routed_cards=[CARD_WIDE, CARD_SPECS], max_steps=3)
+check("exactly one SQL call — the complete result is not replaced",
+      len(ex.questions) == 1, ex.questions)
+check("the finding still reaches Investigation.issues",
+      inv.issues == [sql_loop.NARROW_SELECT], inv.issues)
+check("and the trailer", "NARROW_SELECT" in inv.result_text, inv.result_text[-160:])
+
+# ---------------------------------------------------------------------------
+print("\n28. W3 — a one-row result IS the answer; no identifier is demanded")
+# ---------------------------------------------------------------------------
+# Measured: 3 of the 12 IDENTIFIER_MISSING firings were on one-row results and
+# none of the loop's three wins was; one of those three destroyed a correct
+# single-fact answer by sending the writer off to a different table.
+q28 = "which department is recorded for the studio?"
+sql28 = 'SELECT department, area_m2 FROM "bld_places" WHERE place_name ILIKE \'%studio%\''
+one_row = table_result(["department", "area_m2"], [["X", 30]], sql28)
+iss28 = sql_loop.inspect_result(one_row, q28, [CARD_PLACES])
+check("a one-row result raises nothing at all", iss28 == [], [i.kind for i in iss28])
+two_rows = table_result(["department", "area_m2"], [["X", 30], ["Y", 12]], sql28)
+check("two rows of the very same shape still raise IDENTIFIER_MISSING",
+      any(i.kind == sql_loop.IDENTIFIER_MISSING
+          for i in sql_loop.inspect_result(two_rows, q28, [CARD_PLACES])),
+      [i.kind for i in sql_loop.inspect_result(two_rows, q28, [CARD_PLACES])])
+ex = FakeExec([one_row, one_row])   # a spare, as above
+inv = sql_loop.run_sql_investigation(q28, "u1", None, execute=ex, search=FakeSearch(),
+                                     routed_cards=[CARD_PLACES], max_steps=3)
+check("and no second query is spent on it", len(ex.questions) == 1, ex.questions)
+
+# ---------------------------------------------------------------------------
+print("\n29. W4 — an empty result whose SQL names no routed table is an ABSTENTION")
+# ---------------------------------------------------------------------------
+# Measured: 5 EMPTY firings had a tableless first SQL and none produced a win; one
+# of them turned a correct refusal into a stated figure. A writer that emitted a
+# query reading no routed table has already said the data is not there, and telling
+# it to look again is asking an abstention to become a claim.
+q29 = "what is the energy consumption of the units?"
+w4 = empty_result("SELECT NULL WHERE FALSE")
+iss29 = sql_loop.inspect_result(w4, q29, [CARD_LIST])
+check("EMPTY is still reported", [i.kind for i in iss29] == [sql_loop.EMPTY],
+      [i.kind for i in iss29])
+check("but it carries no instruction", iss29 and iss29[0].instruction == "",
+      [i.instruction for i in iss29])
+check("so there is nothing to re-query", sql_loop.first_requery_issue(iss29) is None)
+ex = FakeExec([w4, w4])   # a spare, as above
+se = FakeSearch("DOCTEXT")
+inv = sql_loop.run_sql_investigation(q29, "u1", None, execute=ex, search=se,
+                                     routed_cards=[CARD_LIST], max_steps=3)
+check("exactly one SQL call", len(ex.questions) == 1, ex.questions)
+check("and it goes straight to the document fallback",
+      se.queries == [q29] and "DOCTEXT" in inv.result_text, (se.queries, inv.result_text[:120]))
+check("EMPTY is still on the record", sql_loop.EMPTY in inv.issues, inv.issues)
+# the discriminator: the same empty result whose SQL DOES read a routed table
+check("an empty result on a routed table keeps its re-query instruction",
+      sql_loop.first_requery_issue(sql_loop.inspect_result(empty_result(sql2), q2, [CARD_LIST]))
+      is not None,
+      [i.instruction for i in sql_loop.inspect_result(empty_result(sql2), q2, [CARD_LIST])])
+
 
 print("\nALL PASS" if not FAILS else f"\n{len(FAILS)} FAILED")
 sys.exit(1 if FAILS else 0)

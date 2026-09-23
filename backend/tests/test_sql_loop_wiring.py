@@ -338,8 +338,19 @@ check("it says the excerpts are OTHER records that may print a different figure"
       and "different figure" in crosscheck_bullet, crosscheck_bullet[:300])
 check("it says to name each such figure and where it is printed",
       "where it is printed" in crosscheck_bullet, crosscheck_bullet[:400])
+# Fix wave 1 (Task 5 diagnosis, ex-018): the prohibition used to be the LAST
+# clause of a 60-word sentence, and the measurement caught the writer opening
+# "Yes, 166 is the confirmed number of CCTV cameras" from an excerpt against the
+# table's own 167. The rule now LEADS with the prohibition, and the ORDER is what
+# is pinned - the words were all present when the answer inverted them.
 check("it forbids replacing the table figure with an excerpt figure",
-      "never replace the table figure" in crosscheck_bullet, crosscheck_bullet[-200:])
+      "NEVER replace it with a figure from the cross-check excerpts" in crosscheck_bullet,
+      crosscheck_bullet[:400])
+check("it forbids opening with a yes/no about an excerpt figure",
+      "never open with a yes/no" in crosscheck_bullet, crosscheck_bullet[:400])
+check("and the prohibition comes BEFORE the instruction to name the rival figures",
+      0 <= crosscheck_bullet.find("NEVER replace") < crosscheck_bullet.find("name each"),
+      (crosscheck_bullet.find("NEVER replace"), crosscheck_bullet.find("name each")))
 
 # The heading the loop writes over those excerpts used to over-claim: it said the
 # excerpts state the quantity, when they need not mention a quantity at all.
@@ -365,8 +376,22 @@ GOOD_RESULT = (
     "| P-3 | 3 |\n\n"
     "SQL: `SELECT panel, level FROM \"bld_alpha_units\"`"
 )
-EMPTY_RESULT = "Query returned no results."
+# Fix wave 1: an empty result now carries its SQL line, exactly as
+# `sql_tool.execute_sql_query` really formats one (it appends "SQL: `...`" to every
+# result including this message), because the loop now reads that line to tell a
+# too-tight filter from a writer that queried no routed table at all and abstained.
+EMPTY_RESULT = ("Query returned no results.\n\n"
+                "SQL: `SELECT panel, level FROM \"bld_alpha_units\" WHERE level = '9'`")
 FAILED_RESULT = "SQL query failed: Binder Error: no such column"
+
+# The card the loop is handed for these runs. It declares the columns GOOD_RESULT
+# actually selects, so the inspector sees a routed table behind the SQL (which is what
+# tells a too-tight filter from an abstention) and a list that already names its
+# entities - the two-step sequence below is about the EVENTS, not about detection.
+CARD_ROUTED = {"table": "bld_alpha_units", "holds": "one row per panel on a level",
+               "columns": ["panel", "level", "source_page"],
+               "identifier_column": "panel",
+               "keywords": ["panel", "panels", "level", "alpha"]}
 
 CHUNKS = [
     {"file_name": "alpha_manual.md", "content": "Level 3 carries panels P-1, P-2 and P-3."},
@@ -583,7 +608,8 @@ print("\n6. A two-step investigation emits two tool_start/tool_done pairs")
 
 got_2, asked_2, searched_2 = run_stream(
     user_msg=QUESTION, model_question=QUESTION,
-    sql_results=[EMPTY_RESULT, GOOD_RESULT], chunks=CHUNKS, max_steps=3)
+    sql_results=[EMPTY_RESULT, GOOD_RESULT], chunks=CHUNKS, max_steps=3,
+    routed=(CARD_ROUTED,))
 
 EXPECTED_2 = [
     ("tool_start", {"tool": "query_structured_data", "args": {"question": QUESTION}}),
@@ -689,7 +715,8 @@ raised_out = None
 try:
     got_8, asked_8, searched_8 = run_stream(
         user_msg=QUESTION, model_question=QUESTION,
-        sql_results=[EMPTY_RESULT, BOOM], chunks=CHUNKS, max_steps=3)
+        sql_results=[EMPTY_RESULT, BOOM], chunks=CHUNKS, max_steps=3,
+        routed=(CARD_ROUTED,))
 except BaseException as e:  # noqa: BLE001 - not propagating IS the assertion
     raised_out, got_8, asked_8, searched_8 = e, [], [], []
 

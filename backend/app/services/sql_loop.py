@@ -49,6 +49,22 @@ best PRINTED candidate rather than whatever key a card happens to declare; an un
 SQL yields NO cards rather than all of them; and a wall-clock budget, a repeat-issue guard
 and per-step outcome events were added. Fix round 2 gave the budget its own setting
 (`SQL_LOOP_TIMEOUT`, default 60 s) and took `_name` out of what makes a list nameable.
+
+FIX WAVE 1 (the Task 5 diagnosis, 2026-09-23) is the first change made from MEASUREMENT
+rather than from review: the loop ran over 164 real questions against the same 164 with it
+off, every re-query was replayed offline, and the arithmetic came out at +4 cards against
+−3 for 44 extra queries. So three firings that paid nothing were withdrawn and one that
+was never reaching its questions was widened:
+
+* `NARROW_SELECT` keeps its detection and loses its instruction — a finding, like
+  `TRUNCATED_NO_SHAPE`. Three firings, no wins, one loss.
+* `IDENTIFIER_MISSING` is silent on a ONE-ROW result. Three of twelve firings, no wins.
+* `EMPTY` is a finding, not a re-query, when the query read none of the routed tables:
+  that writer abstained rather than mis-filtered. Five firings, no wins, one loss.
+* `_COUNT_RE` gained the plurals, which is the only thing here that makes the loop do
+  MORE: the cross-check is the part that paid (+3 / −1).
+
+Each removal takes its firings with it, so the loop also gets cheaper.
 """
 from __future__ import annotations
 
@@ -152,7 +168,12 @@ _LIST_RE = re.compile(r"\b(list|lists|listing)\b|\bwhat are\b|\bwhich\b|\ball th
                       r"|\bshow me\b|\bgive me the\b", re.IGNORECASE)
 _DETAILS_RE = re.compile(r"\bspecs?\b|\bspecification|\bdetails?\b|\battributes?\b"
                          r"|\bparameters?\b|\bbreakdown\b|\beverything about\b", re.IGNORECASE)
-_COUNT_RE = re.compile(r"\bhow many\b|\btotal\b|\bnumber of\b|\bcount\b", re.IGNORECASE)
+#: Fix wave 1: the plurals were missing, and the two cards written for the cross-check
+#: were both asked in them ("what counts…", "what different totals…"), so neither ever got
+#: one. NOT added, deliberately: `numbers` (this corpus asks for serials and part numbers
+#: that way, and a cross-check on those buys a retrieval call and no rival quantity) and
+#: `how much` (a rating or cost question, not a count).
+_COUNT_RE = re.compile(r"\bhow many\b|\btotals?\b|\bnumber of\b|\bcounts?\b", re.IGNORECASE)
 
 
 def asks_to_list(question: str) -> bool:
@@ -372,6 +393,16 @@ def _empty_issue(sql: str) -> Issue:
     )
 
 
+def _empty_abstention(sql: str) -> Issue:
+    """Empty, and the query read NONE of the routed tables — so the writer did not filter
+    something too tightly, it declined to look anywhere. Fix wave 1: re-querying one of
+    these fired five times in a 164-question measurement for no win and one loss, where a
+    correct refusal came back as a stated figure. Telling an abstention to look again is
+    asking it to become a claim, so this is a finding: reported, and straight to the
+    documents, which is where a question the tables do not cover belongs."""
+    return Issue(EMPTY, f"No rows, and the query `{sql}` read no routed table", "")
+
+
 def _identifier_issue(column: str, table: str) -> Issue:
     return Issue(
         IDENTIFIER_MISSING,
@@ -383,11 +414,19 @@ def _identifier_issue(column: str, table: str) -> Issue:
 
 
 def _narrow_issue(table: str, shown: int, available: int) -> Issue:
+    """A FINDING, not a re-query — its `instruction` is "" (fix wave 1).
+
+    It fired three times in a 164-question measurement, for zero wins and one loss: on a
+    result that was ALREADY the complete answer it named the subquery's table rather than
+    the main FROM, and the widened re-query replaced a complete key/value answer with a
+    narrower one. The loop keeps the LAST result and has no rule for keeping the better of
+    two, so any re-query here is a bet that cannot be hedged. The detection stays — it
+    still reaches `Investigation.issues` and the trailer, where the answer writer can see
+    that the selection was narrow — and only the instruction is withdrawn."""
     return Issue(
         NARROW_SELECT,
-        f"Only {shown} columns of {available} — widening",
-        (f"Select every non-citation column of `{table}` (at most {available} columns) "
-         f"for the matching rows only (all parameters / all attributes), same filter."),
+        f"Only {shown} columns of {available} — noted, not re-queried",
+        "",
     )
 
 
@@ -402,13 +441,18 @@ def inspect_result(result_text: str, question: str, routed_cards) -> list:
     empty = result_is_empty(result_text)
 
     if empty:
-        issues.append(_empty_issue(sql))
+        issues.append(_empty_issue(sql) if cards else _empty_abstention(sql))
 
     # An aggregate result is exempt: it has no per-entity identifier and no wider row to
     # widen to. An empty result is NOT exempt — its header still says which columns were
     # selected, and the priority order decides which issue the loop acts on.
     if cols and not aggregate:
-        if asks_to_list(question) or asks_for_details(question):
+        # A ONE-ROW result is the answer, not a list that lost its labels: there is
+        # nothing to tell apart, so no identifier is needed to act on it. Fix wave 1 —
+        # three of twelve firings in the measurement were on one-row results, none of the
+        # loop's wins was, and one of the three sent a correct single-fact answer off to
+        # a different table and lost it.
+        if (asks_to_list(question) or asks_for_details(question)) and result_total_rows(result_text) != 1:
             if not result_is_nameable(cols, cards):
                 best = best_identifier(cards, cols)
                 if best:
