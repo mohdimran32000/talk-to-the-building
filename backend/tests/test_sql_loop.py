@@ -225,8 +225,12 @@ print("\n9. Only the cards the SQL actually read are consulted")
 cards_seen = sql_loop.cards_in_sql(sql2, [CARD_LIST, CARD_WIDE])
 check("the card whose table is in the SQL", [c["table"] for c in cards_seen] == ["bld_units"],
       [c["table"] for c in cards_seen])
-check("no table named in the SQL -> all routed cards (fallback)",
-      len(sql_loop.cards_in_sql("SELECT 1", [CARD_LIST, CARD_WIDE])) == 2)
+# Fix round 1 (F3): NEVER fall back to all routed cards. Attribution is exactly what is
+# missing when the SQL names none of them, so naming a table the query never read is the
+# one thing that must not happen here.
+check("no table named in the SQL -> no cards at all",
+      sql_loop.cards_in_sql("SELECT 1", [CARD_LIST, CARD_WIDE]) == [],
+      sql_loop.cards_in_sql("SELECT 1", [CARD_LIST, CARD_WIDE]))
 
 # ---------------------------------------------------------------------------
 print("\n10. The question-shape regexes")
@@ -269,22 +273,39 @@ check("the instruction was appended to the SECOND question, with the previous SQ
 check("the first question was untouched", ex.questions[0] == q2, repr(ex.questions[0]))
 
 # ---------------------------------------------------------------------------
-print("\n12. Three empty results in a row: bounded at 3, then the document fallback")
+print("\n12. Empty twice: the repeat guard stops it, then the document fallback")
 # ---------------------------------------------------------------------------
+# Fix round 1 (F13): the same issue kind twice in a row means the instruction did not work,
+# so a third identical instruction is a wasted step. The brief's original expectation was
+# 3 steps here; the repeat guard supersedes it, and the cap itself is pinned below with a
+# script whose issue kind CHANGES between steps.
 ex = FakeExec([empty_result(sql2)] * 3)
 se = FakeSearch("DOCTEXT")
 inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=se,
                                      routed_cards=[CARD_LIST], max_steps=3)
-check("exactly three SQL calls", len(ex.questions) == 3, len(ex.questions))
-check("three steps recorded", len(inv.steps) == 3, inv.steps)
+check("the repeat guard stops after two SQL calls", len(ex.questions) == 2, len(ex.questions))
+check("two steps recorded", len(inv.steps) == 2, inv.steps)
 check("one document search, with the question", se.queries == [q2], se.queries)
 check("the fallback text replaces the empty result",
       sql_loop.EMPTY_FALLBACK_PREFIX in inv.result_text and "DOCTEXT" in inv.result_text,
       inv.result_text[:200])
 check("the fallback keeps today's do-not-guess closing line",
       sql_loop.EMPTY_FALLBACK_SUFFIX in inv.result_text, inv.result_text[-300:])
-check("the trailer counts three steps", "INVESTIGATION - steps: 3;" in inv.result_text,
+check("the trailer counts the steps", "INVESTIGATION - steps: 2;" in inv.result_text,
       inv.result_text[-160:])
+check("the answer text now says it came from the documents",
+      inv.source_tool == "search_documents", inv.source_tool)
+
+# 12b — the CAP itself, with a different issue kind at each step so the repeat guard cannot
+# be what stops it: empty -> a list with no identifier -> the same, cut off by max_steps.
+noident = table_result(["level_code", "kind"], [["L1", "a"]],
+                       'SELECT level_code, kind FROM "bld_units"')
+ex = FakeExec([empty_result(sql2), noident, noident])
+inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch(),
+                                     routed_cards=[CARD_LIST], max_steps=3)
+check("exactly three SQL calls — max_steps is the bound", len(ex.questions) == 3, len(ex.questions))
+check("the issues acted on, in order", [s["issue"] for s in inv.steps]
+      == [None, sql_loop.EMPTY, sql_loop.IDENTIFIER_MISSING], [s["issue"] for s in inv.steps])
 
 # a search that finds nothing leaves the SQL outcome standing
 ex = FakeExec([empty_result(sql2)] * 3)
@@ -372,13 +393,14 @@ print("\n16. The event sequence from iter_sql_investigation")
 ex = FakeExec([empty_result(sql2), good])
 events = list(sql_loop.iter_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch(),
                                               routed_cards=[CARD_LIST], max_steps=3))
-check("kinds in order: step, step, final", [k for k, _ in events] == ["step", "step", "final"],
+check("kinds in order: step/step_done per query, then final",
+      [k for k, _ in events] == ["step", "step_done", "step", "step_done", "final"],
       [k for k, _ in events])
 check("step 1 payload", events[0][1]["step"] == 1 and events[0][1]["issue"] is None
       and events[0][1]["sql"] == "", events[0][1])
 check("step 2 payload names the issue and the SQL it is reacting to",
-      events[1][1]["step"] == 2 and events[1][1]["issue"] == sql_loop.EMPTY
-      and events[1][1]["sql"] == sql2, events[1][1])
+      events[2][1]["step"] == 2 and events[2][1]["issue"] == sql_loop.EMPTY
+      and events[2][1]["sql"] == sql2, events[2][1])
 check("every step event carries a human detail",
       all(isinstance(p.get("detail"), str) and p["detail"] for k, p in events if k == "step"),
       [p for k, p in events if k == "step"])
@@ -389,19 +411,19 @@ check("the events' step payloads are the Investigation's steps",
 ex = FakeExec([r6])
 events = list(sql_loop.iter_sql_investigation(q6, "u1", None, execute=ex, search=FakeSearch(),
                                               routed_cards=[CARD_LIST], max_steps=3))
-check("a count question: step, crosscheck, final",
-      [k for k, _ in events] == ["step", "crosscheck", "final"], [k for k, _ in events])
+check("a count question: step, step_done, crosscheck, final",
+      [k for k, _ in events] == ["step", "step_done", "crosscheck", "final"], [k for k, _ in events])
 check("the crosscheck event names its kind",
-      events[1][1].get("kind") == sql_loop.COUNT_CROSSCHECK, events[1][1])
+      events[2][1].get("kind") == sql_loop.COUNT_CROSSCHECK, events[2][1])
 
 ex = FakeExec([empty_result(sql2)] * 3)
 events = list(sql_loop.iter_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch(),
                                               routed_cards=[CARD_LIST], max_steps=3))
-check("three empties: step x3, then the fallback retrieval, then final",
-      [k for k, _ in events] == ["step", "step", "step", "crosscheck", "final"],
+check("two empties, then the fallback retrieval, then final",
+      [k for k, _ in events] == ["step", "step_done", "step", "step_done", "crosscheck", "final"],
       [k for k, _ in events])
 check("the fallback retrieval event is marked EMPTY, not COUNT_CROSSCHECK",
-      events[3][1].get("kind") == sql_loop.EMPTY, events[3][1])
+      events[4][1].get("kind") == sql_loop.EMPTY, events[4][1])
 
 # ---------------------------------------------------------------------------
 print("\n17. result_is_empty is byte-for-byte the check openai_client already ships")
@@ -431,6 +453,228 @@ check("no `while` — the loop is `for step in range(max_steps)`",
       not _re.search(r"\bwhile\b", SRC))
 check("the bound is written as a range over max_steps",
       "for step in range(max_steps)" in SRC)
+
+# ===========================================================================
+# FIX ROUND 1 — the review of commit 3e5f71e (C1, F1-F6, minors). Every check
+# below was written and watched fail before the module changed.
+# ===========================================================================
+
+CARD_PLACES = {   # the shape of a place table: an internal key AND a printed number
+    "table": "bld_places",
+    "columns": ["place_id", "place_number", "place_name", "area_m2", "department"],
+    "identifier_column": "place_id",
+}
+CARD_SPECS = {    # a one-row-per-(entity, parameter, value) table: its "identifier" is a value
+    "table": "bld_specs",
+    "columns": ["source_page", "subject", "parameter", "value"],
+    "identifier_column": "value",
+}
+CARD_SPACED = {   # an identifier whose printed name contains a space
+    "table": "bld_spaced",
+    "columns": ["S.N", "Name", "Serial number", "Description", "x1", "x2"],
+    "identifier_column": "Serial number",
+}
+
+# ---------------------------------------------------------------------------
+print("\n19. C1 — an aggregate result is never treated as an entity list")
+# ---------------------------------------------------------------------------
+q19 = "give me the breakdown of assets by kind"
+grouped = table_result(["kind", "count"], [["a", 3], ["b", 2], ["c", 9], ["d", 1],
+                                           ["e", 5], ["f", 4], ["g", 7], ["h", 6]],
+                       'SELECT kind, COUNT(*) AS count FROM "bld_assets" GROUP BY kind')
+check("a GROUP BY breakdown raises nothing", sql_loop.inspect_result(grouped, q19, [CARD_WIDE]) == [],
+      [i.kind for i in sql_loop.inspect_result(grouped, q19, [CARD_WIDE])])
+check("sql_is_aggregate sees GROUP BY",
+      sql_loop.sql_is_aggregate('SELECT kind, COUNT(*) FROM "t" GROUP BY kind'))
+check("sql_is_aggregate sees a bare aggregate call in the SELECT list",
+      sql_loop.sql_is_aggregate('SELECT SUM(load_kw) AS total FROM "t"'))
+check("but NOT an aggregate that is only in a subquery of the WHERE clause",
+      not sql_loop.sql_is_aggregate(
+          'SELECT asset_tag, model FROM "bld_assets" WHERE rating > (SELECT AVG(rating) FROM "bld_assets")'))
+# and the non-aggregate cases still behave
+sub = table_result(["asset_tag", "model"], [["A-1", "M-9"]],
+                   'SELECT asset_tag, model FROM "bld_assets" WHERE rating > (SELECT AVG(rating) FROM "bld_assets")')
+check("a plain list query is still inspected",
+      any(i.kind == sql_loop.NARROW_SELECT for i in sql_loop.inspect_result(sub, q4, [CARD_WIDE])),
+      [i.kind for i in sql_loop.inspect_result(sub, q4, [CARD_WIDE])])
+check("a clean 4-column list is still clean", sql_loop.inspect_result(
+    table_result(["unit_tag", "level_code", "kind", "notes"], [["U-1", "L1", "a", ""]],
+                 'SELECT * FROM "bld_units"'), "list all the units", [CARD_LIST]) == [])
+
+# ---------------------------------------------------------------------------
+print("\n20. F1/F2 — what makes a list nameable, and which column it is asked for")
+# ---------------------------------------------------------------------------
+q20 = "list all the places on level 1"
+# (a2) the writer complied with LIST_IDENTIFIER_RULE by selecting the printed number
+a2 = table_result(["place_number", "place_name", "area_m2"], [["1.01", "Studio", 30]],
+                  'SELECT place_number, place_name, area_m2 FROM "bld_places"')
+check("a result carrying a _number column is nameable — no issue",
+      sql_loop.inspect_result(a2, q20, [CARD_PLACES]) == [],
+      [i.kind for i in sql_loop.inspect_result(a2, q20, [CARD_PLACES])])
+# (a) a _name column also satisfies LIST_IDENTIFIER_RULE's own list, so the loop is silent.
+# This is the controller's ruling taken literally; flagged in the report, one constant to flip.
+a1 = table_result(["place_name", "area_m2"], [["Studio", 30]],
+                  'SELECT place_name, area_m2 FROM "bld_places"')
+check("a _name column also counts as nameable (LIST_IDENTIFIER_RULE's own list)",
+      sql_loop.inspect_result(a1, q20, [CARD_PLACES]) == [],
+      [i.kind for i in sql_loop.inspect_result(a1, q20, [CARD_PLACES])])
+# (a3) nothing nameable at all: it fires, and asks for the PRINTED number, not the key
+a3 = table_result(["area_m2", "department"], [[30, "X"]],
+                  'SELECT area_m2, department FROM "bld_places"')
+iss20 = sql_loop.inspect_result(a3, q20, [CARD_PLACES])
+im20 = next((i for i in iss20 if i.kind == sql_loop.IDENTIFIER_MISSING), None)
+check("with nothing nameable it fires", im20 is not None, [i.kind for i in iss20])
+check("and asks for the printed number, never the internal key",
+      im20 is not None and "`place_number`" in im20.instruction and "place_id" not in im20.instruction,
+      im20.instruction if im20 else "")
+# (b) a join: the driving table IS identified, so the value-table's "identifier" is not demanded
+b = table_result(["asset_tag", "spec_value"], [["A-1", "2MP"]],
+                 'SELECT a.asset_tag, s.value AS spec_value FROM "bld_assets" a '
+                 'JOIN "bld_specs" s ON s.subject = a.asset_tag')
+iss_b = sql_loop.inspect_result(b, "list the specs of all assets", [CARD_WIDE, CARD_SPECS])
+check("the spec join raises NARROW_SELECT, not IDENTIFIER_MISSING",
+      [i.kind for i in iss_b] == [sql_loop.NARROW_SELECT], [i.kind for i in iss_b])
+# F7 — an identifier with a space is quoted so the re-query is valid SQL
+sp = table_result(["Name", "Description"], [["n", "d"]], 'SELECT "Name", "Description" FROM "bld_spaced"')
+iss_sp = sql_loop.inspect_result(sp, "list all the things", [CARD_SPACED])
+im_sp = next((i for i in iss_sp if i.kind == sql_loop.IDENTIFIER_MISSING), None)
+check("an identifier containing a space is double-quoted, not left in backticks alone",
+      im_sp is not None and '"Serial number"' in im_sp.instruction, im_sp.instruction if im_sp else "")
+
+# ---------------------------------------------------------------------------
+print("\n21. F4 — the priority order, pinned by a result that raises two issues")
+# ---------------------------------------------------------------------------
+q21 = "list the details of every asset"
+both = table_result(["model", "make"], [["M-9", "K"]], 'SELECT model, make FROM "bld_assets"')
+iss21 = sql_loop.inspect_result(both, q21, [CARD_WIDE])
+check("both issues are raised", len(iss21) == 2, [i.kind for i in iss21])
+check("IDENTIFIER_MISSING before NARROW_SELECT",
+      [i.kind for i in iss21] == [sql_loop.IDENTIFIER_MISSING, sql_loop.NARROW_SELECT],
+      [i.kind for i in iss21])
+check("and the loop acts on IDENTIFIER_MISSING",
+      sql_loop.first_requery_issue(iss21).kind == sql_loop.IDENTIFIER_MISSING)
+# EMPTY outranks both — an all-NULL row still shows which columns were selected
+both_empty = table_result(["model", "make"], [[None, None]], 'SELECT model, make FROM "bld_assets"')
+iss21b = sql_loop.inspect_result(both_empty, q21, [CARD_WIDE])
+check("EMPTY comes first of the three",
+      [i.kind for i in iss21b] == [sql_loop.EMPTY, sql_loop.IDENTIFIER_MISSING, sql_loop.NARROW_SELECT],
+      [i.kind for i in iss21b])
+check("and the loop acts on EMPTY",
+      sql_loop.first_requery_issue(iss21b).kind == sql_loop.EMPTY)
+
+# ---------------------------------------------------------------------------
+print("\n22. F3 — a SQL written across lines, and a SQL naming no routed table")
+# ---------------------------------------------------------------------------
+multi = ("| place_name | area_m2 |\n| --- | --- |\n| Studio | 30 |\n\n"
+         'SQL: `SELECT place_name,\n       area_m2\nFROM "bld_places"\nWHERE level_code = \'L1\'`')
+check("result_sql captures a multi-line query",
+      'FROM "bld_places"' in sql_loop.result_sql(multi), repr(sql_loop.result_sql(multi)))
+check("so the right card is consulted",
+      [c["table"] for c in sql_loop.cards_in_sql(sql_loop.result_sql(multi), [CARD_WIDE, CARD_PLACES])]
+      == ["bld_places"])
+# and when the SQL names none of the routed tables, the identifier issue degrades to silence
+elsewhere = table_result(["area_m2", "department"], [[30, "X"]], 'SELECT area_m2, department FROM "other"')
+check("a SQL naming no routed table raises no identifier issue",
+      not any(i.kind == sql_loop.IDENTIFIER_MISSING
+              for i in sql_loop.inspect_result(elsewhere, q20, [CARD_PLACES, CARD_WIDE])),
+      [i.kind for i in sql_loop.inspect_result(elsewhere, q20, [CARD_PLACES, CARD_WIDE])])
+
+# ---------------------------------------------------------------------------
+print("\n23. F6 — every step reports its outcome, and the answer names its tool")
+# ---------------------------------------------------------------------------
+ex = FakeExec([empty_result(sql2), good])
+events = list(sql_loop.iter_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch(),
+                                              routed_cards=[CARD_LIST], max_steps=3))
+dones = [p for k, p in events if k == "step_done"]
+check("one step_done per step", len(dones) == 2, dones)
+check("step_done 1 reports the empty outcome and what was found",
+      dones[0]["step"] == 1 and dones[0]["empty"] is True
+      and dones[0]["issues_found"] == [sql_loop.EMPTY], dones[0])
+check("step_done 2 reports rows and no issues",
+      dones[1]["step"] == 2 and dones[1]["empty"] is False
+      and dones[1]["rows"] == 1 and dones[1]["issues_found"] == [], dones[1])
+inv = events[-1][1]
+check("source_tool says the answer came from the tables",
+      inv.source_tool == "query_structured_data", inv.source_tool)
+check("Investigation.issues lists what was found", inv.issues == [sql_loop.EMPTY], inv.issues)
+ex = FakeExec(["SQL query failed: boom\n\nGenerated SQL: `SELECT 1`"])
+inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch("DOCTEXT"),
+                                     routed_cards=[CARD_LIST], max_steps=3)
+check("after a fallback, source_tool says search_documents",
+      inv.source_tool == "search_documents", inv.source_tool)
+check("a truncated result reports its TRUE row count",
+      sql_loop.result_total_rows(trunc) == 352, sql_loop.result_total_rows(trunc))
+
+# ---------------------------------------------------------------------------
+print("\n24. F5 — the wall-clock guard reuses SQL_QUERY_TIMEOUT")
+# ---------------------------------------------------------------------------
+class FakeClock:
+    def __init__(self, *times):
+        self.times = list(times)
+    def __call__(self):
+        return self.times.pop(0) if len(self.times) > 1 else self.times[0]
+
+check("the budget is SQL_QUERY_TIMEOUT", sql_loop.investigation_budget_seconds() == 5.0,
+      sql_loop.investigation_budget_seconds())
+ex = FakeExec([empty_result(sql2), good])
+inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch("DOCTEXT"),
+                                     routed_cards=[CARD_LIST], max_steps=3,
+                                     clock=FakeClock(0.0, 99.0))
+check("a step that blows the budget stops the loop", len(ex.questions) == 1, ex.questions)
+check("and the empty result still reaches the document fallback", "DOCTEXT" in inv.result_text,
+      inv.result_text[:120])
+ex = FakeExec([empty_result(sql2), good])
+inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch(),
+                                     routed_cards=[CARD_LIST], max_steps=3,
+                                     clock=FakeClock(0.0, 0.1))
+check("inside the budget the loop runs on", len(ex.questions) == 2, ex.questions)
+
+# ---------------------------------------------------------------------------
+print("\n25. The remaining minors")
+# ---------------------------------------------------------------------------
+# F9 — a finding that is not a re-query still reaches the trailer and the Investigation
+ex = FakeExec([trunc])
+inv = sql_loop.run_sql_investigation("list all the units", "u1", None, execute=ex,
+                                     search=FakeSearch(), routed_cards=[CARD_LIST], max_steps=3)
+check("TRUNCATED_NO_SHAPE reaches Investigation.issues",
+      sql_loop.TRUNCATED_NO_SHAPE in inv.issues, inv.issues)
+check("and the trailer", "TRUNCATED_NO_SHAPE" in inv.result_text, inv.result_text[-160:])
+check("without causing a re-query", len(ex.questions) == 1, ex.questions)
+
+# F8 — a quantity question whose SQL answered with a LIST is not cross-checked
+listy = table_result(["unit_tag", "kw"], [["U-1", 3], ["U-2", 4], ["U-3", 5], ["U-4", 6]],
+                     'SELECT unit_tag, kw FROM "bld_units" WHERE block = \'B\'')
+check("no cross-check on a multi-row list",
+      not any(i.kind == sql_loop.COUNT_CROSSCHECK
+              for i in sql_loop.inspect_result(listy, "what is the total load of block B?", [CARD_LIST])),
+      [i.kind for i in sql_loop.inspect_result(listy, "what is the total load of block B?", [CARD_LIST])])
+check("but a single-cell total is cross-checked",
+      any(i.kind == sql_loop.COUNT_CROSSCHECK for i in sql_loop.inspect_result(
+          table_result(["total_kw"], [[5785.87]], 'SELECT SUM(kw) AS total_kw FROM "bld_units"'),
+          "what is the total load of the site?", [CARD_LIST])))
+check("and so is a GROUP BY count", any(i.kind == sql_loop.COUNT_CROSSCHECK
+      for i in sql_loop.inspect_result(
+          table_result(["level_code", "n"], [["L1", 4], ["L2", 9], ["L3", 2], ["L4", 7]],
+                       'SELECT level_code, COUNT(*) AS n FROM "bld_units" GROUP BY level_code'),
+          "how many units are on each level?", [CARD_LIST])))
+
+# F10 — the search gets the USER's own wording, not the tool's paraphrase
+ex = FakeExec([empty_result(sql2)] * 2)
+se = FakeSearch("DOCTEXT")
+inv = sql_loop.run_sql_investigation("paraphrased question", "u1", None, execute=ex, search=se,
+                                     routed_cards=[CARD_LIST], max_steps=3,
+                                     user_question="the user's own words")
+check("search receives the original user question", se.queries == ["the user's own words"], se.queries)
+check("and the SQL still got the tool's question", ex.questions[0] == "paraphrased question",
+      ex.questions)
+
+# F14 — the widening ask is bounded and says which rows
+ns25 = next(i for i in sql_loop.inspect_result(both, q21, [CARD_WIDE])
+            if i.kind == sql_loop.NARROW_SELECT)
+check("NARROW_SELECT caps the ask at the card's non-citation columns",
+      "at most 8 columns" in ns25.instruction, ns25.instruction)
+check("and asks only for the matching rows",
+      "for the matching rows only" in ns25.instruction, ns25.instruction)
 
 print("\nALL PASS" if not FAILS else f"\n{len(FAILS)} FAILED")
 sys.exit(1 if FAILS else 0)
