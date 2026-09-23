@@ -17,6 +17,7 @@ from langsmith import traceable
 
 from app.services.settings import (
     get_llm_api_key, get_llm_model, get_metadata_schema,
+    get_sql_loop_max_steps,
     get_text_to_sql_enabled, get_web_search_enabled,
 )
 
@@ -48,8 +49,8 @@ OUTPUT_FORMAT_RULES = """
 OUTPUT FORMAT RULES (strict):
 - Never output raw HTML in your answer. Tags like <table>, <tr>, <td>, <th>, <br>, <span>, <div> are forbidden. If the source excerpts contain HTML, extract the data into clean markdown.
 - For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render the rows you were given as a clean markdown table. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity). MANDATORY: when a quantity/points column is present, the table's last row MUST be a Total row, and the sentence introducing or closing the table MUST state that total explicitly. That Total is the figure on the result's own "TOTAL <col> (all N rows)" line whenever the result carries one — never a sum over the rows you were shown, which may be only part of the result. If the result carries no such line, sum the rows you were given and say that the total covers only those rows.
-- If a tool result says "Showing M of N rows" or carries a "RESULT SHAPE" line, say how many rows exist and how many you were shown. The RESULT SHAPE line is where the row and shown counts and every per-value count come from; it carries no sums. Every total comes from the result's own "TOTAL <col> (all N rows)" line instead. NEVER describe, count or generalise about rows you were not shown — whatever the question's form. Never print the words RESULT SHAPE or TOTAL, those lines themselves or the "value (N)" notation — state those numbers in plain words.
-- Never reveal internal notes from tool results. Lines like "SQL: `...`" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
+- If a tool result says "Showing M of N rows" or carries a "RESULT SHAPE" line, say how many rows exist and how many you were shown. The RESULT SHAPE line is where the row and shown counts and every per-value count come from; it carries no sums. Every total comes from the result's own "TOTAL <col> (all N rows)" line instead. NEVER describe, count or generalise about rows you were not shown — whatever the question's form. Never print the words RESULT SHAPE or TOTAL, those lines themselves or the "value (N)" notation — state those numbers in plain words. When the result shows several investigation steps, answer from the LAST result only — the earlier ones were superseded.
+- Never reveal internal notes from tool results. Lines like "SQL: `...`", a line beginning "INVESTIGATION - steps:" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
 - A tool result may end with one or more "SOURCE - <table>: ..." lines saying which record each number was read from. When you state a count, total or any other figure from that result, NAME the record it came from in plain words (e.g. "68 door positions, counted from the as-built access-control drawings"; "421 units, from the mechanical asset register"), because the building's documents often print more than one figure for the same thing. Never print the table name or the word SOURCE itself.
 - Identifiers are copied character for character: phone numbers, meter and account numbers, serials, tags and part numbers keep every leading zero, space, dash and letter exactly as the result shows them. Never reformat one as a number.
 - Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
@@ -1301,7 +1302,9 @@ Document excerpts:
                 yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No documents found"}))
 
         elif tool_name == "query_structured_data":
-            from app.services.sql_tool import execute_sql_query
+            from app.services.sql_tool import execute_sql_query, route_tables
+            from app.services.sql_loop import (COUNT_CROSSCHECK, EMPTY,
+                                               iter_sql_investigation)
             question = args.get("question", "")
             # The router's paraphrase can drop parts of the user's intent
             # (e.g. "total load" reduced to "which panels") — always give the
@@ -1309,59 +1312,133 @@ Document excerpts:
             last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
             if last_user_msg and last_user_msg.strip().lower() not in question.strip().lower():
                 question = f"{last_user_msg}\n(Additional context from the assistant: {question})"
-            result_text = execute_sql_query(question, user_id, supabase_client)
 
-            # Empty SQL results on a question that MIGHT be a document question
-            # (e.g. "how many CCTV cameras are installed?" — cameras are
-            # equipment, not a load-schedule row) get a second chance against
-            # the document index. The SQL outcome is kept in the context so the
-            # model can still answer "not found" for genuinely absent entities
-            # instead of hallucinating from unrelated excerpts.
-            if _sql_result_is_empty(result_text) and has_documents:
-                # Search with the user's own wording — `question` may carry the
-                # SQL-augmentation prefix, which dilutes keyword ranking.
-                doc_query = last_user_msg or question
-                logger.info(f"SQL returned no data, augmenting with search_documents for: {doc_query}")
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No rows — checking documents"}))
-                yield ("tool_start", json.dumps({"tool": "search_documents", "args": {"query": doc_query}}))
+            # THE BOUNDED INVESTIGATION (spec 2026-09-23 §3). This used to be one
+            # `execute_sql_query` plus two inline document fallbacks. `sql_loop`
+            # now owns all three: it runs the query, INSPECTS the result text by
+            # code, re-queries on a deficiency it can name (a list with no
+            # identifier column, a two-column answer to a specs question, no rows
+            # at all), cross-checks a quantity against the documents, and performs
+            # the same two terminal fallbacks — word for word, so
+            # `SQL_LOOP_MAX_STEPS=1` is today's behaviour, today's event sequence
+            # included (pinned literally by `tests/test_sql_loop_wiring.py` §5).
+            #
+            # THE EVENT MAPPING, and why the first step is special. The dispatcher
+            # above already yielded a `tool_start` for this tool call, and that
+            # event IS step 1's — so step 1 announces nothing of its own and a
+            # second step is the first to do so, carrying its number and the issue
+            # that caused it. A step's `tool_done` is held back until the next
+            # event says what it is: a terminal fallback REPLACES it with today's
+            # wording, because today that fallback's `tool_done` was the only one
+            # the step ever got. Emitting both would put a new event on the
+            # trajectory the ruler scores.
+            found_count = [0]
+
+            def _search_documents_for_loop(query: str) -> str:
+                """The loop's `search`: today's excerpt block, plus the chunk count
+                the closing `tool_done` reports (the loop is handed text, so the
+                count has to be recorded here or it is lost)."""
                 chunks = _execute_search_documents(
-                    search_query=doc_query,
+                    search_query=query,
                     metadata_filter=None,
                     user_id=user_id,
                     supabase_client=supabase_client,
                 )
-                if chunks:
-                    doc_context = "\n\n---\n\n".join(
-                        f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
-                    )
-                    result_text = (
-                        "The structured tables returned no rows for this question. "
-                        "Document excerpts that may answer it instead:\n\n" + doc_context +
-                        "\n\n(If the excerpts do not contain the answer either, say the "
-                        "information was not found — do not guess.)"
-                    )
-                    tool_name = "search_documents"
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks) if chunks else 0} results"}))
-
-            # If SQL failed and user has documents, fall back to document search
-            elif result_text.startswith("SQL query failed") and has_documents:
-                logger.info(f"SQL tool failed, falling back to search_documents for: {question}")
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "SQL failed, falling back"}))
-                yield ("tool_start", json.dumps({"tool": "search_documents", "args": {"query": question}}))
-                chunks = _execute_search_documents(
-                    search_query=question,
-                    metadata_filter=None,
-                    user_id=user_id,
-                    supabase_client=supabase_client,
+                found_count[0] = len(chunks) if chunks else 0
+                if not chunks:
+                    return ""
+                return "\n\n---\n\n".join(
+                    f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
                 )
-                if chunks:
-                    result_text = "\n\n---\n\n".join(
-                        f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
-                    )
-                    tool_name = "search_documents"
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks) if chunks else 0} results"}))
-            else:
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "Query executed"}))
+
+            try:
+                routed_cards = route_tables(question, user_id, supabase_client)
+            except Exception as e:
+                logger.warning(f"sql_loop: could not route the cards "
+                               f"({type(e).__name__}: {e}); the investigation "
+                               f"runs without them")
+                routed_cards = []
+
+            pending_done = None
+            searched_kind = None
+            for _evt, _payload in iter_sql_investigation(
+                question, user_id, supabase_client,
+                execute=execute_sql_query,
+                # No documents means no fallback and no cross-check, exactly as
+                # today's two `and has_documents` guards did.
+                search=_search_documents_for_loop if has_documents else None,
+                routed_cards=routed_cards,
+                max_steps=get_sql_loop_max_steps(),
+                # The document index is searched with the USER's own wording; the
+                # augmented `question` above carries the router's paraphrase,
+                # which dilutes keyword ranking.
+                user_question=last_user_msg or question,
+            ):
+                if _evt == "step":
+                    if pending_done:
+                        yield pending_done
+                        pending_done = None
+                    if _payload["step"] > 1:
+                        yield ("tool_start", json.dumps({
+                            "tool": "query_structured_data",
+                            "args": {"question": question,
+                                     "step": _payload["step"],
+                                     "issue": _payload["issue"]},
+                        }))
+                elif _evt == "step_done":
+                    issues_found = _payload["issues_found"]
+                    if issues_found:
+                        detail = (f"step {_payload['step']}: {_payload['rows']} rows "
+                                  f"— {issues_found[0]}")
+                    elif _payload["step"] == 1:
+                        # Today's wording for the one-step case, unchanged.
+                        detail = "Query executed"
+                    else:
+                        detail = f"step {_payload['step']}: {_payload['rows']} rows"
+                    pending_done = ("tool_done", json.dumps({
+                        "tool": "query_structured_data", "detail": detail}))
+                elif _evt == "crosscheck":
+                    searched_kind = _payload["kind"]
+                    if searched_kind == COUNT_CROSSCHECK:
+                        if pending_done:
+                            yield pending_done
+                            pending_done = None
+                        logger.info(f"quantity question — cross-checking the "
+                                    f"documents for: {_payload['query']}")
+                        yield ("tool_start", json.dumps({
+                            "tool": "search_documents",
+                            "args": {"query": _payload["query"], "purpose": "cross-check"},
+                        }))
+                    else:
+                        pending_done = None
+                        logger.info(
+                            f"SQL {'returned no data' if searched_kind == EMPTY else 'failed'}, "
+                            f"falling back to search_documents for: {_payload['query']}")
+                        yield ("tool_done", json.dumps({
+                            "tool": "query_structured_data",
+                            "detail": ("No rows — checking documents"
+                                       if searched_kind == EMPTY
+                                       else "SQL failed, falling back"),
+                        }))
+                        yield ("tool_start", json.dumps({
+                            "tool": "search_documents",
+                            "args": {"query": _payload["query"]},
+                        }))
+                elif _evt == "final":
+                    if pending_done:
+                        yield pending_done
+                        pending_done = None
+                    result_text = _payload.result_text
+                    # Today's reassignment, now reported by the loop rather than
+                    # re-derived here: "search_documents" once a fallback has
+                    # supplied the text, "query_structured_data" otherwise.
+                    tool_name = _payload.source_tool
+                    if searched_kind is not None:
+                        yield ("tool_done", json.dumps({
+                            "tool": ("search_documents"
+                                     if searched_kind == COUNT_CROSSCHECK else tool_name),
+                            "detail": f"Found {found_count[0]} results",
+                        }))
 
         elif tool_name == "web_search":
             from app.services.web_search import execute_web_search

@@ -656,6 +656,30 @@ def _fix_table_names(sql: str, real_table_names: list[str],
     return sql
 
 
+def route_tables(question: str, user_id: str, supabase_client) -> list[dict]:
+    """The CARDS the router picks for `question` - the same selection
+    `execute_sql_query` makes below, returned as cards rather than as the
+    `structured_data` rows it narrows.
+
+    `sql_loop.inspect_result` needs the cards, not the tables: what it asks of a
+    result is whether the identifier column a card DECLARES came back, and which
+    of that card's columns are worth widening to. Deliberately the same two calls
+    in the same order, with the same two fallbacks - no cards, or a cards file of
+    the wrong shape, yields `[]`, which the inspector documents as "the
+    column-shaped issues never fire".
+    """
+    cards = _load_table_cards(user_id, supabase_client)
+    if not cards:
+        return []
+    try:
+        selected = set(select_tables(question, cards, k=3))
+    except Exception as e:
+        logger.warning(f"table_router: routing failed ({type(e).__name__}: {e}); "
+                       f"the investigation runs without cards")
+        return []
+    return [c for c in cards if c.get("table") in selected]
+
+
 @traceable(name="query_structured_data", run_type="tool")
 def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     """Generate SQL from a natural language question and execute it against user's tabular data."""

@@ -94,6 +94,35 @@ def get_web_search_enabled() -> bool:
     return val if val is not None else False
 
 
+DEFAULT_SQL_LOOP_MAX_STEPS = 3
+SQL_LOOP_MAX_STEPS_ENV = "SQL_LOOP_MAX_STEPS"
+
+
+def get_sql_loop_max_steps() -> int:
+    """How many SQL calls one question's investigation may make, from the
+    `SQL_LOOP_MAX_STEPS` environment setting (default 3).
+
+    An ENVIRONMENT setting, not a `global_settings` column, on purpose: it is the
+    switch a BEFORE/AFTER measurement flips between two runs on the same commit,
+    and it has to be flippable without a database write and without touching the
+    settings any other question reads. `1` is the documented off position - spec
+    4 binds it to "byte-identical to today".
+
+    Anything unreadable falls back to the default, and so does anything below 1:
+    a mistyped budget must make the loop behave normally, never silently switch
+    it off, because a silently one-shot loop would look exactly like a loop that
+    ran and found nothing. Read at call time so a deployment can change it.
+    """
+    raw = os.environ.get(SQL_LOOP_MAX_STEPS_ENV)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_SQL_LOOP_MAX_STEPS
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_SQL_LOOP_MAX_STEPS
+    return value if value >= 1 else DEFAULT_SQL_LOOP_MAX_STEPS
+
+
 def get_tavily_api_key() -> str:
     settings = get_settings()
     key = settings.get("tavily_api_key") if settings else None
