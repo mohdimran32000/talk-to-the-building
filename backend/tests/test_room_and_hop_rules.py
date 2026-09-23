@@ -105,5 +105,27 @@ check("the two new rules are appended after them, not woven into the f-string "
       SRC.index("EQUIPMENT_COUNT_RULE") < SRC.index("ROOM_CONTENTS_RULE")
       if "ROOM_CONTENTS_RULE" in SRC else False)
 
+print(chr(10) + "4. Lists carry identifiers; spec tables return every parameter")
+check("LIST_IDENTIFIER_RULE exists", hasattr(sql_tool, "LIST_IDENTIFIER_RULE"))
+li = getattr(sql_tool, "LIST_IDENTIFIER_RULE", "")
+check("it mentions the identifier column", "identifier" in li.lower(), li[:200])
+check("it says to SELECT it", "SELECT" in li, li[:200])
+check("it names no table of this project",
+      not any(t in li for t in ("hwu_", "Heriot", "RM-", "L06-B", "MDB-C", "SMDB")), li[:300])
+check("it is in the SQL-generation prompt", "LIST_IDENTIFIER_RULE" in SRC)
+
+check("ALL_PARAMETERS_RULE exists", hasattr(sql_tool, "ALL_PARAMETERS_RULE"))
+ap = getattr(sql_tool, "ALL_PARAMETERS_RULE", "")
+check("it says to return every/all parameter",
+      "every parameter" in ap.lower() or "all parameter" in ap.lower(), ap[:300])
+check("it names no table of this project",
+      not any(t in ap for t in ("hwu_", "product_specs", "cctv", "Heriot")), ap[:300])
+check("it is in the SQL-generation prompt", "ALL_PARAMETERS_RULE" in SRC)
+
+check("both new rules follow TWO_HOP_RULE in the prompt, not woven into the "
+      "f-string body (tags stay OUT of the prompt text)",
+      SRC.index("TWO_HOP_RULE") < SRC.index("LIST_IDENTIFIER_RULE") < SRC.index("ALL_PARAMETERS_RULE")
+      if "LIST_IDENTIFIER_RULE" in SRC and "ALL_PARAMETERS_RULE" in SRC else False)
+
 print(f"{chr(10)}{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

@@ -167,6 +167,29 @@ TWO_HOP_RULE = (
     "is not recorded."
 )
 
+# ---------------------------------------------------------------------------
+# LISTING ENTITIES / SPEC-TABLE COMPLETENESS — spec 2026-09-23 item 1, proactive
+# (no single eval case number: these guard the two writer habits the plan
+# calls IDENTIFIER_MISSING and spec-table under-selection, ahead of the
+# verifying loop that will catch them live). Written from SHAPE — an
+# identifier-shaped column by name or schema role, a one-row-per-(entity,
+# parameter) table shape — so neither names a table, column value or
+# building.
+LIST_IDENTIFIER_RULE = (
+    "- LISTING ENTITIES ('what are the rooms/boards/doors/cameras \u2026', 'list \u2026', "
+    "'which \u2026'): ALWAYS SELECT the table's identifier column FIRST \u2014 the column that "
+    "names or numbers each row (a room number, a board name, a door id, a camera tag: the column "
+    "the schema marks as the identifier or whose name ends in _number/_id/_tag/_name) \u2014 then "
+    "the descriptive columns. A list without identifiers cannot be acted on."
+)
+
+ALL_PARAMETERS_RULE = (
+    "- A table with one row per (entity, parameter, value) is a specification table: when asked "
+    "for specs/specifications/details of an entity, return EVERY parameter row for the matching "
+    "entities (filter on the entity column only, never on the parameter column unless one "
+    "parameter is asked for), so the answer can list all of them."
+)
+
 class _QueryTimeoutError(Exception):
     """Raised when a DuckDB query is aborted for running past SQL_QUERY_TIMEOUT."""
 
@@ -817,6 +840,12 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     #   predicate/object)                     the change-impact    answered from the asset's own
     #                                         path, 2026-09-16     row alone, so nothing it
     #                                                              affects is ever named
+    # listing entities: identifier          no eval case yet —   a list of names/tags with no
+    #   column first                        spec 2026-09-23      id column cannot be acted on
+    #                                         item 1, proactive
+    # spec table: every parameter row        no eval case yet —   a filtered spec query returns
+    #   for the matching entities             spec 2026-09-23      one parameter instead of the
+    #                                         item 1, proactive     full spec list
     #
     # Rules above these (exact table names, quoting, DuckDB syntax, CAST) are
     # generic SQL correctness, not domain fossils — no provenance needed.
@@ -869,6 +898,8 @@ Rules:
 {EQUIPMENT_COUNT_RULE}
 {ROOM_CONTENTS_RULE}
 {TWO_HOP_RULE}
+{LIST_IDENTIFIER_RULE}
+{ALL_PARAMETERS_RULE}
 
 User question: {question}"""
 
