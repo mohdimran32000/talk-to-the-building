@@ -122,8 +122,11 @@ ROOM_CONTENTS_RULE = (
     "printed name is what the question gave you. SELECT the place-name column, the "
     "system/category column, the item/description column and the quantity column, and ORDER BY "
     "the place-name column then the system so each place's items stay together. ALSO RETURN THE "
-    "TOTALS in the same query — the total quantity for the place and the quantity per system, "
-    "e.g. UNION ALL a labelled total row (SELECT '<place>', 'TOTAL', NULL, SUM(<quantity>) …) — "
+    "TOTALS in the same query — the total quantity for the place and the quantity per system "
+    "— as EXTRA COLUMNS on every row, with window functions (e.g. SUM(<quantity>) OVER () "
+    "AS place_total, SUM(<quantity>) OVER (PARTITION BY <system column>) AS system_total), and "
+    "never as an extra UNION ALL row: a set operation needs both arms to project identical "
+    "column lists, which is where an arm padded with NULLs comes from. Return them, "
     "because 'what is in this place' is answered by the list AND its count, and a list with no "
     "total makes the answer invent one or count rows instead of units. If the printed name "
     "matches more than one place, return them all, each with its place-name column, so the "
@@ -146,6 +149,22 @@ ROOM_CONTENTS_RULE = (
 #     own printed rating: 143.6 / 192.63 / 1445.45 kW, each the missing group.
 # Written from SHAPE — a row with an id column, a table whose rows are the
 # children — so it names no table and no building.
+#
+# ONE CLAUSE WITHDRAWN, 2026-09-28 (the owner's ruling on his own room-1.29
+# trace). This rule used to end: "(UNION ALL one labelled block per part is
+# fine, with a constant column naming which part each block answers)". Read
+# literally against two tables of DIFFERENT WIDTHS, that is the query the writer
+# produced - and, having to pad the narrow arm to a width it could not know, it
+# emitted `NULL,` until the 8,192-token output cap stopped it (8,188 output
+# tokens), for a Binder Error and an answer taken from a stray document chunk.
+# TWO_PART_RULE below now says the opposite, and two rules contradicting each
+# other in one prompt is the wrong end state, so the clause is withdrawn rather
+# than left to be outvoted. Nothing is lost: the JOIN it offered alongside is
+# kept and is now the only answer on offer. The same construction was withdrawn
+# from ROOM_CONTENTS_RULE above on the same day, where the totals now come from
+# window functions. `tests/test_room_and_hop_rules.py` section 7 sweeps every
+# rule the model is sent and proves that no UNION in the prompt is anything but
+# a prohibition.
 TWO_HOP_RULE = (
     "- A QUESTION IN TWO PARTS ABOUT ONE NAMED THING ('which network room AND which switch', "
     "'what does X feed AND what feeds X', 'which room does it control AND what else is in that "
@@ -157,8 +176,8 @@ TWO_HOP_RULE = (
     "records do not contain a value that was printed on the row it just read. NEVER INVENT A "
     "COLUMN that is not listed above in order to make a join; if no column of that row answers "
     "the second part, join to the table whose rows ARE those things, on the value this row "
-    "prints, in the SAME query (UNION ALL one labelled block per part is fine, with a constant "
-    "column naming which part each block answers). A COUNT of what something HAS comes from the "
+    "prints, in the SAME query — a JOIN on that shared key, and never a set operation, "
+    "whose arms must project identical column lists. A COUNT of what something HAS comes from the "
     "table whose rows are those things (count the circuit rows in the circuits table), never "
     "from the thing's own row and never from the parent's feeder row, which holds one row per "
     "child board and not one per circuit. And when the question asks about a thing AND its "
@@ -997,6 +1016,10 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # two-part question -> SELECT * of       ex-046 … 051, 055     two columns of a wide row ->
     #   the thing's own row                                        "the records do not contain"
     #                                                              a value printed on that row
+    #   (its "UNION ALL one labelled block per part is fine" clause WITHDRAWN
+    #    2026-09-28 - it is what produced the runaway below; the JOIN it offered
+    #    alongside is kept, and the what-is-in-a-place rule above lost the same
+    #    clause on the same day)
     # the dependency graph (subject/          no eval case yet —   a change-impact question is
     #   predicate/object)                     the change-impact    answered from the asset's own
     #                                         path, 2026-09-16     row alone, so nothing it

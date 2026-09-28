@@ -200,5 +200,68 @@ check("and the rules it was added beside are all still in the prompt",
       all(n in SRC for n in ("TWO_HOP_RULE", "LIST_IDENTIFIER_RULE",
                              "ORDER_BY_BLANKS_RULE", "ALL_PARAMETERS_RULE")))
 
+print(chr(10) + "7. No rule in the prompt recommends a set operation any more")
+# Owner's ruling, 2026-09-28. TWO_HOP_RULE used to end "(UNION ALL one labelled block
+# per part is fine, with a constant column naming which part each block answers)" - and
+# on the room-1.29 trace that is precisely what the writer did, across two tables of
+# different widths, padding the narrow arm with NULLs until the output cap stopped it.
+# TWO_PART_RULE now says the opposite, and two rules contradicting each other in one
+# prompt is the wrong end state, so the clause is withdrawn rather than outvoted.
+h7 = getattr(sql_tool, "TWO_HOP_RULE", "")
+check("TWO_HOP_RULE no longer mentions UNION at all", "UNION" not in h7.upper(), h7[-400:])
+check("it still sends the second part to a JOIN in the same query",
+      "JOIN" in h7.upper() and "same query" in h7.lower(), h7[-400:])
+check("and it now says a set operation is never the way",
+      "never a set operation" in h7.lower(), h7[-400:])
+check("it is still one prompt bullet", h7.startswith("- ") and h7.count(chr(10)) == 0,
+      h7[:80])
+check("the rest of the rule survives the edit - SELECT * of the thing's own row",
+      "SELECT *" in h7 and "EVERY COLUMN" in h7.upper(), h7[:300])
+check("- and the count-from-the-children-table clause",
+      "count" in h7.lower(), h7[:600])
+check("- and the include-its-own-totals clause",
+      "own" in h7.lower() and ("total" in h7.lower() or "rating" in h7.lower()), h7)
+check("the withdrawal is recorded in the source, with its date",
+      "2026-09-28" in inspect.getsource(sql_tool)
+      and "withdrawn" in inspect.getsource(sql_tool).lower(),
+      [l.strip() for l in inspect.getsource(sql_tool).splitlines()
+       if "withdrawn" in l.lower()])
+check("TWO_HOP_RULE keeps its provenance line",
+      "two-part question -> SELECT * of" in SRC,
+      [l.strip() for l in SRC.splitlines() if "SELECT * of" in l])
+
+# The real assertion: assemble the text the model is actually SENT - every named rule
+# constant, plus the bullets written inline in the prompt f-string (those start at
+# column 0; the PROVENANCE MAP lines are comments and start with '#', so they are not
+# swept in) - and prove every UNION in it is a prohibition. 60 characters is generous:
+# the point is that no occurrence stands on its own as a recommendation.
+RULE_CONSTANTS = [n for n in dir(sql_tool) if n.endswith("_RULE")]
+check("the sweep actually found the rule constants", len(RULE_CONSTANTS) >= 7,
+      RULE_CONSTANTS)
+INLINE_BULLETS = [l for l in SRC.splitlines() if l.startswith("- ")]
+check("the sweep actually found the inline prompt bullets", len(INLINE_BULLETS) >= 20,
+      len(INLINE_BULLETS))
+SENT = [str(getattr(sql_tool, n)) for n in RULE_CONSTANTS] + INLINE_BULLETS
+
+NEGATORS = ("never", "no ", "not ")
+offenders = []
+total_unions = 0
+for text in SENT:
+    low = text.lower()
+    start = 0
+    while True:
+        i = low.find("union", start)
+        if i < 0:
+            break
+        total_unions += 1
+        window = low[max(0, i - 60):i]
+        if not any(neg in window for neg in NEGATORS):
+            offenders.append(text[max(0, i - 80):i + 80])
+        start = i + 1
+check("the sweep found UNION somewhere - it is not passing vacuously",
+      total_unions >= 2, total_unions)
+check("every UNION the model is sent is a prohibition, within 60 chars of "
+      "never/no/not", offenders == [], offenders)
+
 print(f"{chr(10)}{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)
