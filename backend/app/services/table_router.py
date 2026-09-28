@@ -18,8 +18,8 @@ builds deterministically from the manifests and CSVs already on disk
 verified text; nothing here adds anything else. Card shape (see
 `11_table_cards.py` for how each field was computed):
     table, document, row_count, columns, identifier_column,
-    identifier_prefixes, one_row_is, holds, value_vocabulary, joins_to,
-    caveats
+    identifier_prefixes, identifier_values, one_row_is, holds,
+    value_vocabulary, joins_to, caveats
 
 WHY LEXICAL, NOT EMBEDDING, SCORING
 The obvious design is "embed every card once, embed the question, take the
@@ -47,7 +47,12 @@ what a card carries:
      exists for. A place named only by the NAME printed on its door is
      recognised too — off the cards, never from a list in this file; see
      `_place_names` and the tie-break in `select_tables`.
-The change signal is NOT a fifth tier — it is a guard, like the neighbour
+  5. identifier value (weight 6, SHARED among the cards the question's code
+     matches) — the question prints one of a card's own CODED values whole
+     ('DWG-100-CC-0203', 'Foam Extinguisher, 6 Kg'), read off the card's
+     `identifier_values` AND every column of its `value_vocabulary`, never a
+     word list; see `_IDENTIFIER_VALUE_WEIGHT` below.
+The change signal is NOT a scoring tier — it is a guard, like the neighbour
 rule below. See `_CHANGE_VERB_RES` and the change-guard block in
 `select_tables`.
 
@@ -80,6 +85,7 @@ Appending instead of promoting makes the guard strictly additive — it can
 never cost a question a table it selects today, which is what the replay
 then measured (18 changed, 0 lost).
 """
+import functools
 import re
 
 # ---------------------------------------------------------------------------
@@ -393,6 +399,155 @@ def _names_a_place_by_name(question: str, place_names) -> bool:
     return any(_contains_phrase(q, n) for n in place_names)
 
 
+# ---------------------------------------------------------------------------
+# TIER 5 — A ROW NAMED BY ITS OWN PRINTED IDENTIFIER
+#
+# THE DEFECT, measured on the ruler 2026-09-28 (doc-prep/work_spine/router_recall.py):
+# questions naming one row of a small table by the exact string it prints — a drawing
+# number, a part description — never reached that table. A small table carries no value
+# vocabulary and no card offers its identifier column as vocabulary, so tiers 1-3 had
+# nothing to match; where a prefix did match, several drawing registers share it, tie at 6,
+# and list position chose.
+#
+# THE VALUES COME OFF THE CARDS, like tier 4b's names: a printed code is DATA, and this module
+# holds no table name, no column value and no building fact. doc-prep writes
+# `identifier_values` onto each card whose identifier column has at most 60 distinct values,
+# keeping only CODED ones. A card set published before that field existed carries none, and
+# this tier stays silent — the old behaviour exactly (pinned in test_table_router_identifier).
+#
+# WHY THE ENUMERATED COLUMNS ARE READ TOO, measured 2026-09-28
+# (doc-prep/work_spine/router-vocab-2026-09-28.md): a question naming an asset by its exact
+# printed code can find that code sitting in a card's `value_vocabulary`, not its identifier
+# column at all — one table's rows are keyed by something else entirely, and the model code it
+# also prints lives in an enumerated column. A two-evidence question naming that code lost the
+# table outright: three OTHER, model-keyed tables took every ranked slot tier 5 had to give,
+# because only their identifier columns carried it. `_vocabulary_values(card)` reads every
+# column of `value_vocabulary` the same way `identifier_values` is read — same CODED, same
+# minimum length, same place exclusion — so a printed code counts wherever the card prints it,
+# not only in the one column doc-prep calls "the identifier".
+#
+# WHY A WHOLE PHRASE — measured: the same values admitted as WORDS gained 23 questions and lost
+# 11. WHY CODED ONLY (a digit or a hyphen) — measured: uncoded values fired on ordinary words
+# and lost 5. WHY NOT A PLACE — a place is tier 4's to route; scoring it here would count one
+# piece of evidence twice, so a value is skipped wherever tier 4's own shapes would recognise it
+# — a floor code embedded inside a longer tag ('AC-6F-B-01') counts as a place hit, exactly like
+# a bare one. WHY 6 — the weight of a prefix match: a printed identifier is the strongest
+# evidence a question carries, and where several tables share a prefix it is exactly what
+# separates them (6 + 6 against 6, when the code names only one of them). But 6 is the TOTAL the
+# tier has to give a question's code, not a guaranteed per-card bonus — see SHARED CODES below,
+# where several cards printing the very same code each get a fraction of it, and a heavily-
+# shared code can end up worth less than the place tier's 4 + 1.
+#
+# TWO LIMITS, measured on the ruler 2026-09-28 by which tables LEFT the ranked top three -
+# recall alone hid both, because the displaced tables came back as join neighbours:
+#   * BLIND CARDS. A card lists its identifier values only when it has at most 60 of them.
+#     Board questions put three superseded, smaller tables that list the board's code above the
+#     current register that holds the same board but is too long to list it. A value therefore
+#     does not count when its head prefix is claimed by a card that lists none
+#     (`_blind_prefixes`): the match cannot tell those tables apart.
+#   * SHARED CODES. One model code listed by three tables gave each +6 and pushed out the table
+#     holding the asked-for specification, which keys the model in another column. The weight
+#     is shared among the cards the question's identifier matches (6 / n) - the
+#     document-frequency logic tiers 2-3 already apply to words.
+# With both limits the gains stand (sql lane 66 -> 81 of 92) — measured figures:
+# doc-prep/work_spine/router-vocab-2026-09-28.md; the one evidence table still leaving a ranked
+# top three belongs to a question whose other evidence table stays.
+#
+# WHAT THIS TIER STILL CANNOT SEE, stated so a later measurement is not surprised by it:
+#   * a BLIND prefix is only as reliable as doc-prep's own scan — `identifier_prefixes` reads at
+#     most the first 1,000 rows of the identifier column (`_distinct_values`'s default scan), so
+#     a prefix printed only later in a very long table may be on no card at all, blind or
+#     otherwise;
+#   * a code is only seen here when some card already prints it in its `identifier_values` or a
+#     `value_vocabulary` column — a code that appears only in a narrative paragraph, a notes
+#     column, or a column doc-prep did not admit to either field is invisible to this tier, the
+#     same as before this change.
+# ---------------------------------------------------------------------------
+_IDENTIFIER_VALUE_WEIGHT = 6.0
+_IDENTIFIER_VALUE_MIN_CHARS = 4
+_CODED_RE = re.compile(r"[-0-9]")
+_WS_RE = re.compile(r"\s+")
+
+
+def _identifier_head(value: str):
+    """The lead token of a coded value, by the rule doc-prep's `_identifier_prefixes` uses to
+    write a card's `identifier_prefixes`: the part before the first hyphen, upper-cased,
+    letters only, 2-8 characters; None when there is no such head ('X100-IRS', a phrase)."""
+    head = value.split("-", 1)[0].strip().upper()
+    return head if head.isalpha() and 1 < len(head) <= 8 else None
+
+
+def _blind_prefixes(cards: list[dict]) -> set:
+    """Identifier prefixes claimed by a card that lists NO identifier values. Such a card can
+    hold an identifier with that prefix without being able to show it - its identifier column
+    is too long to list - so a value matched on another card cannot tell the two apart, and
+    tier 5 must not pretend it can: absence of evidence is not evidence against."""
+    blind = set()
+    for card in cards or []:
+        if not card.get("identifier_values"):
+            blind.update(str(p).strip().upper() for p in card.get("identifier_prefixes") or [])
+    return blind
+
+
+def _vocabulary_values(card: dict) -> list:
+    """Every value in every column of this card's `value_vocabulary`, flattened in
+    column-then-value order — the enumerated-column half of tier 5's phrases (see
+    `_identifier_phrases` and the WHY THE ENUMERATED COLUMNS ARE READ TOO paragraph above).
+    Kept as its own small function, per the brief, so a test can switch it off and prove the
+    effect (`table_router._vocabulary_values = lambda card: []`). A card without the field, or
+    with an empty one, contributes nothing."""
+    out = []
+    for values in (card.get("value_vocabulary") or {}).values():
+        out.extend(values or [])
+    return out
+
+
+@functools.lru_cache(maxsize=None)
+def _identifier_phrase(value):
+    """The per-VALUE filter tier 5 applies to every candidate phrase — CODED, at least
+    `_IDENTIFIER_VALUE_MIN_CHARS` long, not a place. Cached: the same values recur on every
+    question this router ever scores, and the filter itself is seven place regexes plus a coded
+    check (module CPU measured 5.2 -> 10.2 ms per question at 70 cards before this cache
+    existed; see the TIER 5 block for the before/after figures once `value_vocabulary` is read
+    too). Returns the lower-cased, whitespace-collapsed phrase, or None when the value fails a
+    filter."""
+    s = _WS_RE.sub(" ", str(value)).strip()
+    if len(s) < _IDENTIFIER_VALUE_MIN_CHARS or not _CODED_RE.search(s):
+        return None
+    if _names_a_place(s):
+        return None
+    return s.lower()
+
+
+def _identifier_phrases(card: dict) -> list[str]:
+    """This card's printed identifier values that can name a row in a question — CODED, at
+    least `_IDENTIFIER_VALUE_MIN_CHARS` long, not a place — lower-cased, whitespace collapsed,
+    de-duplicated. Read off `identifier_values` AND every column of `value_vocabulary`
+    (`_vocabulary_values`), the same filters applied to both; a card without either field
+    contributes nothing from it. The per-value filter itself is `_identifier_phrase`, cached
+    module-wide (see its docstring)."""
+    out = []
+    seen = set()
+    for v in list(card.get("identifier_values") or []) + _vocabulary_values(card):
+        phrase = _identifier_phrase(v)
+        if phrase and phrase not in seen:
+            seen.add(phrase)
+            out.append(phrase)
+    return out
+
+
+def _names_a_row(question: str, card: dict, blind=frozenset()) -> bool:
+    """True when the question prints one of this card's identifier values as a whole, bounded
+    phrase (`_contains_phrase`), case-insensitively and whitespace-collapsed. `blind` is the set
+    of prefixes claimed by some BLIND card (see `_blind_prefixes`); a phrase whose head falls in
+    it is dropped before matching, since it cannot tell that card apart from this one."""
+    phrases = [p for p in _identifier_phrases(card) if _identifier_head(p) not in blind]
+    if not phrases:
+        return False
+    q = _WS_RE.sub(" ", question or "").lower()
+    return any(_contains_phrase(q, p) for p in phrases)
+
+
 def _names_a_room_by_code(question: str) -> bool:
     """True when the question names a room by its CODE — '4.04', 'RM-4.04',
     'EX-00-055', 'D01-256' — rather than by a name or by a floor/block.
@@ -521,7 +676,8 @@ def _document_frequency(cards: list[dict], card_words: dict) -> dict:
 
 def _score(question_words: set[str], question_prefixes: set[str], card: dict,
            df: dict, card_words: dict,
-           names_place: bool = False, names_room: bool = False) -> float:
+           names_place: bool = False, names_room: bool = False,
+           names_row: bool = False, row_share: int = 1) -> float:
     score = 0.0
     prefixes = set(card.get("identifier_prefixes", []))
     score += 6 * len(question_prefixes & prefixes)
@@ -541,6 +697,10 @@ def _score(question_words: set[str], question_prefixes: set[str], card: dict,
         score += _PLACE_WEIGHT
         if names_room and _card_reaches_room(card):
             score += _ROOM_GRANULARITY_WEIGHT
+    # Tier 5 — shared among the cards the identifier matches (6 / row_share), like tiers 2-3's
+    # document-frequency divide. See the TIER 5 block for the measurements.
+    if names_row:
+        score += _IDENTIFIER_VALUE_WEIGHT / max(1, row_share)
     return score
 
 
@@ -608,9 +768,16 @@ def select_tables(question: str, cards: list[dict], k: int = 3) -> list[str]:
     card_words = {id(card): (_card_subject_words(card), _card_vocab_words(card))
                   for card in cards}
     df = _document_frequency(cards, card_words)
+    # Tier 5's two limits (see the TIER 5 block): a BLIND card's prefix disqualifies a match on
+    # any card sharing it, and the weight is shared among however many cards the question's
+    # identifier matches — both computed once per call, like card_words/df above.
+    blind = _blind_prefixes(cards)
+    rows_named = {id(card): _names_a_row(question, card, blind) for card in cards}
+    row_share = sum(rows_named.values())
 
     scored = [
-        (_score(qwords, qprefixes, card, df, card_words, names_place, names_room),
+        (_score(qwords, qprefixes, card, df, card_words, names_place, names_room,
+                rows_named[id(card)], row_share),
          0 if (prefer_room and _card_reaches_room(card)) else 1,
          i, card["table"])
         for i, card in enumerate(cards)
