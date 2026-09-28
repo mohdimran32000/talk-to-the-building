@@ -1266,6 +1266,56 @@ check("the offered choice is still one re-query, not two", len(ex.questions) == 
 check("and the chosen table's row is what the answer writer gets",
       "BOARD-X" in inv41.result_text and se.queries == [],
       (inv41.result_text[:160], se.queries))
+# ===========================================================================
+# THE REVIEW FINDING, 2026-09-28 (task-8-9-review-report.md). The offer is
+# filtered to ONE printed identifier so that every SELECT in it filters the
+# same value - but that identifier was being taken from the FIRST ROUTED CARD's
+# match, which is card order, not question order. On a question naming two
+# entities, a card that can only address the SECOND-named one sorts first often
+# enough (the caller hands these over in table-name order), and the whole offer
+# then locks onto the entity the question mentions second.
+#
+# The ruling: the lead tag is the one printed FIRST IN THE QUESTION TEXT, by
+# token position, whatever order the cards arrive in. Card order still decides
+# the order of the OFFERS - it just no longer decides WHICH ENTITY is offered.
+# ===========================================================================
+print("\n42. The lead tag is the question's first, never the first routed card's")
+# ---------------------------------------------------------------------------
+CARD_ZED = {"table": "bld_zed", "columns": ["z_tag", "x"], "identifier_column": "z_tag",
+            "identifier_prefixes": ["ZED"]}
+q42 = "does unit CAM-4F-B-01 depend on unit ZED-9?"
+forward = sql_loop.inspect_result(empty_result(sql35), q42, [CARD_CAM, CARD_ZED])[0]
+reverse = sql_loop.inspect_result(empty_result(sql35), q42, [CARD_ZED, CARD_CAM])[0]
+check("cards in question order: the first-named entity is the one addressed",
+      "'CAM-4F-B-01'" in forward.instruction and "ZED-9" not in forward.instruction,
+      forward.instruction)
+# THE REPRODUCTION: same question, the ZED card handed over first.
+check("cards in the OTHER order: still the first-named entity, not the first card's",
+      "'CAM-4F-B-01'" in reverse.instruction and "ZED-9" not in reverse.instruction,
+      reverse.instruction)
+check("and the table offered is the one that can address it",
+      '"bld_cam"' in reverse.instruction and "bld_zed" not in reverse.instruction,
+      reverse.instruction)
+check("card order cannot change the instruction at all when one card matches",
+      forward.instruction == reverse.instruction,
+      (forward.instruction, reverse.instruction))
+# the fall-through: the question's first coded token that ANY card can address wins
+q42b = "is LMN-1 related to CAM-4F-B-01?"
+i42b = sql_loop.inspect_result(empty_result(sql35), q42b, [CARD_CAM, CARD_ZED])[0]
+check("a first coded token no card declares is passed over, not fatal",
+      "'CAM-4F-B-01'" in i42b.instruction and "LMN-1" not in i42b.instruction,
+      i42b.instruction)
+# and when both cards can address the SAME first-named tag, both are still offered
+CARD_CAM_C = {"table": "bld_cam_c", "columns": ["c_tag", "z"], "identifier_column": "c_tag",
+              "identifier_prefixes": ["CAM"]}
+i42c = sql_loop.inspect_result(empty_result(sql35), q42, [CARD_CAM_C, CARD_CAM])[0]
+check("two cards on the first-named tag: both offered, in routed order",
+      0 <= i42c.instruction.find('"bld_cam_c"') < i42c.instruction.find('"bld_cam" ')
+      and "ZED-9" not in i42c.instruction, i42c.instruction)
+check("the matcher itself reports the same thing",
+      [m[0] for m in sql_loop.card_identifier_matches(q42, [CARD_ZED, CARD_CAM])]
+      == ["CAM-4F-B-01"],
+      sql_loop.card_identifier_matches(q42, [CARD_ZED, CARD_CAM]))
 
 print("\nALL PASS" if not FAILS else f"\n{len(FAILS)} FAILED")
 sys.exit(1 if FAILS else 0)

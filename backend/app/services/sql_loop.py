@@ -475,9 +475,17 @@ def card_identifier_matches(question, routed_cards):
     lists the addresses and the writer picks, which is the only judgement this module
     delegates.
 
-    ONE identifier, not several. The list is filtered to the cards addressing the FIRST
-    printed tag that any card matched, so every SELECT offered filters the same printed
-    value. A question naming two different entities does not get a menu mixing them.
+    ONE identifier, not several, and it is THE QUESTION'S. Every SELECT offered filters the
+    same printed value, and that value is the first coded token in the QUESTION TEXT that any
+    routed card can address — token position, never card position. The two come apart on a
+    question naming two entities: the caller hands these cards over in table-name order, so a
+    card that can only address the SECOND-named entity can arrive first, and keying the offer
+    to card order would then answer about the entity the question mentions second (found in
+    review, 2026-09-28). Card order still decides the ORDER of the offers; it does not decide
+    which entity is offered.
+
+    A first coded token that no card declares is passed over rather than fatal — the next one
+    the cards can address wins.
 
     A card that declares prefixes but no identifier column is skipped: there is no column to
     address the row by, so there is no instruction to write.
@@ -493,16 +501,16 @@ def card_identifier_matches(question, routed_cards):
             continue
         prefixes = {str(p).strip().upper()
                     for p in ((card or {}).get("identifier_prefixes") or []) if str(p).strip()}
-        if not prefixes:
-            continue
-        for prefix, tag in coded:
-            if prefix in prefixes:
-                addressable.append((tag, str(table), str(column)))
-                break
-    if not addressable:
-        return []
-    lead_tag = addressable[0][0]
-    return [m for m in addressable if m[0] == lead_tag]
+        if prefixes:
+            addressable.append((prefixes, str(table), str(column)))
+    # The question's order is the outer loop; the cards' order is the inner one. That is the
+    # whole fix, and it is why these two loops are this way round and not the other.
+    for prefix, tag in coded:
+        offers = [(tag, table, column) for prefixes, table, column in addressable
+                  if prefix in prefixes]
+        if offers:
+            return offers
+    return []
 
 
 def quote_literal(value: str) -> str:
