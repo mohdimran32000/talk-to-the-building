@@ -1,0 +1,925 @@
+"""sql_loop.py — the bounded SQL verifying loop (spec 2026-09-23 §3).
+
+One SQL call, written once, never looked at again: that is what this module ends. The
+residual eval failures it exists for are all the same shape — the writer selects too few
+columns, filters on a value it built instead of one the source prints, or asks for a list
+and gets back everything except the column that names each thing. None of those are reading
+failures the answer model can fix; they are visible in the RESULT TEXT, by code.
+
+So: run the query, INSPECT what came back, take the first issue that has a deterministic
+re-query instruction, append it to the question, run again — at most `max_steps` times, with
+`for step in range(max_steps)` and never an unbounded loop. A quantity question additionally
+gets ONE retrieval cross-check so the answer can name the other records that state the same
+number, which this corpus needs because several of its quantities are printed differently in
+different documents.
+
+Three binding properties, each pinned by `tests/test_sql_loop.py`:
+
+* GENERIC — no table, column value, system or building is named anywhere below. The
+  identifier a list must carry comes from the routed card's `identifier_column` or from
+  column-name shape alone (`*_number`, `*_id`, `*_tag`; `*_name` can be asked for but never
+  counts as satisfying, see `NAMEABLE_SUFFIXES`). The question-shape regexes are English
+  shapes only; the aggregate test is SQL keywords only. Section 18 of the test scans this
+  file for the names it must not contain.
+* DETERMINISTIC — every issue is detected by code. The model is never asked "is this
+  right?", because a model that wrote a bad query is not the thing to ask whether the query
+  was bad.
+* DEGRADES CLEANLY — `max_steps <= 1` reproduces the pre-loop behaviour exactly: one query,
+  no re-query, no cross-check, no trailer line, and the same empty-result and failed-result
+  fallbacks to the document index that the caller used to perform inline.
+
+`result_is_empty` below is a deliberate DUPLICATE of `openai_client._sql_result_is_empty`.
+Importing it would be circular the moment `openai_client` imports this module; the test pins
+the two equal on five inputs so the copy cannot drift silently.
+
+FOR THE CALLER — what the old inline code did and this module now owns: when a terminal
+fallback replaces the result text with document excerpts, today's branch also reassigns
+`tool_name = "search_documents"`, and two later blocks read that name when deciding whether
+to quote the SQL result back to the model. That reassignment is reported here as
+`Investigation.source_tool` — `"query_structured_data"` normally, `"search_documents"` once
+a fallback has supplied the text — so the wiring does not have to rediscover it.
+
+Fix round 1 (review of commit `3e5f71e`) changed five things about detection, all of them
+because the module had only ever been exercised against synthetic cards: an AGGREGATE result
+is exempt from the column-shaped issues (a grouped breakdown has no per-entity identifier by
+construction, and re-querying one destroys a correct answer); a list counts as nameable when
+ANY consulted card's identifier or ANY identifying-shaped column is present, so a writer that
+picked a different identifier from the one a card declares is not re-queried for it; the
+column it asks for is the best PRINTED candidate rather than whatever key a card happens to
+declare; an unparseable SQL yields NO cards rather than all of them; and a wall-clock budget,
+a repeat-issue guard and per-step outcome events were added. Fix round 2 gave the budget
+its own setting (`SQL_LOOP_TIMEOUT`, default 60 s) and took `_name` out of what makes a
+list nameable.
+
+That last one is a DELIBERATE gap between the two prompts, and this docstring used to deny
+it, so it is spelled out: `sql_tool.LIST_IDENTIFIER_RULE` offers `_name` to the writer as one
+valid identifier, and `NAMEABLE_SUFFIXES` here does not accept it. A query that returns only
+a name column therefore obeys the generation-time rule and is still re-queried. That is the
+intended behaviour, not an oversight - the failure this loop exists for is precisely a list
+of LABELS with no number, key or tag against them, and a name is a label (see
+`NAMEABLE_SUFFIXES`, and `IDENTIFIER_RANK`, which will still ASK for a name when the table
+prints nothing better). The cost of the gap is one wasted re-query on a table whose only
+identifying column is a name; the cost of closing it the other way is the loop going silent
+on the exact answer shape it was built to catch.
+
+FIX WAVE 1 (the Task 5 diagnosis, 2026-09-23) is the first change made from MEASUREMENT
+rather than from review: the loop ran over 164 real questions against the same 164 with it
+off, every re-query was replayed offline, and the arithmetic came out at +4 cards against
+−3 for 44 extra queries. So three firings that paid nothing were withdrawn and one that
+was never reaching its questions was widened:
+
+* `NARROW_SELECT` keeps its detection and loses its instruction — a finding, like
+  `TRUNCATED_NO_SHAPE`. Three firings, no wins, one loss.
+* `IDENTIFIER_MISSING` is silent on a ONE-ROW result. Three of twelve firings, no wins.
+* `EMPTY` is a finding, not a re-query, when the query read none of the routed tables:
+  that writer abstained rather than mis-filtered. Five firings, no wins, one loss.
+* `_COUNT_RE` gained the plurals, which is the only thing here that makes the loop do
+  MORE: the cross-check is the part that paid (+3 / −1).
+
+Each removal takes its firings with it, so the loop also gets cheaper.
+
+FIX WAVE 2 (2026-09-28) — an empty result whose QUESTION already names the row. The generic
+EMPTY instruction is advice: filter by a printed name, and prefer the table that is one row
+per place and item. That advice sent a writer whose first query matched nothing away from the
+one routed table that carried the answer, and the answer then said there was no record of it.
+But the question had printed the entity's own coded identifier, and a routed card DECLARES
+both the column such an identifier lives in (`identifier_column`) and the strings one starts
+with (`identifier_prefixes`). Those two together are an ADDRESS, not advice, so when they
+match the instruction becomes the address: the entity's own row, every column, nothing else.
+The KIND stays `EMPTY`, so the priority order and the repeat guard are exactly as they were,
+and only the `detail` (`IDENTIFIER_EMPTY`) says which of the two EMPTY instructions fired.
+Replayed against the real cards before it shipped, and the replay changed the rule. Four of
+the seven questions it fires on reached a table whose NAME marks it as an earlier state of the
+building, because the caller hands these cards over in name order and the router's own ranking
+does not survive the trip. Reordering that is a different module's decision and a different
+measurement, so the rule instead OFFERS every routed card that can address the same printed
+identifier, in the order it was handed them, and asks the writer to choose by subject: which
+table holds what the question asks about, and which one its own name says is superseded. That
+is the one part of this that a model is better placed to decide than code, and it is the only
+part delegated. With exactly one match the wording is unchanged - there is nothing to choose
+between.
+
+Still generic: the prefixes and the column are read off the cards, and nothing about any
+building is written here.
+"""
+from __future__ import annotations
+
+import os
+import re
+import time
+from collections import namedtuple
+
+# --------------------------------------------------------------------------- types
+
+#: `kind` is one of the constants below; `detail` is the one-line human wording the caller
+#: puts on its `tool_start`/`tool_done` events; `instruction` is the deterministic sentence
+#: appended to the question for the next query, or "" for an issue that is not a re-query.
+Issue = namedtuple("Issue", "kind detail instruction")
+
+#: `result_text` is what the answer writer is handed; `steps` are the per-query `("step", …)`
+#: event payloads in order (their outcomes arrive as `("step_done", …)` events);
+#: `crosscheck` is the retrieved excerpt text of the quantity cross-check, or None (it is
+#: None for the terminal document fallbacks, which replace `result_text` instead of riding
+#: alongside it); `source_tool` is the tool the final text came from; `issues` is every
+#: issue kind the investigation saw, in first-occurrence order, including the ones that are
+#: findings rather than re-queries.
+Investigation = namedtuple("Investigation", "result_text steps crosscheck source_tool issues")
+
+FAILED_SQL = "FAILED_SQL"
+EMPTY = "EMPTY"
+IDENTIFIER_MISSING = "IDENTIFIER_MISSING"
+NARROW_SELECT = "NARROW_SELECT"
+TRUNCATED_NO_SHAPE = "TRUNCATED_NO_SHAPE"
+COUNT_CROSSCHECK = "COUNT_CROSSCHECK"
+
+#: Priority order, spec §3. The loop acts on the first of these that carries an
+#: instruction; the last two never carry one. Pinned by test §21 — a fixture that raises
+#: two issues at once, so inverting this tuple turns a check red. `FAILED_SQL` leads it:
+#: a query that did not run at all has nothing for the other checks to read.
+ISSUE_ORDER = (FAILED_SQL, EMPTY, IDENTIFIER_MISSING, NARROW_SELECT, TRUNCATED_NO_SHAPE,
+               COUNT_CROSSCHECK)
+
+#: The `detail` of an `EMPTY` issue whose instruction came from an identifier the question
+#: itself printed, rather than from the generic advice. It is deliberately NOT a kind and is
+#: deliberately NOT in `ISSUE_ORDER`: making it one would give the repeat guard two EMPTY
+#: kinds to tell apart, and a question could then spend two steps failing to find the same
+#: row. It names WHICH instruction fired, nothing more.
+IDENTIFIER_EMPTY = "IDENTIFIER_EMPTY"
+
+TOOL_SQL = "query_structured_data"
+TOOL_SEARCH = "search_documents"
+FAILED = "FAILED"
+
+# --------------------------------------------------------------------------- constants
+
+#: A result this narrow is a candidate for NARROW_SELECT — and a table with more
+#: non-citation columns than this has something to widen to.
+MAX_NARROW_COLUMNS = 3
+
+#: The opening of the text `sql_tool` returns when a query did not run, and how much of
+#: what follows it goes into the next question. A binder error is one sentence; a refused
+#: generation can carry a fragment of the query it refused, and that fragment is exactly
+#: the shape the re-query must not repeat — so it is capped.
+FAILURE_PREFIX = "SQL query failed"
+FAILURE_ERROR_CHARS = 200
+
+#: What makes a list nameable — a column a reader can ACT on: a printed number, a key or a
+#: tag, or the identifier the card itself declares. A `_name` column is deliberately NOT
+#: here, although the generation-time rule offers it as one option: a name is a LABEL, and
+#: the failure this loop exists for is precisely a list of labels with no numbers against
+#: them. Shape, not vocabulary: no actual column is named here.
+NAMEABLE_SUFFIXES = ("_number", "_id", "_tag")
+
+#: When the issue DOES fire, which column to ask for, best first: a printed number, then a
+#: printed tag, then a printed name — and only then the key the card declares, which in this
+#: corpus is often an internal id printed on nothing.
+IDENTIFIER_RANK = ("_number", "_tag", "_name")
+
+#: Columns that cite a value rather than being one. A card's "non-citation columns" are
+#: what a details question should get back. The two exact names are the free-text ones every
+#: table in this shape of corpus carries; the rest are recognised by prefix/suffix, because
+#: provenance columns are written both ways (`source_x` and `x_source`).
+CITATION_EXACT = ("notes", "remarks")
+CITATION_PREFIXES = ("source_",)
+CITATION_SUFFIXES = ("_source", "_resolution")
+
+#: How many retrieved excerpts the quantity cross-check keeps (spec §3: top 3), and the
+#: separator the caller's search wrapper puts between them.
+CROSSCHECK_EXCERPTS = 3
+EXCERPT_SEPARATOR = "\n\n---\n\n"
+
+#: The heading the cross-check excerpts ride under. It says MENTION, and it says the
+#: matches may be unrelated, because that is what they are: the top hits of an
+#: unfiltered keyword search, which need not print a quantity at all. Fix round 1 of the
+#: Task 4 review (I-2) replaced "Other records that state this quantity:", which promised
+#: the writer something retrieval cannot deliver — and a writer that believes a heading
+#: will quote an unrelated number as a rival count. The answer-side rule that goes with it
+#: lives in `openai_client.OUTPUT_FORMAT_RULES`: the TABLE figure is the answer, these are
+#: records to name beside it.
+CROSSCHECK_HEADING = ("Cross-check: document excerpts that mention this quantity "
+                      "(top matches, may be unrelated)")
+
+#: The terminal fallbacks, worded exactly as the caller worded them before this module
+#: existed, so `max_steps=1` is byte-identical to that behaviour.
+EMPTY_FALLBACK_PREFIX = ("The structured tables returned no rows for this question. "
+                         "Document excerpts that may answer it instead:\n\n")
+EMPTY_FALLBACK_SUFFIX = ("\n\n(If the excerpts do not contain the answer either, say the "
+                         "information was not found — do not guess.)")
+
+FIRST_STEP_DETAIL = "Querying the structured tables"
+
+#: The investigation's own wall-clock budget, in seconds, from `SQL_LOOP_TIMEOUT`. It is
+#: NOT `SQL_QUERY_TIMEOUT`: that one caps a single DuckDB execution (5 s) and always did,
+#: whereas a loop step is dominated by the SQL-generation call, which on its own routinely
+#: outlives 5 s — spending the per-execution cap here would quietly make the loop one-shot.
+SQL_LOOP_TIMEOUT_ENV = "SQL_LOOP_TIMEOUT"
+DEFAULT_BUDGET_SECONDS = 60.0
+
+# --------------------------------------------------------------------------- question shapes
+
+_LIST_RE = re.compile(r"\b(list|lists|listing)\b|\bwhat are\b|\bwhich\b|\ball the\b"
+                      r"|\bshow me\b|\bgive me the\b", re.IGNORECASE)
+_DETAILS_RE = re.compile(r"\bspecs?\b|\bspecification|\bdetails?\b|\battributes?\b"
+                         r"|\bparameters?\b|\bbreakdown\b|\beverything about\b", re.IGNORECASE)
+#: Fix wave 1: the plurals were missing, and the two cards written for the cross-check
+#: were both asked in them ("what counts…", "what different totals…"), so neither ever got
+#: one. NOT added, deliberately: `numbers` (this corpus asks for serials and part numbers
+#: that way, and a cross-check on those buys a retrieval call and no rival quantity) and
+#: `how much` (a rating or cost question, not a count).
+_COUNT_RE = re.compile(r"\bhow many\b|\btotals?\b|\bnumber of\b|\bcounts?\b", re.IGNORECASE)
+
+
+def asks_to_list(question: str) -> bool:
+    """The question asks for a set of things, so each thing must be nameable."""
+    return bool(_LIST_RE.search(question or ""))
+
+
+def asks_for_details(question: str) -> bool:
+    """The question asks what a thing IS, so a two-column answer is an under-answer."""
+    return bool(_DETAILS_RE.search(question or ""))
+
+
+def asks_count(question: str) -> bool:
+    """The question asks for a quantity, which in this corpus often has rivals."""
+    return bool(_COUNT_RE.search(question or ""))
+
+
+# --------------------------------------------------------------------------- result parsing
+
+def result_is_empty(result_text: str) -> bool:
+    """True when a structured-query result carries no data: either the explicit
+    no-results message, or a markdown table whose data cells are all NULL (rendered as
+    empty) — e.g. SUM() over zero matching rows. A 0 value is NOT empty; zero can be a
+    correct answer.
+
+    DUPLICATE of `openai_client._sql_result_is_empty` (circular import otherwise); the
+    test pins the two equal on five inputs.
+    """
+    if not result_text:
+        return False
+    if result_text.startswith("Query returned no results"):
+        return True
+    table_lines = [l.strip() for l in result_text.splitlines() if l.strip().startswith("|")]
+    if len(table_lines) < 3:
+        return False
+    cells = [c.strip() for r in table_lines[2:] for c in r.strip("|").split("|")]
+    if bool(cells) and all(c == "" for c in cells):
+        return True
+    return len(cells) == 1 and cells[0] in ("0", "0.0")
+
+
+def result_is_failure(result_text: str) -> bool:
+    """The query did not run at all — a binder/parse error, or a generation the executor
+    refused before running it. The executor's own single repair attempt has already been
+    spent by the time this is true."""
+    return bool(result_text) and result_text.startswith(FAILURE_PREFIX)
+
+
+def result_failure_error(result_text: str) -> str:
+    """What the executor said went wrong, capped at `FAILURE_ERROR_CHARS`. The query text
+    that follows it is dropped: the instruction already carries the previous SQL, and a
+    degenerate query quoted twice is twice the chance of it being copied."""
+    text = str(result_text or "")
+    if text.startswith(FAILURE_PREFIX):
+        text = text[len(FAILURE_PREFIX):].lstrip(": ").lstrip()
+    head = re.split(r"\n\n(?:Generated )?SQL: ", text)[0].strip()
+    return head[:FAILURE_ERROR_CHARS]
+
+
+def result_columns(result_text: str) -> list:
+    """The column names of the rendered table: the first line that starts with `|`."""
+    for line in (result_text or "").splitlines():
+        s = line.strip()
+        if s.startswith("|"):
+            return [c.strip() for c in s.strip("|").split("|")]
+    return []
+
+
+def result_rows(result_text: str) -> int:
+    """How many data rows the rendered table shows (header and separator excluded)."""
+    table_lines = [l.strip() for l in (result_text or "").splitlines() if l.strip().startswith("|")]
+    return max(0, len(table_lines) - 2)
+
+
+def result_truncation(result_text: str):
+    """(shown, total) when the result was cut, else None."""
+    m = re.search(r"\*Showing (\d+) of (\d+) rows\*", result_text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def result_total_rows(result_text: str) -> int:
+    """How many rows the query actually matched — the truncation line's total when the
+    result was cut, otherwise what is rendered."""
+    cut = result_truncation(result_text)
+    return cut[1] if cut else result_rows(result_text)
+
+
+def has_result_shape(result_text: str) -> bool:
+    return bool(re.search(r"(?m)^RESULT SHAPE\b", result_text or ""))
+
+
+#: A backticked SQL line, possibly written across several lines. The generation prompt asks
+#: for a single line, twice — but "uncommon" is not "impossible", and a mis-parse used to
+#: leave the loop naming a table the query never read.
+_SQL_LINE_RE = re.compile(r"^(?:Generated )?SQL: `(.*?)`\s*$", re.MULTILINE | re.DOTALL)
+
+
+def result_sql(result_text: str) -> str:
+    """The query the result came from — the last `SQL:` (or `Generated SQL:`) line."""
+    found = _SQL_LINE_RE.findall(result_text or "")
+    return found[-1] if found else ""
+
+
+#: SQL keywords only — GROUP BY anywhere, or an aggregate call in the SELECT list. An
+#: aggregate result has no per-entity identifier BY CONSTRUCTION, so demanding one (or
+#: demanding every column of the underlying table) turns a correct breakdown into the whole
+#: table with the counts lost.
+AGGREGATE_RE = re.compile(r"\bGROUP\s+BY\b|\b(?:count|sum|avg|min|max)\s*\(", re.IGNORECASE)
+_SELECT_LIST_RE = re.compile(r"\bSELECT\b(.*?)\bFROM\b", re.IGNORECASE | re.DOTALL)
+
+
+def sql_is_aggregate(sql: str) -> bool:
+    """True when the query groups, or aggregates in its SELECT list. An aggregate inside a
+    WHERE-clause subquery does not count: the rows such a query returns are still
+    entities, and they still need their identifier."""
+    if not sql:
+        return False
+    head = _SELECT_LIST_RE.search(sql)
+    head_end = head.end(1) if head else 0
+    for m in AGGREGATE_RE.finditer(sql):
+        if m.group(0).upper().startswith("GROUP"):
+            return True
+        if head and m.start() < head_end:
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------- card reading
+
+def cards_in_sql(sql: str, routed_cards) -> list:
+    """The cards the query actually read — those whose table name appears in the SQL as a
+    whole word. NEVER falls back to every routed card: when the SQL names none of them,
+    attribution is precisely what is missing, and naming a table the query never read is
+    the one thing this must not do. The column-shaped issues then degrade to silence."""
+    cards = [c for c in (routed_cards or []) if c and c.get("table")]
+    if not sql:
+        return []
+    return [c for c in cards
+            if re.search(r'(?<![A-Za-z0-9_])"?' + re.escape(c["table"]) + r'"?(?![A-Za-z0-9_])', sql)]
+
+
+def card_identifier(card) -> str:
+    """The column that names each entity of this table: the card's own declaration, or
+    failing that the first column whose NAME has an identifying shape. Returns "" when the
+    card offers neither — in which case no identifier issue can fire."""
+    declared = (card or {}).get("identifier_column")
+    if declared:
+        return str(declared)
+    for col in (card or {}).get("columns") or []:
+        if str(col).lower().endswith(NAMEABLE_SUFFIXES):
+            return str(col)
+    return ""
+
+
+def _is_citation_column(col: str) -> bool:
+    c = str(col).lower()
+    return (c in CITATION_EXACT
+            or c.startswith(CITATION_PREFIXES)
+            or c.endswith(CITATION_SUFFIXES))
+
+
+def non_citation_columns(card) -> list:
+    """A card's columns minus the ones that cite rather than describe."""
+    return [c for c in ((card or {}).get("columns") or []) if not _is_citation_column(c)]
+
+
+def result_is_nameable(result_cols, cards) -> bool:
+    """Can a reader act on this list? Yes when a consulted card's declared identifier is in
+    the result, or when any result column has an identifying name shape — which is exactly
+    what the generation-time rule asks the writer for, so obeying that rule can never
+    trigger a re-query here."""
+    lowered = {str(c).lower() for c in result_cols}
+    if any(c.endswith(NAMEABLE_SUFFIXES) for c in lowered):
+        return True
+    for card in cards or []:
+        declared = str((card or {}).get("identifier_column") or "").lower()
+        if declared and declared in lowered:
+            return True
+    return False
+
+
+def best_identifier(cards, result_cols):
+    """(column, table) — the most PRINTED identifying column the consulted cards offer that
+    is not already in the result, or None. A number outranks a tag, a tag a name, and all
+    three outrank the key a card declares, which is often internal."""
+    lowered = {str(c).lower() for c in result_cols}
+    best = None
+    for order, card in enumerate(cards or []):
+        table = (card or {}).get("table") or ""
+        candidates = []
+        for col in (card or {}).get("columns") or []:
+            low = str(col).lower()
+            if low in lowered:
+                continue
+            for rank, suffix in enumerate(IDENTIFIER_RANK):
+                if low.endswith(suffix):
+                    candidates.append((rank, str(col)))
+                    break
+        declared = (card or {}).get("identifier_column")
+        if declared and str(declared).lower() not in lowered:
+            candidates.append((len(IDENTIFIER_RANK), str(declared)))
+        if not candidates:
+            continue
+        rank, col = min(candidates, key=lambda c: c[0])
+        if best is None or (rank, order) < best[0]:
+            best = ((rank, order), col, table)
+    return (best[1], best[2]) if best else None
+
+
+#: What a printed identifier looks like inside a question. The token shape is a DELIBERATE
+#: duplicate of `table_router`'s (letters, digits and parentheses, joined by hyphens), because
+#: the prefixes matched against it are the router's own `identifier_prefixes` — a tag it
+#: scored a card on must be a tag this finds. It is copied rather than imported for the same
+#: reason `result_is_empty` is: reaching into another module's private tokeniser couples the
+#: inspector to the router's internals, and the test pins the two to agree.
+_TAG_TOKEN_RE = re.compile(r"[A-Za-z0-9()][A-Za-z0-9()\-]*")
+
+#: A token is CODED when it carries a hyphen or a digit. Ordinary English words carry
+#: neither, which is the whole discriminator: `CAM-4F-B-01` is an identifier, `units` is not.
+_CODED_TOKEN_RE = re.compile(r"[-0-9]")
+
+
+def question_identifiers(question: str) -> list:
+    """Every coded token the question prints, in the order printed, as `(prefix, token)` —
+    the token itself and the part before its first hyphen, upper-cased for matching."""
+    found = []
+    for tok in _TAG_TOKEN_RE.findall(question or ""):
+        if _CODED_TOKEN_RE.search(tok):
+            found.append((tok.split("-", 1)[0].upper(), tok))
+    return found
+
+
+def card_identifier_matches(question, routed_cards):
+    """`[(tag, table, column), …]` — every ROUTED card that can address the SAME printed
+    identifier, in the order the cards were handed over; `[]` when none can.
+
+    ROUTED ORDER is preserved and never re-sorted. A second rule applied on top (longest
+    prefix, widest table, most columns) would make the offer depend on two orderings instead
+    of one, and neither of them would be visible in the instruction the writer is handed.
+
+    ALL of them, not the first. The first card is not reliably the right one: the caller
+    hands these over in name order, so a table whose name marks it as an EARLIER state of
+    the same thing can sort ahead of the current one, and picking it silently would answer a
+    question about today out of a superseded record. Which table holds the subject the
+    question asks about is a reading judgement, not an arithmetic one — so the instruction
+    lists the addresses and the writer picks, which is the only judgement this module
+    delegates.
+
+    ONE identifier, not several, and it is THE QUESTION'S. Every SELECT offered filters the
+    same printed value, and that value is the first coded token in the QUESTION TEXT that any
+    routed card can address — token position, never card position. The two come apart on a
+    question naming two entities: the caller hands these cards over in table-name order, so a
+    card that can only address the SECOND-named entity can arrive first, and keying the offer
+    to card order would then answer about the entity the question mentions second (found in
+    review, 2026-09-28). Card order still decides the ORDER of the offers; it does not decide
+    which entity is offered.
+
+    A first coded token that no card declares is passed over rather than fatal — the next one
+    the cards can address wins.
+
+    A card that declares prefixes but no identifier column is skipped: there is no column to
+    address the row by, so there is no instruction to write.
+    """
+    coded = question_identifiers(question)
+    if not coded:
+        return []
+    addressable = []
+    for card in routed_cards or []:
+        table = (card or {}).get("table") or ""
+        column = (card or {}).get("identifier_column") or ""
+        if not table or not column:
+            continue
+        prefixes = {str(p).strip().upper()
+                    for p in ((card or {}).get("identifier_prefixes") or []) if str(p).strip()}
+        if prefixes:
+            addressable.append((prefixes, str(table), str(column)))
+    # The question's order is the outer loop; the cards' order is the inner one. That is the
+    # whole fix, and it is why these two loops are this way round and not the other.
+    for prefix, tag in coded:
+        offers = [(tag, table, column) for prefixes, table, column in addressable
+                  if prefix in prefixes]
+        if offers:
+            return offers
+    return []
+
+
+def quote_literal(value: str) -> str:
+    """A printed identifier goes into the instruction as a SQL string literal, so a single
+    quote inside it is doubled — the one character that would otherwise close the literal
+    early and turn a deterministic instruction into a query that cannot even be parsed."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def quote_identifier(name: str) -> str:
+    """A column name goes into the instruction as SQL the writer can paste. A plain name
+    needs nothing; one carrying a space or punctuation needs double quotes, because
+    backticks are not identifier quoting in this dialect and the re-query would simply
+    fail — landing the question in the document fallback for no reason."""
+    text = str(name)
+    return text if re.fullmatch(r"[A-Za-z0-9_]+", text) else f'"{text}"'
+
+
+# --------------------------------------------------------------------------- inspection
+
+def _failed_sql_issue(error: str) -> Issue:
+    """A query that did not run is the most re-queryable result there is: the engine has
+    just said, in words, what was wrong with it.
+
+    MEASURED 2026-09-28. A two-part question about one entity — what is this thing, and
+    what is inside it — was written as a set operation over two tables of different widths,
+    with the narrower arm padded out with NULLs until the generation cap stopped it. The
+    engine refused it; the executor's one repair produced the same shape; and this loop
+    then treated the failure as terminal and handed the question to the document index,
+    which answered it from a single stray excerpt. Nothing about that chain was a reading
+    failure. The instruction below is therefore specific about the shape that failed — one
+    plain SELECT, one table, no set operations, no invented columns — and about what to do
+    with the two-part question instead, which is to answer the specific part from the table
+    that holds it and JOIN the entity's own row for its name and details.
+
+    Generic, like every other instruction here: it describes SQL shapes and nothing of any
+    building."""
+    return Issue(
+        FAILED_SQL,
+        "The query failed — re-querying with one plain SELECT",
+        (f"The previous SQL failed with: {error}. Write ONE plain SELECT over ONE table "
+         f"that answers the main part of the question — no UNION, INTERSECT or EXCEPT, no "
+         f"set operations, no invented columns; if the question has two parts about one "
+         f"entity, answer the specific part (the list) from the table that holds it and "
+         f"JOIN the entity's own row on the shared location key for its name and details."),
+    )
+
+
+def _empty_issue(sql: str) -> Issue:
+    return Issue(
+        EMPTY,
+        "No rows — re-querying by printed name",
+        (f"The previous query `{sql}` returned no rows. Re-read the column samples; "
+         f"filter a place or entity by its printed NAME on the name column with "
+         f"ILIKE '%…%', never by a built id; if the question names a place, use the "
+         f"one-row-per-place-and-item table."),
+    )
+
+
+def _empty_identifier_issue(matches) -> Issue:
+    """Empty, and the question printed the identifier of a routed table — so the re-query is
+    an ADDRESS rather than advice.
+
+    MEASURED 2026-09-28. A question about one entity and its dependants was written as a
+    self-join with an invented predicate, matched nothing, and the generic EMPTY instruction
+    then sent the writer to a different table joined to the place index: one row, five
+    columns, not one of them the columns asked about, and an answer that said no link was on
+    record. The entity's own row in a routed table carried every one of them. The card
+    declares the column its identifier lives in and the strings such an identifier starts
+    with; the question printed one. That is enough to name the row by code, so this asks for
+    exactly that row and forbids anything else — a narrower SELECT is how the first query
+    lost the columns in the first place.
+
+    When SEVERAL routed cards carry the same identifier, all of them are offered in routed
+    order and the writer chooses by subject — see `card_identifier_matches` for why picking
+    one here would be a guess about which STATE of the building a table records. With one
+    match the wording is unchanged, because there is nothing to choose between.
+
+    The literal is quote-doubled everywhere it appears, so there is only ever one written
+    form of the tag for the writer to copy.
+
+    Generic, like every other instruction here: the tables, the columns and the prefixes are
+    all read off the routed cards."""
+    tag = matches[0][0]
+    literal = quote_literal(tag)
+    if len(matches) == 1:
+        _, table, column = matches[0]
+        body = (f"which is the identifier of table \"{table}\" (column \"{column}\"). "
+                f"Write exactly: SELECT * FROM \"{table}\" WHERE \"{column}\" = {literal}"
+                f" — the entity's own row with every column — and nothing else.")
+    else:
+        named = ", ".join(f"\"{t}\" (column \"{c}\")" for _, t, c in matches)
+        offered = " / ".join(f"SELECT * FROM \"{t}\" WHERE \"{c}\" = {literal}"
+                             for _, t, c in matches)
+        body = (f"which is the identifier of these tables: {named}. "
+                f"Write exactly ONE of: {offered} — choose the table whose columns hold "
+                f"what the question asks for; prefer a current-state table over one whose "
+                f"name or description marks it as an earlier or superseded state. "
+                f"Nothing else.")
+    return Issue(
+        EMPTY,
+        IDENTIFIER_EMPTY,
+        f"The previous query returned no rows. The question names the identifier "
+        f"{literal}, {body}",
+    )
+
+
+def _empty_abstention(sql: str) -> Issue:
+    """Empty, and the query read NONE of the routed tables — so the writer did not filter
+    something too tightly, it declined to look anywhere. Fix wave 1: re-querying one of
+    these fired five times in a 164-question measurement for no win and one loss, where a
+    correct refusal came back as a stated figure. Telling an abstention to look again is
+    asking it to become a claim, so this is a finding: reported, and straight to the
+    documents, which is where a question the tables do not cover belongs."""
+    return Issue(EMPTY, f"No rows, and the query `{sql}` read no routed table", "")
+
+
+def _identifier_issue(column: str, table: str) -> Issue:
+    return Issue(
+        IDENTIFIER_MISSING,
+        f"The list has no {column} column — re-querying",
+        (f"The question asks to list entities; SELECT the identifier column "
+         f"`{quote_identifier(column)}` of `{table}` in addition to the columns you "
+         f"selected, same filter."),
+    )
+
+
+def _narrow_issue(table: str, shown: int, available: int) -> Issue:
+    """A FINDING, not a re-query — its `instruction` is "" (fix wave 1).
+
+    It fired three times in a 164-question measurement, for zero wins and one loss: on a
+    result that was ALREADY the complete answer it named the subquery's table rather than
+    the main FROM, and the widened re-query replaced a complete key/value answer with a
+    narrower one. The loop keeps the LAST result and has no rule for keeping the better of
+    two, so any re-query here is a bet that cannot be hedged. The detection stays — it
+    still reaches `Investigation.issues` and the trailer, where the answer writer can see
+    that the selection was narrow — and only the instruction is withdrawn."""
+    return Issue(
+        NARROW_SELECT,
+        f"Only {shown} columns of {available} — noted, not re-queried",
+        "",
+    )
+
+
+def inspect_result(result_text: str, question: str, routed_cards) -> list:
+    """Every issue the result text shows, in the spec's priority order. Pure: no I/O, no
+    model call, no state. An issue whose `instruction` is "" is a finding, not a re-query."""
+    issues = []
+    sql = result_sql(result_text)
+    cards = cards_in_sql(sql, routed_cards)
+    cols = result_columns(result_text)
+    aggregate = sql_is_aggregate(sql)
+    empty = result_is_empty(result_text)
+
+    # A query that did not run has no header, no rows and no shape line, so none of the
+    # checks below can read anything — this is the only issue such a result can raise.
+    if result_is_failure(result_text):
+        issues.append(_failed_sql_issue(result_failure_error(result_text)))
+
+    if empty:
+        # The address first, and it is tried against the ROUTED cards rather than the ones
+        # the SQL read: the query that matched nothing is precisely the one that looked in
+        # the wrong place, so what it read is no guide to where the row is. It also overrides
+        # the ABSTENTION above, deliberately. That rule is about a vague instruction — telling
+        # a writer that declined to look anywhere to "look again" asks an abstention to become
+        # a claim. An address asks nothing of the kind: it names a row, and the row either
+        # exists or it does not.
+        addressed = card_identifier_matches(question, routed_cards)
+        if addressed:
+            issues.append(_empty_identifier_issue(addressed))
+        else:
+            issues.append(_empty_issue(sql) if cards else _empty_abstention(sql))
+
+    # An aggregate result is exempt: it has no per-entity identifier and no wider row to
+    # widen to. An empty result is NOT exempt — its header still says which columns were
+    # selected, and the priority order decides which issue the loop acts on.
+    if cols and not aggregate:
+        # A ONE-ROW result is the answer, not a list that lost its labels: there is
+        # nothing to tell apart, so no identifier is needed to act on it. Fix wave 1 —
+        # three of twelve firings in the measurement were on one-row results, none of the
+        # loop's wins was, and one of the three sent a correct single-fact answer off to
+        # a different table and lost it.
+        if (asks_to_list(question) or asks_for_details(question)) and result_total_rows(result_text) != 1:
+            if not result_is_nameable(cols, cards):
+                best = best_identifier(cards, cols)
+                if best:
+                    issues.append(_identifier_issue(best[0], best[1]))
+
+        if len(cols) <= MAX_NARROW_COLUMNS and asks_for_details(question):
+            for card in cards:
+                available = non_citation_columns(card)
+                if len(available) > MAX_NARROW_COLUMNS:
+                    issues.append(_narrow_issue(card["table"], len(cols), len(available)))
+                    break
+
+    cut = result_truncation(result_text)
+    if cut and not has_result_shape(result_text):
+        issues.append(Issue(
+            TRUNCATED_NO_SHAPE,
+            f"Truncated ({cut[0]} of {cut[1]} rows) with no shape line",
+            "",
+        ))
+
+    # A quantity question whose tables answered gets exactly one cross-check, whatever shape
+    # the answer came back in: a single cell, a grouped count, or — the commonest shape here,
+    # and the one this corpus's disputed quantities all take — a plain row list whose total
+    # is stated by the RESULT SHAPE or truncation line rather than computed by the query.
+    # Fix round 3: an earlier narrowing to the first two shapes silenced the third, which is
+    # the one the cross-check exists for. Silence is for a question that asks no count, and
+    # for an empty result, which goes to the document fallback instead.
+    if asks_count(question) and not empty and cols:
+        issues.append(Issue(
+            COUNT_CROSSCHECK,
+            "Quantity question — cross-checking the documents",
+            "",
+        ))
+
+    issues.sort(key=lambda i: ISSUE_ORDER.index(i.kind))
+    return issues
+
+
+def requery_instruction(issue) -> str:
+    """The deterministic sentence appended to the question for the next query ("" when the
+    issue is a finding rather than something to try again)."""
+    return issue.instruction if issue else ""
+
+
+def first_requery_issue(issues):
+    """The highest-priority issue that can actually be acted on, or None."""
+    for issue in issues or []:
+        if issue.instruction:
+            return issue
+    return None
+
+
+def step_instruction_suffix(step: int, issue, previous_sql: str) -> str:
+    """What gets appended to the question for query number `step`."""
+    return (f"\n(Investigation step {step}: {requery_instruction(issue)} "
+            f"Previous SQL: `{previous_sql}`)")
+
+
+def investigation_trailer(step_count: int, kinds) -> str:
+    """The one line that tells the answer writer an investigation happened. Never quoted
+    back to the user — the caller's never-print rule names it."""
+    return (f"INVESTIGATION - steps: {step_count}; issues: "
+            + (", ".join(kinds) if kinds else "none"))
+
+
+def investigation_budget_seconds() -> float:
+    """The wall-clock budget for the whole investigation, in seconds: the `SQL_LOOP_TIMEOUT`
+    environment setting, default 60. Anything unreadable — or a value so small it would
+    disable the loop outright — falls back to the default, because a mistyped setting must
+    slow the loop down, never silently switch it off. Read at call time, so a deployment can
+    change it without a restart of this module's import."""
+    raw = os.environ.get(SQL_LOOP_TIMEOUT_ENV)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_BUDGET_SECONDS
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_BUDGET_SECONDS
+    return value if value > 0 else DEFAULT_BUDGET_SECONDS
+
+
+def _top_excerpts(text: str) -> str:
+    """At most CROSSCHECK_EXCERPTS of whatever the caller's search returned."""
+    if not text:
+        return ""
+    parts = text.split(EXCERPT_SEPARATOR)
+    return EXCERPT_SEPARATOR.join(parts[:CROSSCHECK_EXCERPTS])
+
+
+# --------------------------------------------------------------------------- the loop
+
+def iter_sql_investigation(question, user_id, sb, *, execute, search=None, routed_cards=None,
+                           max_steps=3, user_question=None, clock=None):
+    """Run the bounded investigation, yielding an event before and after every external call.
+
+    Events:
+      ("step",       {"step": k, "issue": kind or None, "detail": str, "sql": str})
+                     — before query k; `sql` is the query being reacted to ("" for k=1).
+      ("step_done",  {"step": k, "rows": int, "empty": bool, "issues_found": [kind, …]})
+                     — after query k, so the caller can close its tool event with an
+                       outcome rather than only an intention.
+      ("crosscheck", {"kind": …, "detail": str, "query": str})
+                     — before the single retrieval call, whether that call is the quantity
+                       cross-check or the terminal fallback for an empty/failed result.
+      ("final",      Investigation)
+
+    `execute(question, user_id, sb) -> str` and `search(query) -> str` are injected so the
+    loop is testable without a database, a model or a network. `user_question` is the
+    user's own wording, which is what the document search gets (the tool's paraphrase
+    dilutes keyword ranking); it defaults to `question`. `clock` is injected by the test.
+    """
+    cards = list(routed_cards or [])
+    try:
+        max_steps = int(max_steps)
+    except (TypeError, ValueError):
+        max_steps = 1
+    max_steps = max(1, max_steps)
+    looping = max_steps > 1
+    clock = clock or time.monotonic
+    started = clock()
+    budget = investigation_budget_seconds()
+    search_query = question if user_question is None else user_question
+
+    steps = []
+    trail = []
+    issues = []
+    result_text = ""
+    previous_sql = ""
+    pending = None
+    last_kind = None
+    ask = question
+
+    def note(kind):
+        if kind and kind not in trail:
+            trail.append(kind)
+
+    for step in range(max_steps):
+        k = step + 1
+        event = {
+            "step": k,
+            "issue": pending.kind if pending else None,
+            "detail": pending.detail if pending else FIRST_STEP_DETAIL,
+            "sql": previous_sql,
+        }
+        steps.append(event)
+        yield ("step", event)
+
+        result_text = execute(ask, user_id, sb)
+        previous_sql = result_sql(result_text)
+        issues = inspect_result(result_text, question, cards) if looping else []
+        for issue in issues:
+            note(issue.kind)
+        yield ("step_done", {
+            "step": k,
+            "rows": result_total_rows(result_text),
+            "empty": result_is_empty(result_text),
+            "issues_found": [i.kind for i in issues],
+        })
+
+        # A failure used to break here, which is what sent a re-queryable binder error
+        # straight to the document index. It is now an ISSUE with an instruction
+        # (FAILED_SQL), so the ordinary machinery below decides: re-query for as long as
+        # there are steps left, and fall back to the documents only once the LAST step has
+        # failed — which is exactly what the terminal block after this loop does.
+        if k >= max_steps:
+            break
+        if clock() - started > budget:
+            break
+        nxt = first_requery_issue(issues)
+        if nxt is None:
+            break
+        # The same issue twice running means the instruction did not work; a third
+        # identical instruction is a step spent to no purpose.
+        if nxt.kind == last_kind:
+            break
+        pending, last_kind = nxt, nxt.kind
+        ask = question + step_instruction_suffix(k + 1, nxt, previous_sql)
+
+    crosscheck = None
+    source_tool = TOOL_SQL
+
+    # Terminal fallbacks — the caller used to do these inline, and they are what
+    # `max_steps=1` must reproduce byte for byte.
+    if search is not None and (result_is_empty(result_text) or result_is_failure(result_text)):
+        kind = EMPTY if result_is_empty(result_text) else FAILED
+        yield ("crosscheck", {
+            "kind": kind,
+            "detail": ("No rows — checking the documents" if kind == EMPTY
+                       else "The query failed — checking the documents"),
+            "query": search_query,
+        })
+        found = search(search_query)
+        if found:
+            result_text = (EMPTY_FALLBACK_PREFIX + found + EMPTY_FALLBACK_SUFFIX
+                           if kind == EMPTY else found)
+            source_tool = TOOL_SEARCH
+        if looping:
+            note(kind)
+
+    # The quantity cross-check: one retrieval call, appended rather than substituted, and
+    # only when the tables actually answered (otherwise the fallback above already asked).
+    elif looping and search is not None and any(i.kind == COUNT_CROSSCHECK for i in issues):
+        yield ("crosscheck", {
+            "kind": COUNT_CROSSCHECK,
+            "detail": "Cross-checking the quantity against the documents",
+            "query": search_query,
+        })
+        crosscheck = _top_excerpts(search(search_query))
+        if crosscheck:
+            result_text = result_text + "\n\n" + CROSSCHECK_HEADING + "\n\n" + crosscheck
+
+    if looping:
+        result_text = result_text + "\n\n" + investigation_trailer(len(steps), trail)
+
+    yield ("final", Investigation(result_text, steps, crosscheck, source_tool, trail))
+
+
+def run_sql_investigation(question, user_id, sb, *, execute, search=None, routed_cards=None,
+                          max_steps=3, user_question=None, clock=None) -> Investigation:
+    """`iter_sql_investigation` drained: the same work, for a caller with no use for the
+    per-step events."""
+    final = None
+    for kind, payload in iter_sql_investigation(question, user_id, sb, execute=execute,
+                                                search=search, routed_cards=routed_cards,
+                                                max_steps=max_steps,
+                                                user_question=user_question, clock=clock):
+        if kind == "final":
+            final = payload
+    return final

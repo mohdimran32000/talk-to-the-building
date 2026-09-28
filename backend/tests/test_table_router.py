@@ -124,6 +124,76 @@ CARDS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# A second, isolated fixture for the 'building' stopword defect (2026-09-16).
+# Kept separate from CARDS rather than appended to it: these bld_locations-
+# style cards are deliberately placeable (carry `location_id`) with nothing
+# else to discriminate on, and mixing them into CARDS changed the ranking for
+# the unrelated ls-008 canary in section 2 above (hwu_locations/_aliases/
+# hwu_equipment all tied at the flat place-tier score and pushed
+# hwu_db_circuits out of the top 3) — a regression this section must not
+# cause. Shaped from the real hwu_locations / hwu_location_aliases /
+# hwu_equipment / firefighting-register cards (CLAUDE.md).
+# ---------------------------------------------------------------------------
+BUILDING_STOPWORD_CARDS = [
+    {
+        "table": "hwu_locations", "document": "hwu-spine", "row_count": 760,
+        "columns": ["location_id", "room_number", "level_name", "kind", "building", "notes"],
+        "identifier_column": "location_id",
+        "identifier_prefixes": ["RM", "LRF"],
+        "one_row_is": "one row is one location, identified by its `location_id` value",
+        "holds": "the cross-document location spine: every room, level and block in the building",
+        # 'building' appears twice on this card, exactly as the measured
+        # defect describes: as the literal COLUMN name (subject tier) and as
+        # an enumerated VALUE ('kind' also classifies a row as the building
+        # itself, alongside room/level/site) — the vocabulary tier. Without
+        # the stopword, both tiers fire on the question's own word 'building'
+        # and this card outscores the real evidence table; that is the
+        # regression this fixture must catch.
+        "value_vocabulary": {"building": ["B", "C"],
+                              "kind": ["room", "level_block", "level", "site", "building"]},
+        "joins_to": ["hwu_location_aliases"],
+        "caveats": [],
+    },
+    {
+        "table": "hwu_location_aliases", "document": "hwu-spine", "row_count": 1358,
+        "columns": ["location_id", "alias_text", "status", "building", "notes"],
+        "identifier_column": "alias_text",
+        "identifier_prefixes": [],
+        "one_row_is": "one row is one printed name for a location, resolved to a location_id",
+        "holds": "alternate/printed names for each location",
+        "value_vocabulary": {"building": ["B", "C"], "status": ["area", "room"]},
+        "joins_to": ["hwu_locations"],
+        "caveats": [],
+    },
+    # --- the firefighting registers this question's real evidence lives in
+    # (CLAUDE.md's /om-firefighting and /registers folders).
+    {
+        "table": "hwu_equipment", "document": "hwu-registers", "row_count": 1188,
+        "columns": ["equipment_tag", "system", "location_id", "notes"],
+        "identifier_column": "equipment_tag",
+        "identifier_prefixes": [],
+        "one_row_is": "one row is one piece of building equipment",
+        "holds": "the maintained cross-system equipment register",
+        "value_vocabulary": {"system": ["fire fighting", "mechanical", "electrical", "cctv"]},
+        "joins_to": [],
+        "caveats": [],
+    },
+    {
+        "table": "hwu_om_firefighting_asset_register", "document": "hwu-om-firefighting",
+        "row_count": 67,
+        "columns": ["asset_tag", "asset_type", "location", "notes"],
+        "identifier_column": "asset_tag",
+        "identifier_prefixes": [],
+        "one_row_is": "one row is one fire fighting asset, identified by its `asset_tag` value",
+        "holds": "fire fighting asset register: sprinklers, extinguishers, NAF 227 units",
+        "value_vocabulary": {"asset_type": ["sprinkler head", "fire extinguisher", "NAF 227 unit"]},
+        "joins_to": [],
+        "caveats": [],
+    },
+]
+
+
 def names(result):
     return result
 
@@ -169,6 +239,16 @@ r = select_tables("How many cameras are installed on site?", CARDS, k=1)
 ranked_part = r[:1]
 check("k=1 still returns exactly 1 ranked pick plus its declared neighbours",
       len(ranked_part) == 1)
+
+print("\n6a. 'building' carries no routing signal in a one-building corpus")
+r = select_tables("what are the various firefighting assets we have in the building?",
+                   BUILDING_STOPWORD_CARDS, k=3)
+check("an equipment/register table outranks the locations tables for a "
+      "firefighting question, even though 'building' is a literal column "
+      "on the locations cards (2026-09-16 defect)",
+      any(n in ("hwu_equipment", "hwu_om_firefighting_asset_register") for n in r[:1]), r)
+check("hwu_locations does not win the top slot on the word 'building' alone",
+      r[0] != "hwu_locations" if r else False, r)
 
 print("\n6. Empty cards / no signal doesn't crash")
 check("empty card list returns empty", select_tables("anything", [], k=3) == [])

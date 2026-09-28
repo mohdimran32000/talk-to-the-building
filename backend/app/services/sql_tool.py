@@ -21,6 +21,306 @@ logger = logging.getLogger(__name__)
 
 SQL_QUERY_TIMEOUT = 5  # seconds
 
+# ---------------------------------------------------------------------------
+# THE DEPENDENCY-GRAPH RULE — one domain rule, in the same voice as the ~20
+# already in the prompt, kept as a named constant purely so a test can prove it
+# reaches the prompt (test the routing, not just the detection —
+# doc-prep/CLAUDE.md §12); the text itself is interpolated verbatim like every
+# other rule.
+#
+# WHAT IT DESCRIBES, and why it cannot be left to the schema block. The schema
+# block already shows this table's columns and its enumerated predicate values,
+# so a model can SEE the graph — what it cannot see is that `subject_id` and
+# `object_id` are POLYMORPHIC (the type column decides which table an id
+# resolves to), that a dependency question must be asked in BOTH directions, or
+# that a link with no evidence column selected is half a fact. All three are
+# properties of the shape, not of this building, so the rule is written from the
+# COLUMN SHAPE and names no table: a second project's graph, under any name,
+# gets the same rule as soon as its card carries subject/predicate/object.
+#
+# Kind -> table is deliberately given as a METHOD ("the kind names the table
+# family; resolve it against the tables listed above") rather than a hard-coded
+# map. A hard-coded map is a per-building fact and would be wrong for the next
+# project, and the id kinds are already enumerated in the schema block's own
+# `possible values` for the type columns.
+DEPENDENCY_GRAPH_RULE = (
+    "- A table whose rows are a SUBJECT id, a PREDICATE and an OBJECT id (columns like "
+    "subject_id/predicate/object_id, with subject_type/object_type naming each end's KIND) is the "
+    "corpus's DEPENDENCY GRAPH: one row is one evidence-backed link between two things in the "
+    "building, and it is ONE graph for every system — never a table per system. Use it for any "
+    "question about what something depends on, what depends on it, or what changing/replacing/"
+    "adding/removing/relocating it would affect. THE TWO ID COLUMNS ARE POLYMORPHIC: read the "
+    "type column first — it names the KIND of thing the id is (a panel/board, a circuit, a "
+    "location/room, a door, a controller, a piece of equipment, an FCU, a table, or plain printed "
+    "text), and the kind says which of the tables listed above that id joins to and on which "
+    "column; kinds that are plain printed text join nothing and are quoted as printed. WALK IT IN "
+    "BOTH DIRECTIONS IN ONE QUERY — the rows whose object_id is the asset are what it depends on "
+    "(upstream) and the rows whose subject_id is the asset are what depends on it (downstream): "
+    "SELECT * FROM \"<graph table>\" WHERE subject_id = '<id>' OR object_id = '<id>'. Never one "
+    "direction alone: half the answer is worse than none. For a second hop, repeat with the ids "
+    "the first hop returned: WHERE subject_id IN (SELECT object_id FROM \"<graph table>\" WHERE "
+    "subject_id = '<id>') OR object_id IN (...). ALWAYS also SELECT the evidence columns (how the "
+    "link was derived, and the source file/page/quote) — a link without its evidence is half a "
+    "fact. Match the id EXACTLY as the graph prints it (use ILIKE when the question's spelling may "
+    "differ). Two limits: a link row is never a COUNT of assets (one circuit feeding 'Zip Tap' is "
+    "one circuit, not one tap — count the register), and the graph proves no negative — no row for "
+    "an asset means no document records a link, never that nothing depends on it."
+)
+
+# Probe pr-003 (2026-09-17): "How many fan coil units does the building have?" was
+# answered SUM(points) FROM the circuits table WHERE load_type ILIKE '%FCU%' = 550. A
+# circuit's `points` are the OUTLETS it serves - the load schedule's count of what is
+# wired, not the owner's count of what is installed. Equipment counts live in register
+# tables: one row per asset (with a qty column) or one row per room and device type
+# with a quantity. Generic by shape: no table name is used.
+EQUIPMENT_COUNT_RULE = (
+    "- COUNTING EQUIPMENT ('how many <equipment type>', 'how many units'): count from a REGISTER-"
+    "shaped table - one row per asset (SUM its qty/quantity column, or COUNT rows when qty is "
+    "text) or one row per room and device type with a quantity column. NEVER count equipment "
+    "from an electrical circuits/load-schedule table: its `points` column is the number of "
+    "OUTLETS a circuit serves and its rows are circuits, not the equipment installed - a "
+    "load-type filter there answers 'how many circuit points feed X', a different question. "
+    "When both a register and a circuits table match the type word, the register is the answer; "
+    "if the registers list the type under several rows or systems, SUM them all and keep the "
+    "type filter on the description/device column."
+)
+
+
+# ---------------------------------------------------------------------------
+# WHAT IS IN A PLACE — Task 8 round 2 (2026-09-18), the ruler's R shape.
+#
+# Measured on the shipped runs, not reasoned about. Nine of the ten per-room
+# cards failed, and the SQL says why:
+#   * `location_id = 'L06-B'` — the LEVEL-and-block row, not the room's own id.
+#     42 level assets came back and the answer said "the records do not contain
+#     information regarding an IDF hub room" (ex-039).
+#   * `location_id = 'L02-B' AND display_name ILIKE '%MDF%'` — two filters that
+#     name two DIFFERENT rows, so: 0 rows (ex-040).
+#   * a per-system O&M supply list with no place column was filtered on its
+#     `remarks` instead: 0 rows, four times (ex-038, ex-042, ex-044, ex-045 —
+#     the routing half of those is fixed in table_router).
+#   * the folded per-room table was routed and a narrower register was used
+#     anyway: 14 of 36 units (ex-036), 18 of 23 (ex-041), 12 rows for a room
+#     holding 26 units (ex-052).
+#   * no query ever returned the place's own unit TOTAL, which is the one group
+#     ex-042, ex-044 and ex-045 each failed on after getting everything else
+#     right.
+# Written from SHAPE — a location-id column, a human-readable place-name column,
+# a quantity column — so it names no table and no building.
+ROOM_CONTENTS_RULE = (
+    "- WHAT IS IN A PLACE ('what assets are in X', 'what is installed in <room>', 'what else is "
+    "in that room'): answer from the table that already carries ONE ROW PER PLACE AND ITEM — it "
+    "has BOTH a location-id column and a human-readable place-name column (a display/room-name "
+    "column printing things like '<number> <Room Name> <Block>') — in preference to any "
+    "per-system asset register, which carries no place column at all and can only be searched "
+    "in its free text. FILTER ON THE PLACE-NAME COLUMN, with ILIKE on the place exactly as the "
+    "question prints it (e.g. <place-name column> ILIKE '%<the name in the question>%'), and "
+    "NEVER also equate the location-id column in the same WHERE: a level-and-block id is a "
+    "DIFFERENT row from that room's own id, so the two together return nothing, and the "
+    "level-and-block id on its own answers about the whole level instead of the room. Do not "
+    "build a location id out of a floor and a block — you cannot know a room's id, and the "
+    "printed name is what the question gave you. SELECT the place-name column, the "
+    "system/category column, the item/description column and the quantity column, and ORDER BY "
+    "the place-name column then the system so each place's items stay together. ALSO RETURN THE "
+    "TOTALS in the same query — the total quantity for the place and the quantity per system "
+    "— as EXTRA COLUMNS on every row, with window functions (e.g. SUM(<quantity>) OVER () "
+    "AS place_total, SUM(<quantity>) OVER (PARTITION BY <system column>) AS system_total), and "
+    "never as an extra UNION ALL row: a set operation needs both arms to project identical "
+    "column lists, which is where an arm padded with NULLs comes from. Return them, "
+    "because 'what is in this place' is answered by the list AND its count, and a list with no "
+    "total makes the answer invent one or count rows instead of units. If the printed name "
+    "matches more than one place, return them all, each with its place-name column, so the "
+    "answer can say which is which rather than merging them."
+)
+
+# ---------------------------------------------------------------------------
+# A TWO-PART QUESTION ABOUT ONE NAMED THING — Task 8 round 2, the ruler's J shape.
+#
+# Measured, every one from the SQL the app wrote:
+#   * ex-046 asked "which network room and which switch" and the query selected
+#     two columns of a row that also prints the switch model and the VMS room;
+#     the answer then said "the provided records do not contain information
+#     regarding the specific switch". ex-048 the same, for the UPS room.
+#   * ex-047 invented `subject`/`subject_id` on that table to self-join with —
+#     columns that are not on it — and the query died with a Binder Error.
+#   * ex-049 counted a board's circuits in the FEEDER schedule (0) instead of
+#     the table whose rows ARE circuits (42).
+#   * ex-050, ex-051 and ex-055 returned the neighbours and never the thing's
+#     own printed rating: 143.6 / 192.63 / 1445.45 kW, each the missing group.
+# Written from SHAPE — a row with an id column, a table whose rows are the
+# children — so it names no table and no building.
+#
+# ONE CLAUSE WITHDRAWN, 2026-09-28 (the owner's ruling on his own room-1.29
+# trace). This rule used to end: "(UNION ALL one labelled block per part is
+# fine, with a constant column naming which part each block answers)". Read
+# literally against two tables of DIFFERENT WIDTHS, that is the query the writer
+# produced - and, having to pad the narrow arm to a width it could not know, it
+# emitted `NULL,` until the 8,192-token output cap stopped it (8,188 output
+# tokens), for a Binder Error and an answer taken from a stray document chunk.
+# TWO_PART_RULE below now says the opposite, and two rules contradicting each
+# other in one prompt is the wrong end state, so the clause is withdrawn rather
+# than left to be outvoted. Nothing is lost: the JOIN it offered alongside is
+# kept and is now the only answer on offer. The same construction was withdrawn
+# from ROOM_CONTENTS_RULE above on the same day, where the totals now come from
+# window functions. `tests/test_room_and_hop_rules.py` section 7 sweeps every
+# rule the model is sent and proves that no UNION in the prompt is anything but
+# a prohibition.
+TWO_HOP_RULE = (
+    "- A QUESTION IN TWO PARTS ABOUT ONE NAMED THING ('which network room AND which switch', "
+    "'what does X feed AND what feeds X', 'which room does it control AND what else is in that "
+    "room', '… and how many circuits does it have'): START FROM THAT THING'S OWN ROW AND SELECT "
+    "EVERY COLUMN OF IT (SELECT * FROM \"<table>\" WHERE <its id column> = '<id>'), never two or "
+    "three columns picked for the first part only. These tables are wide on purpose: one row "
+    "often already carries the whole chain — the room, the equipment model, the units it is "
+    "backed up by, its class — and a narrow SELECT is exactly why an answer goes on to say the "
+    "records do not contain a value that was printed on the row it just read. NEVER INVENT A "
+    "COLUMN that is not listed above in order to make a join; if no column of that row answers "
+    "the second part, join to the table whose rows ARE those things, on the value this row "
+    "prints, in the SAME query — a JOIN on that shared key, and never a set operation, "
+    "whose arms must project identical column lists. A COUNT of what something HAS comes from the "
+    "table whose rows are those things (count the circuit rows in the circuits table), never "
+    "from the thing's own row and never from the parent's feeder row, which holds one row per "
+    "child board and not one per circuit. And when the question asks about a thing AND its "
+    "neighbours, include THE THING'S OWN totals, ratings and notes as well as the neighbour "
+    "list: a list of what X feeds does not contain X's own rating, and the answer will say it "
+    "is not recorded."
+)
+
+# ---------------------------------------------------------------------------
+# THE SAME QUESTION, ONE STEP EARLIER - measured on the owner's own question,
+# 2026-09-28, and traced in LangSmith.
+#
+# "what is <place>? and what all assets there inside?" is TWO_HOP_RULE's shape,
+# and TWO_HOP_RULE offers "UNION ALL one labelled block per part is fine" as one
+# way to answer it. Taken literally against two tables of different widths, that
+# is what the writer wrote:
+#
+#     SELECT * FROM <places> WHERE <number> = '...'
+#     UNION ALL SELECT NULL, NULL, NULL, NULL, ...
+#
+# It cannot work: a set operation needs both arms to project the same number of
+# columns, and the second arm was being padded out to a width the writer had to
+# guess. It guessed by emitting `NULL,` until the 8,192-token output cap stopped
+# it - 8,188 output tokens. DuckDB refused it ("Set operations can only apply to
+# expressions with the same number of result columns"), the repair call produced
+# the same shape, and the question reached the document index, which answered
+# "1 Daylight Sensor" off one stray chunk. The true answer was 14 units across 8
+# items, sitting in a table that shares a key with the entity's own row.
+#
+# Two other guards catch this after the fact (`_sql_looks_runaway` refuses the
+# query, `sql_loop.FAILED_SQL` re-queries it). This one stops it being written:
+# a JOIN, never a set operation. Written from SHAPE - an entity's own row, a
+# table whose rows are its parts, a shared key - so it names no table and no
+# building.
+TWO_PART_RULE = (
+    "- A QUESTION WITH TWO PARTS ABOUT ONE ENTITY ('what is X and what is in it', "
+    "'describe X and list its Y') is ONE query: select from the table that holds the "
+    "specific part (the list or the count), JOIN the entity's own row on the shared "
+    "location/identifier key to bring its name, area, department or other descriptive "
+    "columns alongside, and NEVER combine tables with UNION/INTERSECT/EXCEPT - set "
+    "operations require identical column lists and are never the answer here."
+)
+
+# ---------------------------------------------------------------------------
+# LISTING ENTITIES / SPEC-TABLE COMPLETENESS — spec 2026-09-23 item 1, proactive
+# (no single eval case number: these guard the two writer habits the plan
+# calls IDENTIFIER_MISSING and spec-table under-selection, ahead of the
+# verifying loop that will catch them live). Written from SHAPE — an
+# identifier-shaped column by name or schema role, a one-row-per-(entity,
+# parameter) table shape — so neither names a table, column value or
+# building.
+LIST_IDENTIFIER_RULE = (
+    "- LISTING ENTITIES ('what are the rooms/boards/doors/cameras \u2026', 'list \u2026', "
+    "'which \u2026'): ALWAYS SELECT the table's identifier column FIRST \u2014 the column that "
+    "names or numbers each row (a room number, a board name, a door id, a camera tag: the column "
+    "the schema marks as the identifier or whose name ends in _number/_id/_tag/_name) \u2014 then "
+    "the descriptive columns. A list without identifiers cannot be acted on."
+)
+
+ALL_PARAMETERS_RULE = (
+    "- A table with one row per (entity, parameter, value) is a specification table: when asked "
+    "for specs/specifications/details of an entity, return EVERY parameter row for the matching "
+    "entities (filter on the entity column only, never on the parameter column unless one "
+    "parameter is asked for), so the answer can list all of them."
+)
+
+# Measured, not proactive, unlike the two above: the owner asked "what are the rooms on
+# the first floor?" on 2026-09-23 and got 50 rows whose room-number cell was EMPTY. The
+# identifier column HAD been selected - the rule above worked - and the query ended
+# `ORDER BY <that column>`, where an empty string sorts before every real value, so the
+# rows shown were exactly the ones with no identifier. Written from SHAPE, like the
+# others: no table, column or building is named.
+ORDER_BY_BLANKS_RULE = (
+    "- ORDER BY on an identifier column must put the rows that have NO identifier LAST, "
+    "never first: write ORDER BY NULLIF(<that column>, '') NULLS LAST (a blank cell is an "
+    "empty string, which sorts BEFORE every real value, so a plain ORDER BY opens the list "
+    "with the unidentified rows and a row limit then shows only those). Keep those rows \u2014 "
+    "they belong in the list \u2014 at the end of it."
+)
+
+
+
+# ---------------------------------------------------------------------------
+# THE RUNAWAY GUARD - measured on the owner's own question, 2026-09-28.
+#
+# "what is room 1.29? and what all assets there inside?" is two questions about
+# one entity. The writer glued them together with a set operation across tables
+# of different widths - SELECT * FROM <places> ... UNION ALL SELECT NULL, NULL,
+# NULL, ... - and, having to pad the second arm to the first arm's width without
+# knowing that width, emitted `NULL,` until the output cap stopped it: 8,188
+# output tokens. DuckDB refused it ("Set operations can only apply to expressions
+# with the same number of result columns"), the one repair call produced the same
+# shape, and the question fell through to document search, which answered from a
+# stray chunk.
+#
+# A query this shape is degenerate BEFORE it runs, by two signals a regex can
+# read: it is far longer than any single-line SELECT this prompt asks for, or it
+# carries a run of padding NULLs. Both are refused here - no execution, and no
+# repair either, because a repair prompt carrying kilobytes of NULLs is the next
+# runaway. The refusal is worded as a SQL failure so the investigation loop's
+# FAILED path picks it up and re-queries (see `sql_loop.FAILED_SQL`).
+#
+# Shape only: no table, column or building is named, so a second project gets the
+# same guard.
+# ---------------------------------------------------------------------------
+
+#: A single-line SELECT longer than this is not a query, it is a generation that
+#: ran away. The longest legitimate query this prompt has produced in the eval
+#: suite is well under half of it.
+MAX_GENERATED_SQL_CHARS = 1500
+
+#: This many `NULL` items in a row - commas and whitespace between them - is
+#: padding, not a projection anyone wrote.
+MAX_REPEATED_NULLS = 20
+
+_NULL_RUN_RE = re.compile(
+    r"(?:\bNULL\b\s*,\s*){%d}\bNULL\b" % (MAX_REPEATED_NULLS - 1), re.IGNORECASE)
+
+
+def _sql_looks_runaway(sql: str) -> str | None:
+    """The reason this generated SQL must not be executed, or None if it is sane.
+
+    Pure and deterministic - no model, no database - so the guard is testable on
+    its own (`tests/test_sql_runaway_guard.py`).
+    """
+    text = sql or ""
+    if len(text) > MAX_GENERATED_SQL_CHARS:
+        return (f"{len(text)} characters, over the "
+                f"{MAX_GENERATED_SQL_CHARS}-character limit for one query")
+    if _NULL_RUN_RE.search(text):
+        return f"a run of {MAX_REPEATED_NULLS} or more repeated NULL items"
+    return None
+
+
+def _runaway_failure_text(sql: str, reason: str) -> str:
+    """The refusal, worded exactly like a real execution failure so every caller
+    that already handles one handles this too."""
+    snippet = (sql or "")[:300]
+    if len(sql or "") > 300:
+        snippet += "…"
+    return (f"SQL query failed: generated SQL was malformed ({reason})\n\n"
+            f"Generated SQL: `{snippet}`")
+
 
 class _QueryTimeoutError(Exception):
     """Raised when a DuckDB query is aborted for running past SQL_QUERY_TIMEOUT."""
@@ -106,13 +406,30 @@ def _cards_from_file() -> list[dict]:
 
     Kept so local development and any deployment without the table still work, and so
     that a database outage degrades to stale-but-useful rather than to nothing.
+
+    Sorted by table name for the same reason the database read is ordered — see
+    `_load_table_cards`. The two sources must agree, or a fallback would silently
+    re-rank every tied question the moment the database went away.
     """
     try:
-        return json.loads(_TABLE_CARDS_PATH.read_text(encoding="utf-8"))
+        return _ordered(json.loads(_TABLE_CARDS_PATH.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as e:
         logger.warning(f"table_router: could not load {_TABLE_CARDS_PATH} ({e}); "
                        f"falling back to the unrouted schema block")
         return []
+
+
+def _ordered(cards) -> list[dict]:
+    """Cards sorted by table name, tolerating anything that is not a well-formed card.
+
+    `table_router.select_tables` breaks score ties by each card's POSITION in this list
+    (`scored.sort(key=lambda t: (-t[0], t[1]))`), so the list's order is part of the
+    router's answer. Sorting here is what makes that answer reproducible.
+    """
+    if not isinstance(cards, list):
+        return []
+    return sorted((c for c in cards if isinstance(c, dict)),
+                  key=lambda c: str(c.get("table", "")))
 
 
 def _load_table_cards(user_id: str | None = None, supabase_client=None) -> list[dict]:
@@ -158,16 +475,32 @@ def _load_table_cards(user_id: str | None = None, supabase_client=None) -> list[
     cards: list[dict] = []
     if user_id and supabase_client is not None:
         try:
+            # 🔴 `.order("table_name")` is load-bearing, not tidiness (2026-09-18,
+            # task-8-diagnosis.md proof 2). Without it PostgREST returns heap order, and
+            # `11_table_cards.py --publish` does delete() + upsert(), so every republish
+            # rewrote it. `table_router.select_tables` breaks score ties by a card's
+            # position in this list, and the third routed slot is a TEN-WAY tie at 0.1111
+            # on the room questions - so republishing the cards, changing not one byte of
+            # any card, moved ex-038/ex-044/ex-045 off `hwu_room_assets` and onto
+            # `hwu_om_acs_asset_register`, which returns 0 rows. Shuffling the 70 live
+            # cards 40 times changes the top-3 on 39 of 70 questions. Ordering the read
+            # does not make the tie-break RIGHT (that is a separate, measured change); it
+            # makes it the SAME every time, which is the precondition for measuring it.
             res = (supabase_client.table("table_cards")
                    .select("table_name, card")
                    .eq("user_id", user_id)
+                   .order("table_name")
                    .execute())
             rows = getattr(res, "data", None) or []
             # A row whose `card` is not an object is skipped rather than fatal: the
             # router's own guard would survive it, but failing here would defeat the
             # point of the fallback chain.
-            cards = [r["card"] for r in rows
-                     if isinstance(r, dict) and isinstance(r.get("card"), dict)]
+            # Re-sorted rather than trusted: the ORDER BY above is what the database is
+            # asked for, and this is what the router is given. A client whose chain
+            # ignores `.order` (or a row whose card names a different table) can then
+            # never leave the list in an order the next deploy would not reproduce.
+            cards = _ordered([r["card"] for r in rows
+                              if isinstance(r, dict) and isinstance(r.get("card"), dict)])
             if rows and not cards:
                 logger.warning("table_router: table_cards rows present but none parsed "
                                "as card objects; falling back to the local file")
@@ -186,6 +519,11 @@ def _load_table_cards(user_id: str | None = None, supabase_client=None) -> list[
     return cards
 
 
+# A digit string that starts with 0 and is not a decimal ("0552002270", "003003455114",
+# "007") - an identifier. "0", "0.5", "0,5" are numbers and do not match.
+_LEADING_ZERO_CODE_RE = re.compile(r"^0\d+$")
+
+
 def _infer_column_types(cols: list, rows: list, sample_limit: int = 200) -> dict:
     """Majority-vote type inference: a column is DOUBLE when >=80% of its
     non-empty sampled values parse as numbers. Tolerates stray text like
@@ -194,6 +532,7 @@ def _infer_column_types(cols: list, rows: list, sample_limit: int = 200) -> dict
     for c in cols:
         numeric = 0
         non_empty = 0
+        has_code = False
         for row in rows[:sample_limit]:
             val = row.get(c)
             if val is None or val == "":
@@ -202,12 +541,22 @@ def _infer_column_types(cols: list, rows: list, sample_limit: int = 200) -> dict
             if isinstance(val, (int, float)):
                 numeric += 1
             elif isinstance(val, str):
+                if _LEADING_ZERO_CODE_RE.match(val.strip()):
+                    # "0552002270", "003003455114": a leading zero on a run of digits
+                    # is an identifier (phone, meter, account), never a quantity.
+                    # One such value makes the whole column text - as DOUBLE it
+                    # would print 552002270.0, a number nobody can dial (2026-09-17).
+                    has_code = True
+                    continue
                 try:
                     float(val.replace(",", ""))
                     numeric += 1
                 except ValueError:
                     pass
-        col_types[c] = "DOUBLE" if non_empty and numeric / non_empty >= 0.8 else "VARCHAR"
+        if has_code:
+            col_types[c] = "VARCHAR"
+        else:
+            col_types[c] = "DOUBLE" if non_empty and numeric / non_empty >= 0.8 else "VARCHAR"
     return col_types
 
 
@@ -230,6 +579,155 @@ def _sample_values(rows: list, col: str, limit: int = 8, max_len: int = 28, scan
             break
         seen.append(s[:max_len])
     return seen, not overflow
+
+
+def _is_numeric_value(v) -> bool:
+    """True when a value parses as a plain number (comma thousands allowed) — a
+    breakdown of such a column reads as a product ("800 x 17" is this corpus's own
+    load-calculation notation for 17 points at 800 W each), never as a count."""
+    s = str(v).strip().replace(",", "")
+    if not s:
+        return False
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _clean_shape_value(v, max_len: int = 40) -> str:
+    """Collapse whitespace/newlines to a single space (a raw newline in a value would
+    otherwise fragment the block into an extra physical line, and — if the text after
+    it happened to start with a pipe — that line would read as a markdown table row
+    to _sql_result_is_empty), then cap the DISPLAYED value at max_len characters. The
+    value used for counting/grouping is always the uncleaned, untruncated original."""
+    s = re.sub(r"\s+", " ", str(v)).strip()
+    if len(s) > max_len:
+        s = s[: max_len - 1].rstrip() + "…"
+    return s
+
+
+def _result_shape(col_names: list, result: list, shown: int) -> str:
+    """What the result IS, stated before the writer reads it: total rows, rows shown,
+    the distinct count of the identifier-like column, and a breakdown of every
+    low-variety column. Empty for results under 4 rows. 2026-09-18: 88 cameras x 4
+    spec rows = 352 rows, cut to 50, were reported as "352 units, all one model".
+
+    Fix round 1 (2026-09-18 review): a join can return the SAME column name twice
+    (e.g. a.v / b.v), so everything below is keyed by column INDEX, never by name —
+    keying by name silently overwrote one column's distribution with the other's. A
+    breakdown counts DISTINCT identifier-column values per bucket when an
+    identifier-like column exists (352 rows / 4 spec-rows-per-camera must read as 65
+    cameras, not 260 rows), and row counts otherwise — and always NAMES which base it
+    used ("per distinct <col>" or "rows"), notation "value (N)", never "value x N"
+    (this corpus's own drawings write "800 x 17" to mean 17 points at 800 W each, so
+    "x" reads as multiplication here). All-numeric columns and columns where every
+    value occurs once (k == n, a breakdown that just restates the table) are skipped.
+    The header's "distinct" clause is omitted when the identifier column has <= 1
+    distinct value. The block is labelled RESULT SHAPE, not SHAPE, so it cannot be
+    confused with CHANGE_IMPACT_ANSWER_SHAPE in the same prompt."""
+    n = len(result)
+    if n < 4:
+        return ""
+    lines = [f"RESULT SHAPE - rows: {n}; shown: {min(shown, n)}"]
+    ncols = len(col_names)
+    distinct = {}  # column index -> (distinct count, non-empty values)
+    for ci in range(ncols):
+        vals = [row[ci] for row in result if row[ci] is not None and str(row[ci]).strip() != ""]
+        distinct[ci] = (len(set(map(str, vals))), vals)
+
+    # identifier-like: the column (by INDEX) with the most distinct values
+    ident_idx = max(range(ncols), key=lambda ci: distinct[ci][0]) if ncols else None
+    ident_k = distinct[ident_idx][0] if ident_idx is not None else 0
+    use_ident = ident_idx is not None and 1 < ident_k < n
+    if use_ident:
+        lines[0] += f" | distinct {col_names[ident_idx]}: {ident_k}"
+
+    for ci, cn in enumerate(col_names):
+        if ci == ident_idx:
+            continue
+        k, vals = distinct[ci]
+        if not (2 <= k <= 8) or k == n:
+            continue
+        if vals and all(_is_numeric_value(v) for v in vals):
+            continue
+        if use_ident:
+            groups = {}
+            for row in result:
+                v = row[ci]
+                if v is None or str(v).strip() == "":
+                    continue
+                idv = row[ident_idx]
+                if idv is None or str(idv).strip() == "":
+                    continue
+                groups.setdefault(str(v), set()).add(str(idv))
+            counts = {v: len(ids) for v, ids in groups.items()}
+            basis = f"per distinct {col_names[ident_idx]}"
+        else:
+            counts = {}
+            for v in vals:
+                sv = str(v)
+                counts[sv] = counts.get(sv, 0) + 1
+            basis = "rows"
+        if not counts:
+            continue
+        parts = [f"{_clean_shape_value(v)} ({c})" for v, c in sorted(counts.items(), key=lambda kv: -kv[1])]
+        line = f"{cn} ({basis}): " + ", ".join(parts)
+        if len(line) > 300:
+            line = line[:299].rstrip() + "…"
+        if line.startswith("|"):
+            line = "- " + line
+        lines.append(line)
+    return "\n".join(lines)
+
+
+# Bounds on the caveats that ride with a SOURCE line (see `_source_lines`). Three
+# is what the widest card in the corpus carries; 300 characters is the same cut
+# `_result_shape` uses on a breakdown line.
+CAVEATS_PER_TABLE = 3
+CAVEAT_MAX_CHARS = 300
+
+
+def _source_lines(sql: str, tables: list, cards: list) -> str:
+    """One 'SOURCE' line per table the SQL reads, quoting that table's card `holds`
+    sentence, so the answer-writing model (which never sees the schema or the
+    cards) can say WHICH record a number came from. Probe pr-008 (2026-09-17):
+    "How many access-control doors?" came back as a bare 68 - correct, and
+    unattributable, although the doors card says in one sentence that the 68 are
+    the positions drawn on the as-built drawings, and the manual prints three
+    other counts. Empty when there are no cards (the unrouted fallback).
+
+    Each SOURCE line is followed by that card's own `caveats`, as NOTE lines.
+    2026-09-19 (final-review finding I3): `caveats` was written by doc-prep and
+    documented as a card field HERE, and no code in this app read it - so the
+    count-views card's "never SUM `count` across `view_id`" warning reached the
+    document index and never the model that writes the SQL or the answer. That
+    warning exists because a SUM over a long-format table shipped "486 doors",
+    "1,267 fan coil units" and "451 card readers" - three confidently-wrong
+    totals off a table whose every row is correct. Bounded exactly like `holds`:
+    at most CAVEATS_PER_TABLE per table, each cut to CAVEAT_MAX_CHARS, so a card
+    with a long caveat list cannot flood the prompt it rides in."""
+    if not cards or not sql:
+        return ""
+    holds_by_table = {c.get("table"): (c.get("holds") or "").strip() for c in cards if c.get("table")}
+    caveats_by_table = {c.get("table"): (c.get("caveats") or []) for c in cards if c.get("table")}
+    lines = []
+    for tbl in tables:
+        name = tbl["table_name"]
+        if not holds_by_table.get(name):
+            continue
+        if not re.search(r'(?<![A-Za-z0-9_])"?' + re.escape(name) + r'"?(?![A-Za-z0-9_])', sql):
+            continue
+        holds = re.sub(r"\s+", " ", holds_by_table[name])
+        if len(holds) > 400:
+            holds = holds[:397].rstrip() + "..."
+        lines.append(f"SOURCE - {name}: {holds}")
+        cavs = [re.sub(r"\s+", " ", str(c)).strip() for c in caveats_by_table.get(name) or []]
+        for cav in [c for c in cavs if c][:CAVEATS_PER_TABLE]:
+            if len(cav) > CAVEAT_MAX_CHARS:
+                cav = cav[:CAVEAT_MAX_CHARS - 3].rstrip() + "..."
+            lines.append(f"NOTE - {name}: {cav}")
+    return "\n".join(lines)
 
 
 def _fix_table_names(sql: str, real_table_names: list[str],
@@ -288,6 +786,54 @@ def _fix_table_names(sql: str, real_table_names: list[str],
             sql = re.sub(rf'\b{re.escape(word)}\b', f'"{best_match}"', sql)
 
     return sql
+
+
+def route_tables(question: str, user_id: str, supabase_client,
+                 live_table_names=None) -> list[dict]:
+    """The CARDS the router picks for `question` - the same selection
+    `execute_sql_query` makes below, returned as cards rather than as the
+    `structured_data` rows it narrows.
+
+    `sql_loop.inspect_result` needs the cards, not the tables: what it asks of a
+    result is whether the identifier column a card DECLARES came back, and which
+    of that card's columns are worth widening to. Deliberately the same two calls
+    in the same order, with the same fallbacks - no cards, or a cards file of the
+    wrong shape, yields `[]`, which the inspector documents as "the column-shaped
+    issues never fire".
+
+    `live_table_names` is the third of those fallbacks, and it is the one that
+    keeps the inspector honest. `execute_sql_query` narrows `tables` by the
+    selection and, when the selection matches NO live table, falls back to the
+    full schema - so a card whose table is not live was never shown to the SQL
+    writer. The cards drifting behind the corpus is an observed condition, not a
+    hypothetical (see `_load_table_cards`: "drifted four tables behind the live
+    corpus"), and in that state an unfiltered card list lets the loop demand an
+    identifier column of a table nobody queried, spending a whole step on an
+    instruction that cannot be obeyed. Filtering here mirrors the narrowing
+    there; an empty intersection yields `[]`, mirroring the full-schema fallback,
+    which the inspector reads as "no cards".
+
+    An EMPTY or omitted `live_table_names` means the caller does not know which
+    tables are live, which is not the same as none being live: it filters nothing.
+    """
+    cards = _load_table_cards(user_id, supabase_client)
+    if not cards:
+        return []
+    try:
+        selected = set(select_tables(question, cards, k=3))
+    except Exception as e:
+        logger.warning(f"table_router: routing failed ({type(e).__name__}: {e}); "
+                       f"the investigation runs without cards")
+        return []
+    routed = [c for c in cards if c.get("table") in selected]
+    live = {str(t) for t in (live_table_names or []) if t}
+    if live:
+        routed = [c for c in routed if c.get("table") in live]
+        if not routed:
+            logger.warning("table_router: the routed cards name no live table "
+                           "(cards out of sync with structured_data?); the "
+                           "investigation runs without cards")
+    return routed
 
 
 @traceable(name="query_structured_data", run_type="tool")
@@ -464,6 +1010,37 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # area totals from panel schedule        cases 2, 3            circuits cover only a subset
     # never approximate kWh from loads       doc-QA kWh cases      tables record ratings (kW),
     #                                                              not consumption (kWh)
+    # what is in a place: the place-name    ex-036, 039, 040,     a room is filtered by an id
+    #   column, never a built id             041, 042-045, 052     built from floor+block -> 0
+    #                                                              rows, or by the level's row
+    # two-part question -> SELECT * of       ex-046 … 051, 055     two columns of a wide row ->
+    #   the thing's own row                                        "the records do not contain"
+    #                                                              a value printed on that row
+    #   (its "UNION ALL one labelled block per part is fine" clause WITHDRAWN
+    #    2026-09-28 - it is what produced the runaway below; the JOIN it offered
+    #    alongside is kept, and the what-is-in-a-place rule above lost the same
+    #    clause on the same day)
+    # the dependency graph (subject/          no eval case yet —   a change-impact question is
+    #   predicate/object)                     the change-impact    answered from the asset's own
+    #                                         path, 2026-09-16     row alone, so nothing it
+    #                                                              affects is ever named
+    # listing entities: identifier          no eval case yet —   a list of names/tags with no
+    #   column first                        spec 2026-09-23      id column cannot be acted on
+    #                                         item 1, proactive
+    # spec table: every parameter row        no eval case yet —   a filtered spec query returns
+    #   for the matching entities             spec 2026-09-23      one parameter instead of the
+    #                                         item 1, proactive     full spec list
+    # two-part question: ONE query,          the owner's question  UNION ALL across tables of
+    #   JOIN, never UNION/INTERSECT/EXCEPT     of 2026-09-28,       different widths -> a Binder
+    #                                          traced in LangSmith  Error, an arm padded with
+    #                                                               8,188 tokens of NULLs, and
+    #                                                               the answer taken from one
+    #                                                               stray document chunk
+    # ORDER BY an identifier: sort           ey-001, and the       ORDER BY <id> puts the blank
+    #   blanks/NULLs last                     owner's own          cells first -> a list of 50
+    #                                         question of          rows with no identifier at
+    #                                         2026-09-23           all, which is the opposite
+    #                                                              of what was asked for
     #
     # Rules above these (exact table names, quoting, DuckDB syntax, CAST) are
     # generic SQL correctness, not domain fossils — no provenance needed.
@@ -512,6 +1089,14 @@ Rules:
 - For superlative/comparison questions about panels' or boards' totals ('which board has the highest connected load'), SELECT panel, tcl_kw FROM the panel-schedule table itself with ORDER BY tcl_kw DESC NULLS LAST — NEVER compute a substitute total by summing the circuits table (not even aliased as tcl_kw); the printed schedule totals are authoritative
 - The same applies to AREA totals ('total load of Block B', 'total load of the 4th floor'): they come from the panel-schedule table using the topmost-rows NOT EXISTS pattern above — never from SUM(load_w) over the circuits table, which covers only the circuit-level subset and gives a different, wrong number
 - The tables record CONNECTED LOADS and ratings (W, kW, A) — NOT energy consumption, runtime, or cost. If the question asks for something the tables do not record (kWh consumed, annual energy usage, operating hours, bills), NEVER approximate it from load columns (e.g. multiplying by hours) — return a query with no rows instead (SELECT NULL WHERE FALSE) so the system can look elsewhere
+{DEPENDENCY_GRAPH_RULE}
+{EQUIPMENT_COUNT_RULE}
+{ROOM_CONTENTS_RULE}
+{TWO_HOP_RULE}
+{LIST_IDENTIFIER_RULE}
+{ORDER_BY_BLANKS_RULE}
+{TWO_PART_RULE}
+{ALL_PARAMETERS_RULE}
 
 User question: {question}"""
 
@@ -525,7 +1110,12 @@ User question: {question}"""
             temperature=0,
             # Thinking models (gemini-2.5+/3) spend "thought" tokens from this same
             # budget — 2048 sometimes truncated the SQL mid-string. Keep it high.
-            max_output_tokens=8192,
+            # MEASURED 2026-09-28, and the reason it came back down: a two-part
+            # question made the writer pad a UNION arm with NULLs and it spent
+            # 8,188 output tokens doing it. A one-line SELECT never needs 8,192;
+            # a truncation is now caught by shape (_sql_looks_runaway) instead of
+            # being outrun by a bigger budget.
+            max_output_tokens=2048,
         ),
         name="sql_generate",
     )
@@ -541,6 +1131,13 @@ User question: {question}"""
     sql = _fix_table_names(sql, real_table_names, all_table_names)
 
     logger.info(f"Generated SQL: {sql}")
+
+    # 3a. Refuse a runaway generation BEFORE anything is executed - and before
+    # the repair call below, which would only be handed the same runaway back.
+    runaway = _sql_looks_runaway(sql)
+    if runaway:
+        logger.error(f"Refusing runaway generated SQL ({runaway}): {sql[:300]}")
+        return _runaway_failure_text(sql, runaway)
 
     # 4. Create in-memory DuckDB and load tables with inferred types
     con = duckdb.connect(":memory:")
@@ -598,7 +1195,7 @@ User question: {question}"""
             repair_resp = client.models.generate_content(
                 model=model,
                 contents=repair_prompt,
-                config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=8192),
+                config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=2048),
             )
             sql = (repair_resp.text or "").strip().rstrip(";")
             if sql.startswith("```"):
@@ -624,6 +1221,10 @@ User question: {question}"""
 
         if truncated:
             md += f"\n*Showing {max_rows} of {len(result)} rows*\n"
+
+        shape = _result_shape(col_names, result, max_rows)
+        if shape:
+            md += "\n" + shape + "\n"
 
         # Deterministic totals for quantity-like columns on multi-row results:
         # breakdown answers must end with a Total row, and the answer model
@@ -659,6 +1260,11 @@ User question: {question}"""
                 f"already INCLUDE everything fed from it — when reporting a total for an area, "
                 f"use only the topmost row(s); never add a parent's total to its children's totals."
             )
+        # Which record each number came from - travels WITH the result, like the
+        # hierarchy note above, because the answer-writing call never sees the cards.
+        sources = _source_lines(sql, tables, cards)
+        if sources:
+            md += "\n\n" + sources
         return md
 
     except Exception as e:

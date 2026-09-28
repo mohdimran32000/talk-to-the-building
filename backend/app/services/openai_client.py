@@ -17,6 +17,7 @@ from langsmith import traceable
 
 from app.services.settings import (
     get_llm_api_key, get_llm_model, get_metadata_schema,
+    get_sql_loop_max_steps,
     get_text_to_sql_enabled, get_web_search_enabled,
 )
 
@@ -44,15 +45,28 @@ def _get_client() -> genai.Client:
 
 SYSTEM_PROMPT_NO_DOCS = "You are a helpful assistant. Answer the user's questions clearly and concisely."
 
+# WHY THE RESULT SHAPE BULLET'S LAST CLAUSE IS KEPT THOUGH ITS SHAPE CANNOT ARISE
+# (Task 4 review, M-3). "When the result shows several investigation steps, answer
+# from the LAST result only" describes a result the writer is never handed:
+# `sql_loop` returns the LAST step's text and discards the earlier ones. It stays
+# because what the writer CAN see is the trailer, "INVESTIGATION - steps: 3", and a
+# writer that reads that line as evidence it is looking at a merged transcript of
+# three queries has to be told, in the rules, that it is not. The clause costs one
+# sentence; the alternative is relying on the model not to misread a line we put
+# there ourselves.
 OUTPUT_FORMAT_RULES = """
 OUTPUT FORMAT RULES (strict):
 - Never output raw HTML in your answer. Tags like <table>, <tr>, <td>, <th>, <br>, <span>, <div> are forbidden. If the source excerpts contain HTML, extract the data into clean markdown.
-- For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render EVERY relevant row as a clean markdown table — never truncate or stop partway. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity). MANDATORY: when a quantity/points column is present, the table's last row MUST be a Total row summing it, and the sentence introducing or closing the table MUST state that total explicitly.
-- Never reveal internal notes from tool results. Lines like "SQL: `...`" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
+- For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render the rows you were given as a clean markdown table. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity). MANDATORY: when a quantity/points column is present, the table's last row MUST be a Total row, and the sentence introducing or closing the table MUST state that total explicitly. That Total is the figure on the result's own "TOTAL <col> (all N rows)" line whenever the result carries one — never a sum over the rows you were shown, which may be only part of the result. If the result carries no such line, sum the rows you were given and say that the total covers only those rows.
+- If a tool result says "Showing M of N rows" or carries a "RESULT SHAPE" line, say how many rows exist and how many you were shown. The RESULT SHAPE line is where the row and shown counts and every per-value count come from; it carries no sums. Every total comes from the result's own "TOTAL <col> (all N rows)" line instead. NEVER describe, count or generalise about rows you were not shown — whatever the question's form. Never print the words RESULT SHAPE or TOTAL, those lines themselves or the "value (N)" notation — state those numbers in plain words. When the result shows several investigation steps, answer from the LAST result only — the earlier ones were superseded.
+- Never reveal internal notes from tool results. Lines like "SQL: `...`", a line beginning "INVESTIGATION - steps:" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
+- When a tool result carries a section of document excerpts added as a cross-check to a count or total: the TABLE figure (with its SOURCE) is the answer. NEVER replace it with a figure from the cross-check excerpts, and never open with a yes/no about an excerpt figure. Then, in one sentence after the answer, name each different figure the excerpts print and where it is printed — they are OTHER records standing beside the answer, not corrections to it.
+- A tool result may end with one or more "SOURCE - <table>: ..." lines saying which record each number was read from. When you state a count, total or any other figure from that result, NAME the record it came from in plain words (e.g. "68 door positions, counted from the as-built access-control drawings"; "421 units, from the mechanical asset register"), because the building's documents often print more than one figure for the same thing. Never print the table name or the word SOURCE itself.
+- Identifiers are copied character for character: phone numbers, meter and account numbers, serials, tags and part numbers keep every leading zero, space, dash and letter exactly as the result shows them. Never reformat one as a number.
 - Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
 - EXCEPTION: if a note records a substantive correction to a value (struck out, superseded, handwritten replacement, revised by the authority), do surface it briefly — state the current value and mention the original (e.g. "Max Demand: 1156.36 kW (corrected by DEWA from the printed 1120.40)"). Never present a superseded value as current.
 - When excerpts contain BOTH project/site-specific records (asset registers, schedules, commissioning sheets, warranty letters) AND generic manufacturer literature (datasheets, marketing copy), answer from the project-specific records — they state what was actually installed WHERE and FOR WHAT. Use generic literature only for details the project records lack.
-- For questions about warranties, maintenance terms, or service intervals: lead with the CONCRETE values found in the excerpts (duration, start/end dates, frequency, who provides it) before any terms and conditions. If a warranty letter states a period (e.g. "12 months from ..."), that period IS the answer — never reply with only the claim conditions.
+- For questions about warranties, maintenance terms, or service intervals: lead with the CONCRETE values found in the excerpts (duration, start/end dates, frequency, who provides it) before any terms and conditions. If a warranty letter states a period (e.g. "12 months from ..."), that period IS the answer — never reply with only the claim conditions. But a warranty or certificate covers ONLY the scope it prints (its "scope of works", the equipment or system it names): equipment the certificate does not name is not covered by that record, even when it is controlled by, connected to or installed alongside what is named. If the question asks about something the certificate's scope does not name, say no warranty record for it was found, and only then mention the related certificate and what it does cover.
 - Never present an equipment RATING (W, kW, kVA, A) as energy CONSUMPTION (kWh), and never estimate consumption/cost/runtime from ratings — if consumption is asked and only ratings exist, say the records do not state it.
 - When the user asks for the answer "as a table" or "in a table", the answer MUST contain a markdown table — a bulleted list is not acceptable.
 - Never paste, echo, or reproduce source excerpts verbatim. Always synthesize the answer in your own words.
@@ -62,6 +76,45 @@ OUTPUT FORMAT RULES (strict):
 - If a question asks for a field the tables have no column for, that is a missing fact, not a reason to pick the closest-looking column. Say the records do not record it.
 - READ THE COLUMN NAME BEFORE YOU ATTRIBUTE A VALUE. Column and field names say whose value it is: `service_provider_tel` is the SERVICE PROVIDER's phone, not the manufacturer's, even when the manufacturer's name sits in the very next column of the same row. `manufacturer_name` names the maker; it does not make the neighbouring contact details theirs. If the question names one party and the only matching value belongs to a column named for a different party, say the asked-for party's value is not recorded, and name whose it actually is.
 - Keep answers focused on what was asked. If a source has extra detail, leave it out."""
+
+# ---------------------------------------------------------------------------
+# CHANGE-IMPACT — the shape of the answer, and the shape of the work behind it.
+#
+# WHY TWO CONSTANTS, AND WHY THE SHAPE ONE GOES EVERYWHERE OUTPUT_FORMAT_RULES
+# GOES. This app answers in two calls: the first (the tool loop's system prompt,
+# `_build_system_prompt`) decides WHAT TO FETCH and has the tools; the second
+# (`system_with_context`, built at each tool-result site below) writes the ANSWER
+# from the tool output and has no tools at all. A rule about how to answer that
+# lives only in the first prompt never reaches the model that actually writes the
+# answer — the same class of defect as an acceptance test that checks the finding
+# was produced but never that a human is shown it (doc-prep/CLAUDE.md §12). So:
+#   * CHANGE_IMPACT_ANSWER_SHAPE — the fixed sections and the "not on record"
+#     floor. Injected at EVERY site that injects OUTPUT_FORMAT_RULES.
+#   * CHANGE_IMPACT_RULES — the investigation, which only means anything where
+#     there are tools. Injected in `_build_system_prompt` only, and it contains
+#     the shape, so the first call sees both.
+#
+# GENERIC BY CONSTRUCTION: no system, asset type, table name or building is named
+# anywhere below. The graph is described by its COLUMN SHAPE (subject/predicate/
+# object), which is doc-prep's output contract for any project, exactly as
+# `table_router._GRAPH_EDGE_COLUMNS` matches it.
+CHANGE_IMPACT_ANSWER_SHAPE = """
+CHANGE-IMPACT ANSWER SHAPE (strict): when the question is about CHANGING something in the records — replacing, swapping, upgrading, changing, adding, removing, relocating, modifying, or whether something is compatible with, or would be affected by, something else — answer in these four sections, in this order, using these headings, and include every one even when it is one line:
+- **What it is now** — the item's own recorded identity: tag/name, make and model, ratings and specifications, and where the records put it.
+- **What a replacement must match** — only the attributes the records actually state (rating, capacity, model, interface, mounting, size, voltage). Attributes the records do not state belong in the last section, not here.
+- **What it is connected to, and what would be affected** — every recorded link, upstream (what it depends on) and downstream (what depends on it), and everything else recorded in the same place. Name each one, and say how the link is known (e.g. printed on a drawing/schedule, derived one-to-one, owner-confirmed) — a link and the evidence for it are one fact, never two.
+- **What the records do not say** — every gap you hit while answering, listed plainly.
+- NEVER fill a gap from general knowledge, typical practice, a standard, a manufacturer's usual range or an assumption. An absent fact is stated as "not on record" and nothing more. A generic replacement checklist is not an answer to a question about this building; if all four sections would be generic advice, say the records do not cover it.
+- No recorded link is NOT the same as no link: say "no link on record", never "nothing depends on it"."""
+
+CHANGE_IMPACT_RULES = f"""
+CHANGE-IMPACT QUESTIONS — how to work one before you answer it:
+- Identify the item first. Query the tables for its tag, name or number so you have its identifier exactly as the records print it; if the question names a place rather than an item, resolve the place first and take the items recorded there.
+- Then walk the dependency graph BOTH WAYS from that identifier, up to 2 hops. Where the tables include a dependency-graph table (one row per link: a subject id, a predicate such as feeds/wired_to/backed_by/controls/recorded_by/located_in/contains, and an object id), the rows whose OBJECT is the identifier are what the item depends on, and the rows whose SUBJECT is the identifier are what depends on it. Ask for both directions, and take the evidence columns with them.
+- Then list what else is recorded in the same place, through the location key the tables share, so the answer covers what else the work would disturb.
+- Take the item's OWN row(s) whole: SELECT every column, so "What it is now" carries each printed attribute the records hold for it (make, model, class or type, address, mounting, rating, location, dates) - never a bare tag. Then pull the item's specification, warranty and lifespan rows wherever such tables exist: a specification table is keyed by the MODEL, so look the item's model up there rather than its tag.
+- Do all of that through the tools before answering. A change-impact answer written without looking up the item's links is exactly the generic checklist this rule exists to prevent.
+{CHANGE_IMPACT_ANSWER_SHAPE}"""
 
 
 def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_search_enabled: bool, structured_tables=None) -> str:
@@ -160,6 +213,26 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
             "unit/device is installed (even inside equipment the tables list, like "
             "panels) go to the document tools."
         )
+        # 2026-09-18 (fix wave 1, F5). Listing every table in the menu above (the [:40]
+        # cap removal) moved the app off document search: query_structured_data 60->63 on
+        # the ext set and 58->64 on the holdout, search_documents 26->24 and 38->30
+        # (doc-prep .../task-8-diagnosis.md, proof 3). It cost two measured answers, and
+        # neither was a routing mistake — the answers simply are not in any table. ex-021
+        # asks which record settles a board's spelling; the sentence that settles it is in
+        # the LV manifest ("Block B", "owner ruling 2026-09-15"). ex-023 asks for a zip-tap
+        # model; that table is in neither routed set, so the document search was the only
+        # path to it and the app refused instead. The rule is about the SUBJECT of the
+        # question, like the three above it: when what is being asked for is what a record
+        # SAYS, the answer is that record's own sentence, and a table holding a similar
+        # number is not a substitute for it.
+        parts.append(
+            "- When the question asks WHICH RECORD says something — which record, "
+            "document, letter, ruling, manifest or drawing gives a figure, where "
+            "something is recorded, which source is authoritative, or what the manual or "
+            "the letter actually says — use search_documents, even if a table could hold "
+            "the value. The answer to those questions is the document's own sentence, "
+            "and no table carries it."
+        )
     if web_search_enabled:
         parts.append("- For current events or information not in the user's documents, use web_search.")
     parts.append("- For casual greetings or questions clearly unrelated to any tool, respond directly without calling a tool.")
@@ -168,6 +241,9 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
     # conversation history) stream this same prompt's response directly, so the
     # format rules must live here too — not only in the tool-result final call.
     parts.append(OUTPUT_FORMAT_RULES)
+    # The investigation half of the change-impact rule belongs with the tools,
+    # so it lives here and nowhere else; it carries the answer shape with it.
+    parts.append(CHANGE_IMPACT_RULES)
 
     return "\n".join(parts)
 
@@ -248,17 +324,16 @@ def _build_search_tool() -> types.Tool:
 
 
 def _format_structured_tables(structured_tables) -> str:
-    """One-line schema summary per table: name(col1, col2, ...) — capped for prompt size.
+    """One-line schema summary per table: name(col1, col2, ...) — no cap, columns capped.
 
-    Cap raised 20 -> 40 (2026-08-19): a single building's corpus alone reaches 28 tables, and
-    a table missing from this summary is invisible to the ROUTER — it may never think to
-    call query_structured_data for that topic. execute_sql_query itself has always seen
-    every table, so this only widens the router's awareness, it does not change reach.
+    No cap (2026-09-18): the corpus is 69 tables and the list is fetched alphabetically, so a
+    cap hid 29 tables from the tool-choice step — including the panel and feeder schedules.
+    ~2k tokens for 69 tables; the SQL prompt itself is routed separately.
     """
     if not structured_tables:
         return ""
     lines = []
-    for t in structured_tables[:40]:
+    for t in structured_tables:
         cols = t.get("columns") or []
         col_str = ", ".join(str(c) for c in cols[:15])
         if len(cols) > 15:
@@ -917,6 +992,7 @@ def stream_response(
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
 {OUTPUT_FORMAT_RULES}
+{CHANGE_IMPACT_ANSWER_SHAPE}
 
 Document excerpts:
 {context}"""
@@ -1081,6 +1157,7 @@ Document excerpts:
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
 {OUTPUT_FORMAT_RULES}
+{CHANGE_IMPACT_ANSWER_SHAPE}
 
 Document excerpts:
 {context}"""
@@ -1235,7 +1312,9 @@ Document excerpts:
                 yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No documents found"}))
 
         elif tool_name == "query_structured_data":
-            from app.services.sql_tool import execute_sql_query
+            from app.services.sql_tool import execute_sql_query, route_tables
+            from app.services.sql_loop import (COUNT_CROSSCHECK, CROSSCHECK_EXCERPTS,
+                                               EMPTY, iter_sql_investigation)
             question = args.get("question", "")
             # The router's paraphrase can drop parts of the user's intent
             # (e.g. "total load" reduced to "which panels") — always give the
@@ -1243,59 +1322,181 @@ Document excerpts:
             last_user_msg = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
             if last_user_msg and last_user_msg.strip().lower() not in question.strip().lower():
                 question = f"{last_user_msg}\n(Additional context from the assistant: {question})"
-            result_text = execute_sql_query(question, user_id, supabase_client)
 
-            # Empty SQL results on a question that MIGHT be a document question
-            # (e.g. "how many CCTV cameras are installed?" — cameras are
-            # equipment, not a load-schedule row) get a second chance against
-            # the document index. The SQL outcome is kept in the context so the
-            # model can still answer "not found" for genuinely absent entities
-            # instead of hallucinating from unrelated excerpts.
-            if _sql_result_is_empty(result_text) and has_documents:
-                # Search with the user's own wording — `question` may carry the
-                # SQL-augmentation prefix, which dilutes keyword ranking.
-                doc_query = last_user_msg or question
-                logger.info(f"SQL returned no data, augmenting with search_documents for: {doc_query}")
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No rows — checking documents"}))
-                yield ("tool_start", json.dumps({"tool": "search_documents", "args": {"query": doc_query}}))
+            # THE BOUNDED INVESTIGATION (spec 2026-09-23 §3). This used to be one
+            # `execute_sql_query` plus two inline document fallbacks. `sql_loop`
+            # now owns all three: it runs the query, INSPECTS the result text by
+            # code, re-queries on a deficiency it can name (a list with no
+            # identifier column, a two-column answer to a specs question, no rows
+            # at all), cross-checks a quantity against the documents, and performs
+            # the same two terminal fallbacks — word for word, so
+            # `SQL_LOOP_MAX_STEPS=1` is today's behaviour, today's event sequence
+            # included (pinned literally by `tests/test_sql_loop_wiring.py` §5).
+            #
+            # THE EVENT MAPPING, and why the first step is special. The dispatcher
+            # above already yielded a `tool_start` for this tool call, and that
+            # event IS step 1's — so step 1 announces nothing of its own and a
+            # second step is the first to do so, carrying its number and the issue
+            # that caused it. A step's `tool_done` is held back until the next
+            # event says what it is: a terminal fallback REPLACES it with today's
+            # wording, because today that fallback's `tool_done` was the only one
+            # the step ever got. Emitting both would put a new event on the
+            # trajectory the ruler scores.
+            found_count = [0]
+            step_counter = [0]
+
+            def _execute_sql_for_loop(sql_question, sql_user_id, sql_sb) -> str:
+                """`execute_sql_query`, with an exception on a RE-query turned into the
+                failure text the loop already knows how to route (Task 4 review, I-1).
+
+                `execute_sql_query` catches its own DuckDB errors, but its `try` opens
+                BELOW the SQL-generation call and BELOW the `structured_data` fetch — so a
+                Gemini 429/503 or a PostgREST error raises out of it. Today that could
+                happen once per question and the outer dispatch turned it into an SSE
+                error. With the loop it can happen on step 2 of a question whose step 1
+                already decided to look again — and today that same question reached the
+                document fallback and was ANSWERED. Losing that answer is a regression the
+                loop would have introduced, and on the paid AFTER run it would read as a
+                quality change rather than as a new failure mode.
+
+                Step 1 is deliberately left unguarded: the outer dispatch has always
+                handled it, and guarding it would move the `max_steps=1` behaviour that
+                §5 of the wiring test pins."""
+                step_counter[0] += 1
+                if step_counter[0] == 1:
+                    return execute_sql_query(sql_question, sql_user_id, sql_sb)
+                try:
+                    return execute_sql_query(sql_question, sql_user_id, sql_sb)
+                except Exception as e:
+                    logger.warning(f"sql_loop: step {step_counter[0]} raised "
+                                   f"({type(e).__name__}: {e}); treating it as a failed "
+                                   f"query so the documents still get a chance")
+                    return f"SQL query failed: {e}"
+
+            def _search_documents_for_loop(query: str) -> str:
+                """The loop's `search`: today's excerpt block, plus the chunk count
+                the closing `tool_done` reports (the loop is handed text, so the
+                count has to be recorded here or it is lost)."""
                 chunks = _execute_search_documents(
-                    search_query=doc_query,
+                    search_query=query,
                     metadata_filter=None,
                     user_id=user_id,
                     supabase_client=supabase_client,
                 )
-                if chunks:
-                    doc_context = "\n\n---\n\n".join(
-                        f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
-                    )
-                    result_text = (
-                        "The structured tables returned no rows for this question. "
-                        "Document excerpts that may answer it instead:\n\n" + doc_context +
-                        "\n\n(If the excerpts do not contain the answer either, say the "
-                        "information was not found — do not guess.)"
-                    )
-                    tool_name = "search_documents"
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks) if chunks else 0} results"}))
-
-            # If SQL failed and user has documents, fall back to document search
-            elif result_text.startswith("SQL query failed") and has_documents:
-                logger.info(f"SQL tool failed, falling back to search_documents for: {question}")
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "SQL failed, falling back"}))
-                yield ("tool_start", json.dumps({"tool": "search_documents", "args": {"query": question}}))
-                chunks = _execute_search_documents(
-                    search_query=question,
-                    metadata_filter=None,
-                    user_id=user_id,
-                    supabase_client=supabase_client,
+                found_count[0] = len(chunks) if chunks else 0
+                if not chunks:
+                    return ""
+                return "\n\n---\n\n".join(
+                    f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
                 )
-                if chunks:
-                    result_text = "\n\n---\n\n".join(
-                        f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
-                    )
-                    tool_name = "search_documents"
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": f"Found {len(chunks) if chunks else 0} results"}))
-            else:
-                yield ("tool_done", json.dumps({"tool": tool_name, "detail": "Query executed"}))
+
+            try:
+                # I-3: the cards the inspector reasons about must be cards the SQL
+                # writer could actually have used. `execute_sql_query` narrows to the
+                # LIVE tables and falls back to the full schema when the selection
+                # matches none, so a card for a table that is not live was never on
+                # offer; demanding a column of it would spend a step for nothing.
+                routed_cards = route_tables(
+                    question, user_id, supabase_client,
+                    live_table_names=[t.get("table_name")
+                                      for t in (structured_tables or [])
+                                      if isinstance(t, dict) and t.get("table_name")])
+            except Exception as e:
+                logger.warning(f"sql_loop: could not route the cards "
+                               f"({type(e).__name__}: {e}); the investigation "
+                               f"runs without them")
+                routed_cards = []
+
+            pending_done = None
+            searched_kind = None
+            for _evt, _payload in iter_sql_investigation(
+                question, user_id, supabase_client,
+                execute=_execute_sql_for_loop,
+                # No documents means no fallback and no cross-check, exactly as
+                # today's two `and has_documents` guards did.
+                search=_search_documents_for_loop if has_documents else None,
+                routed_cards=routed_cards,
+                max_steps=get_sql_loop_max_steps(),
+                # The document index is searched with the USER's own wording; the
+                # augmented `question` above carries the router's paraphrase,
+                # which dilutes keyword ranking.
+                user_question=last_user_msg or question,
+            ):
+                if _evt == "step":
+                    if pending_done:
+                        yield pending_done
+                        pending_done = None
+                    if _payload["step"] > 1:
+                        yield ("tool_start", json.dumps({
+                            "tool": "query_structured_data",
+                            "args": {"question": question,
+                                     "step": _payload["step"],
+                                     "issue": _payload["issue"]},
+                        }))
+                elif _evt == "step_done":
+                    issues_found = _payload["issues_found"]
+                    rows = _payload["rows"]
+                    # "1 rows" is the kind of detail that makes a careful reader
+                    # distrust the numbers printed next to it (M-2).
+                    counted = f"step {_payload['step']}: {rows} row{'' if rows == 1 else 's'}"
+                    if issues_found:
+                        detail = f"{counted} — {issues_found[0]}"
+                    elif _payload["step"] == 1:
+                        # Today's wording for the one-step case, unchanged.
+                        detail = "Query executed"
+                    else:
+                        detail = counted
+                    pending_done = ("tool_done", json.dumps({
+                        "tool": "query_structured_data", "detail": detail}))
+                elif _evt == "crosscheck":
+                    searched_kind = _payload["kind"]
+                    if searched_kind == COUNT_CROSSCHECK:
+                        if pending_done:
+                            yield pending_done
+                            pending_done = None
+                        logger.info(f"quantity question — cross-checking the "
+                                    f"documents for: {_payload['query']}")
+                        yield ("tool_start", json.dumps({
+                            "tool": "search_documents",
+                            "args": {"query": _payload["query"], "purpose": "cross-check"},
+                        }))
+                    else:
+                        pending_done = None
+                        logger.info(
+                            f"SQL {'returned no data' if searched_kind == EMPTY else 'failed'}, "
+                            f"falling back to search_documents for: {_payload['query']}")
+                        yield ("tool_done", json.dumps({
+                            "tool": "query_structured_data",
+                            "detail": ("No rows — checking documents"
+                                       if searched_kind == EMPTY
+                                       else "SQL failed, falling back"),
+                        }))
+                        yield ("tool_start", json.dumps({
+                            "tool": "search_documents",
+                            "args": {"query": _payload["query"]},
+                        }))
+                elif _evt == "final":
+                    if pending_done:
+                        yield pending_done
+                        pending_done = None
+                    result_text = _payload.result_text
+                    # Today's reassignment, now reported by the loop rather than
+                    # re-derived here: "search_documents" once a fallback has
+                    # supplied the text, "query_structured_data" otherwise.
+                    tool_name = _payload.source_tool
+                    if searched_kind is not None:
+                        # A cross-check retrieves up to 12 chunks and APPENDS at most
+                        # CROSSCHECK_EXCERPTS of them; reporting 12 would tell the user
+                        # (and the trace) that twelve records were weighed against the
+                        # table's figure when three were (M-1). A terminal fallback
+                        # appends everything it retrieved, so it reports everything.
+                        reached = (min(found_count[0], CROSSCHECK_EXCERPTS)
+                                   if searched_kind == COUNT_CROSSCHECK else found_count[0])
+                        yield ("tool_done", json.dumps({
+                            "tool": ("search_documents"
+                                     if searched_kind == COUNT_CROSSCHECK else tool_name),
+                            "detail": f"Found {reached} results",
+                        }))
 
         elif tool_name == "web_search":
             from app.services.web_search import execute_web_search
@@ -1553,6 +1754,7 @@ If the tool encountered an error, explain the issue to the user in simple terms 
 If the results do not contain enough information, clearly state that the available documents do not contain the answer. Do NOT dump or echo the raw tool results back to the user. Instead, briefly explain what information was found (if any) and suggest the user try a different query or upload a document that might contain the answer. You may answer from general knowledge if applicable, but clearly label it as such.
 When citing web sources, include the URLs.
 {OUTPUT_FORMAT_RULES}
+{CHANGE_IMPACT_ANSWER_SHAPE}
 
 Tool ({tool_name}) results:
 {truncated_result}"""
@@ -1644,6 +1846,7 @@ Tool ({tool_name}) results:
             truncated_result = result_text[:60000] if len(result_text) > 60000 else result_text
             system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
 {OUTPUT_FORMAT_RULES}
+{CHANGE_IMPACT_ANSWER_SHAPE}
 
 Tool (analyze_document) results:
 {truncated_result}"""

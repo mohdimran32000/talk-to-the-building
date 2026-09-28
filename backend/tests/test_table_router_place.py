@@ -265,6 +265,105 @@ check("M5 control: with the line drawn at codes, the question keeps bld_circuits
 check("both weights restored after the mutations",
       {"bld_equipment", "bld_equipment_counts"} <= set(select_tables(Q_ROOM, CARDS, k=3)))
 
+# ---------------------------------------------------------------------------
+# (e) THE PLACE *NAME* SIGNAL (2026-09-18, Task 8 round 2)
+#
+# THE DEFECT, measured on the ruler: "What assets are in the Energy
+# Laboratory?" names a room by the name printed on its door and by nothing
+# else - no code, and none of the words this tier's regexes know. So the tier
+# never fired, ten cards tied at 0.1111 for the third slot, the tie was broken
+# by list position (alphabetical since the cards read was ordered), and a
+# supply list with no location column at all won it and returned 0 rows.
+# ex-038, ex-042, ex-044 and ex-045 all failed exactly that way.
+#
+# THE FIX IS IN TWO HALVES AND BOTH ARE LOAD-BEARING (M6/M7 below):
+#   * the names come off the CARDS - `place_names`, built by
+#     doc-prep/11_table_cards.py from the place register's own `*_name`
+#     columns. A printed room name is this building's data, not a lexical
+#     shape, so it cannot live in this module (which names no table and no
+#     building anywhere).
+#   * a score tie is then broken, ON A ROOM QUESTION ONLY, in favour of the
+#     card whose own `location_resolution` says its rows reach a room. The
+#     flat weight alone leaves a seven-way tie that list order decides.
+# ---------------------------------------------------------------------------
+print("\n7. A place named only by its printed NAME")
+Q_NAME = "What assets are in the Energy Laboratory?"
+check("the regex tier alone is silent on it - no code, no place word",
+      not table_router._names_a_place(Q_NAME), Q_NAME)
+check("the cards supply the names, lower-cased and de-duplicated",
+      table_router._place_names(CARDS) == {"energy laboratory", "server room", "town hall"},
+      str(sorted(table_router._place_names(CARDS))))
+check("a card with no place_names contributes nothing",
+      table_router._place_names([BY_NAME["bld_panels"]]) == set())
+check("the question names a place once the cards are consulted",
+      table_router._names_a_place_by_name(Q_NAME, table_router._place_names(CARDS)))
+r_name = select_tables(Q_NAME, CARDS, k=3)
+check("it now reaches the registers whose rows carry a room",
+      {"bld_equipment", "bld_equipment_counts"} <= set(r_name), r_name)
+check("and the roomless supply lists no longer take the ranked slots",
+      not any(n in r_name[:3] for n in
+              ("bld_om_a_asset_register", "bld_om_b_asset_register",
+               "bld_om_c_asset_register")), r_name)
+
+print("\n7a. The match is a whole phrase, and the names are not word tokens")
+check("'Town Hall' fires", table_router._names_a_place_by_name(
+    "what is in the Town Hall?", table_router._place_names(CARDS)))
+check("'Town Halls' does not - the match is bounded on both sides",
+      not table_router._names_a_place_by_name(
+          "how many Town Halls are there?", table_router._place_names(CARDS)))
+check("a single word of a name is not a place signal ('energy' alone)",
+      not table_router._names_a_place_by_name(
+          "what is the energy consumption?", table_router._place_names(CARDS)))
+check("place names never enter the scored vocabulary - a card's words come "
+      "from its columns and value_vocabulary only",
+      not (table_router._card_vocab_words(BY_NAME["bld_locations"]) &
+           {"energy", "laboratory", "town", "hall"}),
+      str(sorted(table_router._card_vocab_words(BY_NAME["bld_locations"]))))
+
+print("\n7b. Cards without the field (an older publish) behave exactly as before")
+BARE = [{k: v for k, v in c.items() if k != "place_names"} for c in CARDS]
+check("no place_names anywhere -> the name question falls back to the "
+      "regex tier and nothing else changes",
+      select_tables(Q_NAME, BARE, k=3) ==
+      ["bld_om_a_asset_register", "bld_om_b_asset_register", "bld_om_c_asset_register"],
+      select_tables(Q_NAME, BARE, k=3))
+for _label, _q in [("the room-code question", Q_ROOM), ("the explicit tag", Q_EXPLICIT),
+                   ("the floor question", AREA_Q), ("the join question", Q_JOIN),
+                   ("the room-NAME-plus-floor question", Q_ROOMNAME)]:
+    check(f"unchanged without the field: {_label}",
+          select_tables(_q, BARE, k=3) == select_tables(_q, CARDS, k=3),
+          (select_tables(_q, BARE, k=3), select_tables(_q, CARDS, k=3)))
+
+print("\n8. Mutation: each half of the name signal must turn its own check red")
+_saved_names = table_router._place_names
+try:
+    table_router._place_names = lambda cards: set()
+    check("M6 the cards' names ignored -> back to the three roomless supply lists",
+          select_tables(Q_NAME, CARDS, k=3)[:3] ==
+          ["bld_om_a_asset_register", "bld_om_b_asset_register", "bld_om_c_asset_register"],
+          select_tables(Q_NAME, CARDS, k=3))
+finally:
+    table_router._place_names = _saved_names
+
+_saved_reaches = table_router._card_reaches_room
+try:
+    # M7: the flat place weight alone. Every placeable card ties at 4.00 and
+    # list position decides, which is the defect in a new coat.
+    table_router._card_reaches_room = lambda card: False
+    r = select_tables(Q_NAME, CARDS, k=3)
+    check("M7 no room-granularity tie-break -> the room registers are still "
+          "missed (seven-way tie, card order decides)",
+          not ({"bld_equipment", "bld_equipment_counts"} <= set(r)), r)
+finally:
+    table_router._card_reaches_room = _saved_reaches
+check("M6/M7 control: with both halves the room registers are selected",
+      {"bld_equipment", "bld_equipment_counts"} <= set(select_tables(Q_NAME, CARDS, k=3)),
+      select_tables(Q_NAME, CARDS, k=3))
+check("the tie-break never fires on a question that names no room: a level/"
+      "block question keeps its own ranking",
+      select_tables(AREA_Q, CARDS, k=3) == select_tables(AREA_Q, BARE, k=3),
+      (select_tables(AREA_Q, CARDS, k=3), select_tables(AREA_Q, BARE, k=3)))
+
 print("\n6. Determinism is unchanged")
 check("identical (question, cards, k) -> identical result",
       select_tables(Q_ROOM, CARDS, k=3) == select_tables(Q_ROOM, CARDS, k=3))
