@@ -168,6 +168,41 @@ TWO_HOP_RULE = (
 )
 
 # ---------------------------------------------------------------------------
+# THE SAME QUESTION, ONE STEP EARLIER - measured on the owner's own question,
+# 2026-09-28, and traced in LangSmith.
+#
+# "what is <place>? and what all assets there inside?" is TWO_HOP_RULE's shape,
+# and TWO_HOP_RULE offers "UNION ALL one labelled block per part is fine" as one
+# way to answer it. Taken literally against two tables of different widths, that
+# is what the writer wrote:
+#
+#     SELECT * FROM <places> WHERE <number> = '...'
+#     UNION ALL SELECT NULL, NULL, NULL, NULL, ...
+#
+# It cannot work: a set operation needs both arms to project the same number of
+# columns, and the second arm was being padded out to a width the writer had to
+# guess. It guessed by emitting `NULL,` until the 8,192-token output cap stopped
+# it - 8,188 output tokens. DuckDB refused it ("Set operations can only apply to
+# expressions with the same number of result columns"), the repair call produced
+# the same shape, and the question reached the document index, which answered
+# "1 Daylight Sensor" off one stray chunk. The true answer was 14 units across 8
+# items, sitting in a table that shares a key with the entity's own row.
+#
+# Two other guards catch this after the fact (`_sql_looks_runaway` refuses the
+# query, `sql_loop.FAILED_SQL` re-queries it). This one stops it being written:
+# a JOIN, never a set operation. Written from SHAPE - an entity's own row, a
+# table whose rows are its parts, a shared key - so it names no table and no
+# building.
+TWO_PART_RULE = (
+    "- A QUESTION WITH TWO PARTS ABOUT ONE ENTITY ('what is X and what is in it', "
+    "'describe X and list its Y') is ONE query: select from the table that holds the "
+    "specific part (the list or the count), JOIN the entity's own row on the shared "
+    "location/identifier key to bring its name, area, department or other descriptive "
+    "columns alongside, and NEVER combine tables with UNION/INTERSECT/EXCEPT - set "
+    "operations require identical column lists and are never the answer here."
+)
+
+# ---------------------------------------------------------------------------
 # LISTING ENTITIES / SPEC-TABLE COMPLETENESS — spec 2026-09-23 item 1, proactive
 # (no single eval case number: these guard the two writer habits the plan
 # calls IDENTIFIER_MISSING and spec-table under-selection, ahead of the
@@ -203,6 +238,69 @@ ORDER_BY_BLANKS_RULE = (
     "with the unidentified rows and a row limit then shows only those). Keep those rows \u2014 "
     "they belong in the list \u2014 at the end of it."
 )
+
+
+
+# ---------------------------------------------------------------------------
+# THE RUNAWAY GUARD - measured on the owner's own question, 2026-09-28.
+#
+# "what is room 1.29? and what all assets there inside?" is two questions about
+# one entity. The writer glued them together with a set operation across tables
+# of different widths - SELECT * FROM <places> ... UNION ALL SELECT NULL, NULL,
+# NULL, ... - and, having to pad the second arm to the first arm's width without
+# knowing that width, emitted `NULL,` until the output cap stopped it: 8,188
+# output tokens. DuckDB refused it ("Set operations can only apply to expressions
+# with the same number of result columns"), the one repair call produced the same
+# shape, and the question fell through to document search, which answered from a
+# stray chunk.
+#
+# A query this shape is degenerate BEFORE it runs, by two signals a regex can
+# read: it is far longer than any single-line SELECT this prompt asks for, or it
+# carries a run of padding NULLs. Both are refused here - no execution, and no
+# repair either, because a repair prompt carrying kilobytes of NULLs is the next
+# runaway. The refusal is worded as a SQL failure so the investigation loop's
+# FAILED path picks it up and re-queries (see `sql_loop.FAILED_SQL`).
+#
+# Shape only: no table, column or building is named, so a second project gets the
+# same guard.
+# ---------------------------------------------------------------------------
+
+#: A single-line SELECT longer than this is not a query, it is a generation that
+#: ran away. The longest legitimate query this prompt has produced in the eval
+#: suite is well under half of it.
+MAX_GENERATED_SQL_CHARS = 1500
+
+#: This many `NULL` items in a row - commas and whitespace between them - is
+#: padding, not a projection anyone wrote.
+MAX_REPEATED_NULLS = 20
+
+_NULL_RUN_RE = re.compile(
+    r"(?:\bNULL\b\s*,\s*){%d}\bNULL\b" % (MAX_REPEATED_NULLS - 1), re.IGNORECASE)
+
+
+def _sql_looks_runaway(sql: str) -> str | None:
+    """The reason this generated SQL must not be executed, or None if it is sane.
+
+    Pure and deterministic - no model, no database - so the guard is testable on
+    its own (`tests/test_sql_runaway_guard.py`).
+    """
+    text = sql or ""
+    if len(text) > MAX_GENERATED_SQL_CHARS:
+        return (f"{len(text)} characters, over the "
+                f"{MAX_GENERATED_SQL_CHARS}-character limit for one query")
+    if _NULL_RUN_RE.search(text):
+        return f"a run of {MAX_REPEATED_NULLS} or more repeated NULL items"
+    return None
+
+
+def _runaway_failure_text(sql: str, reason: str) -> str:
+    """The refusal, worded exactly like a real execution failure so every caller
+    that already handles one handles this too."""
+    snippet = (sql or "")[:300]
+    if len(sql or "") > 300:
+        snippet += "…"
+    return (f"SQL query failed: generated SQL was malformed ({reason})\n\n"
+            f"Generated SQL: `{snippet}`")
 
 
 class _QueryTimeoutError(Exception):
@@ -909,6 +1007,12 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # spec table: every parameter row        no eval case yet —   a filtered spec query returns
     #   for the matching entities             spec 2026-09-23      one parameter instead of the
     #                                         item 1, proactive     full spec list
+    # two-part question: ONE query,          the owner's question  UNION ALL across tables of
+    #   JOIN, never UNION/INTERSECT/EXCEPT     of 2026-09-28,       different widths -> a Binder
+    #                                          traced in LangSmith  Error, an arm padded with
+    #                                                               8,188 tokens of NULLs, and
+    #                                                               the answer taken from one
+    #                                                               stray document chunk
     # ORDER BY an identifier: sort           ey-001, and the       ORDER BY <id> puts the blank
     #   blanks/NULLs last                     owner's own          cells first -> a list of 50
     #                                         question of          rows with no identifier at
@@ -968,6 +1072,7 @@ Rules:
 {TWO_HOP_RULE}
 {LIST_IDENTIFIER_RULE}
 {ORDER_BY_BLANKS_RULE}
+{TWO_PART_RULE}
 {ALL_PARAMETERS_RULE}
 
 User question: {question}"""
@@ -982,7 +1087,12 @@ User question: {question}"""
             temperature=0,
             # Thinking models (gemini-2.5+/3) spend "thought" tokens from this same
             # budget — 2048 sometimes truncated the SQL mid-string. Keep it high.
-            max_output_tokens=8192,
+            # MEASURED 2026-09-28, and the reason it came back down: a two-part
+            # question made the writer pad a UNION arm with NULLs and it spent
+            # 8,188 output tokens doing it. A one-line SELECT never needs 8,192;
+            # a truncation is now caught by shape (_sql_looks_runaway) instead of
+            # being outrun by a bigger budget.
+            max_output_tokens=2048,
         ),
         name="sql_generate",
     )
@@ -998,6 +1108,13 @@ User question: {question}"""
     sql = _fix_table_names(sql, real_table_names, all_table_names)
 
     logger.info(f"Generated SQL: {sql}")
+
+    # 3a. Refuse a runaway generation BEFORE anything is executed - and before
+    # the repair call below, which would only be handed the same runaway back.
+    runaway = _sql_looks_runaway(sql)
+    if runaway:
+        logger.error(f"Refusing runaway generated SQL ({runaway}): {sql[:300]}")
+        return _runaway_failure_text(sql, runaway)
 
     # 4. Create in-memory DuckDB and load tables with inferred types
     con = duckdb.connect(":memory:")
@@ -1055,7 +1172,7 @@ User question: {question}"""
             repair_resp = client.models.generate_content(
                 model=model,
                 contents=repair_prompt,
-                config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=8192),
+                config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=2048),
             )
             sql = (repair_resp.text or "").strip().rstrip(";")
             if sql.startswith("```"):

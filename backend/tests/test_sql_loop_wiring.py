@@ -722,16 +722,26 @@ except BaseException as e:  # noqa: BLE001 - not propagating IS the assertion
 
 check("8. the exception does not escape stream_response", raised_out is None,
       repr(raised_out))
-check("8. two SQL calls were made (the second is the one that raised)",
-      len(asked_8) == 2, len(asked_8))
-check("8. the run ends through the FAILED document fallback - the same "
-      "sequence today's code reached with one failed query",
+# 2026-09-28: a failed step is now a RE-QUERY issue (`sql_loop.FAILED_SQL`), not a
+# terminal one, so the raise on step 2 is re-queried once before the fallback. The
+# subject of this section is unchanged and still pinned above - the exception must
+# never reach the user as an SSE error - and the run still ENDS in the document
+# fallback; it just gets there one step later. The step budget still bounds it.
+check("8. three SQL calls were made (step 2 raised, step 3 is the re-query)",
+      len(asked_8) == 3, len(asked_8))
+check("8. the run still ends through the FAILED document fallback, one "
+      "re-query later than it used to",
       got_8 == [
           ("tool_start", {"tool": "query_structured_data", "args": {"question": QUESTION}}),
           ("tool_done", {"tool": "query_structured_data",
                          "detail": "step 1: 0 rows — EMPTY"}),
           ("tool_start", {"tool": "query_structured_data",
                           "args": {"question": QUESTION, "step": 2, "issue": "EMPTY"}}),
+          ("tool_done", {"tool": "query_structured_data",
+                         "detail": "step 2: 0 rows — FAILED_SQL"}),
+          ("tool_start", {"tool": "query_structured_data",
+                          "args": {"question": QUESTION, "step": 3,
+                                   "issue": "FAILED_SQL"}}),
           ("tool_done", {"tool": "query_structured_data",
                          "detail": "SQL failed, falling back"}),
           ("tool_start", {"tool": "search_documents", "args": {"query": QUESTION}}),

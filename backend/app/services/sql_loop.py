@@ -101,6 +101,7 @@ Issue = namedtuple("Issue", "kind detail instruction")
 #: findings rather than re-queries.
 Investigation = namedtuple("Investigation", "result_text steps crosscheck source_tool issues")
 
+FAILED_SQL = "FAILED_SQL"
 EMPTY = "EMPTY"
 IDENTIFIER_MISSING = "IDENTIFIER_MISSING"
 NARROW_SELECT = "NARROW_SELECT"
@@ -109,8 +110,10 @@ COUNT_CROSSCHECK = "COUNT_CROSSCHECK"
 
 #: Priority order, spec §3. The loop acts on the first of these that carries an
 #: instruction; the last two never carry one. Pinned by test §21 — a fixture that raises
-#: two issues at once, so inverting this tuple turns a check red.
-ISSUE_ORDER = (EMPTY, IDENTIFIER_MISSING, NARROW_SELECT, TRUNCATED_NO_SHAPE, COUNT_CROSSCHECK)
+#: two issues at once, so inverting this tuple turns a check red. `FAILED_SQL` leads it:
+#: a query that did not run at all has nothing for the other checks to read.
+ISSUE_ORDER = (FAILED_SQL, EMPTY, IDENTIFIER_MISSING, NARROW_SELECT, TRUNCATED_NO_SHAPE,
+               COUNT_CROSSCHECK)
 
 TOOL_SQL = "query_structured_data"
 TOOL_SEARCH = "search_documents"
@@ -121,6 +124,13 @@ FAILED = "FAILED"
 #: A result this narrow is a candidate for NARROW_SELECT — and a table with more
 #: non-citation columns than this has something to widen to.
 MAX_NARROW_COLUMNS = 3
+
+#: The opening of the text `sql_tool` returns when a query did not run, and how much of
+#: what follows it goes into the next question. A binder error is one sentence; a refused
+#: generation can carry a fragment of the query it refused, and that fragment is exactly
+#: the shape the re-query must not repeat — so it is capped.
+FAILURE_PREFIX = "SQL query failed"
+FAILURE_ERROR_CHARS = 200
 
 #: What makes a list nameable — a column a reader can ACT on: a printed number, a key or a
 #: tag, or the identifier the card itself declares. A `_name` column is deliberately NOT
@@ -228,9 +238,21 @@ def result_is_empty(result_text: str) -> bool:
 
 
 def result_is_failure(result_text: str) -> bool:
-    """The query did not run at all. Not an issue to re-query — the executor already had
-    its own repair attempt — so it goes straight to the document fallback."""
-    return bool(result_text) and result_text.startswith("SQL query failed")
+    """The query did not run at all — a binder/parse error, or a generation the executor
+    refused before running it. The executor's own single repair attempt has already been
+    spent by the time this is true."""
+    return bool(result_text) and result_text.startswith(FAILURE_PREFIX)
+
+
+def result_failure_error(result_text: str) -> str:
+    """What the executor said went wrong, capped at `FAILURE_ERROR_CHARS`. The query text
+    that follows it is dropped: the instruction already carries the previous SQL, and a
+    degenerate query quoted twice is twice the chance of it being copied."""
+    text = str(result_text or "")
+    if text.startswith(FAILURE_PREFIX):
+        text = text[len(FAILURE_PREFIX):].lstrip(": ").lstrip()
+    head = re.split(r"\n\n(?:Generated )?SQL: ", text)[0].strip()
+    return head[:FAILURE_ERROR_CHARS]
 
 
 def result_columns(result_text: str) -> list:
@@ -394,6 +416,34 @@ def quote_identifier(name: str) -> str:
 
 # --------------------------------------------------------------------------- inspection
 
+def _failed_sql_issue(error: str) -> Issue:
+    """A query that did not run is the most re-queryable result there is: the engine has
+    just said, in words, what was wrong with it.
+
+    MEASURED 2026-09-28. A two-part question about one entity — what is this thing, and
+    what is inside it — was written as a set operation over two tables of different widths,
+    with the narrower arm padded out with NULLs until the generation cap stopped it. The
+    engine refused it; the executor's one repair produced the same shape; and this loop
+    then treated the failure as terminal and handed the question to the document index,
+    which answered it from a single stray excerpt. Nothing about that chain was a reading
+    failure. The instruction below is therefore specific about the shape that failed — one
+    plain SELECT, one table, no set operations, no invented columns — and about what to do
+    with the two-part question instead, which is to answer the specific part from the table
+    that holds it and JOIN the entity's own row for its name and details.
+
+    Generic, like every other instruction here: it describes SQL shapes and nothing of any
+    building."""
+    return Issue(
+        FAILED_SQL,
+        "The query failed — re-querying with one plain SELECT",
+        (f"The previous SQL failed with: {error}. Write ONE plain SELECT over ONE table "
+         f"that answers the main part of the question — no UNION, INTERSECT or EXCEPT, no "
+         f"set operations, no invented columns; if the question has two parts about one "
+         f"entity, answer the specific part (the list) from the table that holds it and "
+         f"JOIN the entity's own row on the shared location key for its name and details."),
+    )
+
+
 def _empty_issue(sql: str) -> Issue:
     return Issue(
         EMPTY,
@@ -451,6 +501,11 @@ def inspect_result(result_text: str, question: str, routed_cards) -> list:
     cols = result_columns(result_text)
     aggregate = sql_is_aggregate(sql)
     empty = result_is_empty(result_text)
+
+    # A query that did not run has no header, no rows and no shape line, so none of the
+    # checks below can read anything — this is the only issue such a result can raise.
+    if result_is_failure(result_text):
+        issues.append(_failed_sql_issue(result_failure_error(result_text)))
 
     if empty:
         issues.append(_empty_issue(sql) if cards else _empty_abstention(sql))
@@ -624,7 +679,12 @@ def iter_sql_investigation(question, user_id, sb, *, execute, search=None, route
             "issues_found": [i.kind for i in issues],
         })
 
-        if k >= max_steps or result_is_failure(result_text):
+        # A failure used to break here, which is what sent a re-queryable binder error
+        # straight to the document index. It is now an ISSUE with an instruction
+        # (FAILED_SQL), so the ordinary machinery below decides: re-query for as long as
+        # there are steps left, and fall back to the documents only once the LAST step has
+        # failed — which is exactly what the terminal block after this loop does.
+        if k >= max_steps:
             break
         if clock() - started > budget:
             break

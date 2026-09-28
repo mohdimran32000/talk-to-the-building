@@ -152,5 +152,53 @@ check("it is appended after the two rules it completes, not woven into the f-str
 check("the provenance map carries an entry for it",
       "blanks/NULLs last" in SRC)
 
+print(chr(10) + "6. A two-part question about one entity is ONE query, never a UNION")
+# The owner asked, 2026-09-28: "what is room 1.29? and what all assets there inside?"
+# The writer answered it with a set operation across two tables of different widths -
+# SELECT * FROM <places> ... UNION ALL SELECT NULL, NULL, NULL, ... - and then padded
+# the narrow arm with NULLs until the 8,192-token output cap stopped it (8,188 output
+# tokens). DuckDB: "Set operations can only apply to expressions with the same number
+# of result columns". The repair call produced the same shape, and the question fell
+# through to document search, which answered "1 Daylight Sensor, nothing else" from a
+# stray register chunk. The true answer is 14 units across 8 items, in two tables that
+# share a key. The runaway guard and the loop's FAILED_SQL re-query both catch this
+# AFTER the fact; this rule is the one that stops it being written.
+check("TWO_PART_RULE exists", hasattr(sql_tool, "TWO_PART_RULE"))
+tp = getattr(sql_tool, "TWO_PART_RULE", "")
+check("it is one prompt bullet", tp.startswith("- ") and tp.count(chr(10)) == 0, tp[:80])
+check("it says a two-part question about one entity is ONE query",
+      "one query" in tp.lower() and "two parts" in tp.lower(), tp[:300])
+check("it names UNION - the operation that actually failed", "UNION" in tp, tp[:400])
+check("and the other two set operations with it",
+      "INTERSECT" in tp and "EXCEPT" in tp, tp[:400])
+check("it says WHY they are never the answer here: identical column lists",
+      "identical column" in tp.lower(), tp[:500])
+check("it says to select from the table holding the specific part",
+      "select" in tp.lower() and ("list" in tp.lower() or "count" in tp.lower()), tp[:400])
+check("it says to JOIN the entity's own row for its descriptive columns",
+      "JOIN" in tp and "own row" in tp.lower(), tp[:500])
+check("it names the descriptive columns a 'what is X' half needs",
+      "name" in tp.lower() and "area" in tp.lower(), tp[:500])
+check("it names no table, column value or building of this project",
+      not any(t in tp for t in ("hwu_", "Heriot", "RM-", "1.29", "MDB-C", "SMDB",
+                                "room_number", "Digital Classroom")), tp[:400])
+check("it is in the SQL-generation prompt", "TWO_PART_RULE" in SRC)
+check("it is injected after ORDER_BY_BLANKS_RULE, not woven into the f-string body",
+      SRC.index("ORDER_BY_BLANKS_RULE") < SRC.index("TWO_PART_RULE")
+      if "TWO_PART_RULE" in SRC else False)
+check("the provenance map carries an entry for it",
+      "set operations require identical" in SRC or "two-part question -> ONE query" in SRC
+      or "two-part question: ONE query" in SRC,
+      [l.strip() for l in SRC.splitlines() if "two-part" in l.lower()])
+check("the constant is defined beside TWO_HOP_RULE, the rule it completes",
+      abs(inspect.getsource(sql_tool).index("TWO_PART_RULE = ")
+          - inspect.getsource(sql_tool).index("TWO_HOP_RULE = ")) < 6000,
+      abs(inspect.getsource(sql_tool).index("TWO_PART_RULE = ")
+          - inspect.getsource(sql_tool).index("TWO_HOP_RULE = "))
+      if "TWO_PART_RULE = " in inspect.getsource(sql_tool) else "not defined")
+check("and the rules it was added beside are all still in the prompt",
+      all(n in SRC for n in ("TWO_HOP_RULE", "LIST_IDENTIFIER_RULE",
+                             "ORDER_BY_BLANKS_RULE", "ALL_PARAMETERS_RULE")))
+
 print(f"{chr(10)}{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

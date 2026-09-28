@@ -351,14 +351,14 @@ check("the empty result still falls back to the documents (today's behaviour)",
 check("and still no trailer at max_steps=1", "INVESTIGATION" not in inv.result_text)
 
 # ---------------------------------------------------------------------------
-print("\n14. A failed query falls back to the documents, exactly as today")
+print("\n14. A failed query falls back to the documents - unchanged at max_steps=1")
 # ---------------------------------------------------------------------------
 failed = "SQL query failed: Binder Error: no such column\n\nGenerated SQL: `SELECT nope FROM \"bld_units\"`"
 ex = FakeExec([failed])
 se = FakeSearch("DOCTEXT")
 inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=se,
-                                     routed_cards=[CARD_LIST], max_steps=3)
-check("a failure is not re-queried", len(ex.questions) == 1, ex.questions)
+                                     routed_cards=[CARD_LIST], max_steps=1)
+check("with the loop off, a failure is not re-queried", len(ex.questions) == 1, ex.questions)
 check("it searches the documents", se.queries == [q2], se.queries)
 check("the excerpts replace the error text, with no empty-result preamble",
       "DOCTEXT" in inv.result_text and sql_loop.EMPTY_FALLBACK_PREFIX not in inv.result_text,
@@ -628,7 +628,8 @@ inv = events[-1][1]
 check("source_tool says the answer came from the tables",
       inv.source_tool == "query_structured_data", inv.source_tool)
 check("Investigation.issues lists what was found", inv.issues == [sql_loop.EMPTY], inv.issues)
-ex = FakeExec(["SQL query failed: boom\n\nGenerated SQL: `SELECT 1`"])
+boom = "SQL query failed: boom\n\nGenerated SQL: `SELECT 1`"
+ex = FakeExec([boom, boom])   # the loop now tries again once; both fail
 inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch("DOCTEXT"),
                                      routed_cards=[CARD_LIST], max_steps=3)
 check("after a fallback, source_tool says search_documents",
@@ -854,6 +855,125 @@ check("an empty result on a routed table keeps its re-query instruction",
       sql_loop.first_requery_issue(sql_loop.inspect_result(empty_result(sql2), q2, [CARD_LIST]))
       is not None,
       [i.instruction for i in sql_loop.inspect_result(empty_result(sql2), q2, [CARD_LIST])])
+
+# ===========================================================================
+# 2026-09-28 - A FAILED FIRST STEP IS A RE-QUERY, NOT THE END OF THE ROAD.
+#
+# The owner asked "what is <place>? and what all assets there inside?" - two
+# questions about one entity. The writer glued them with a set operation across
+# tables of different widths, padded the second arm with NULLs until the output
+# cap stopped it, and DuckDB refused the whole thing. The one repair call inside
+# the executor produced the same shape. The loop then treated FAILED as terminal
+# - the behaviour deliberately carried over from before it existed - and the
+# question went to document search, which answered from a stray chunk.
+#
+# A Binder Error is the most re-queryable thing there is: the writer is being
+# told, in the data, exactly what it got wrong. So a failure now raises an issue
+# WITH an instruction, ranked above EMPTY, and the document fallback waits until
+# the LAST step has also failed.
+# ===========================================================================
+print("\n30. A failed result raises FAILED_SQL, and it carries an instruction")
+# ---------------------------------------------------------------------------
+BINDER = ("SQL query failed: Binder Error: Set operations can only apply to "
+          "expressions with the same number of result columns"
+          "\n\nGenerated SQL: `SELECT * FROM \"bld_units\" UNION ALL SELECT NULL, NULL`")
+iss30 = sql_loop.inspect_result(BINDER, q2, [CARD_LIST])
+check("the kind exists", hasattr(sql_loop, "FAILED_SQL"))
+check("a failed result raises exactly one issue, FAILED_SQL",
+      [i.kind for i in iss30] == [getattr(sql_loop, "FAILED_SQL", "FAILED_SQL")],
+      [i.kind for i in iss30])
+check("it outranks EMPTY in the priority order",
+      getattr(sql_loop, "FAILED_SQL", None) in sql_loop.ISSUE_ORDER
+      and sql_loop.ISSUE_ORDER.index(getattr(sql_loop, "FAILED_SQL", ""))
+          < sql_loop.ISSUE_ORDER.index(sql_loop.EMPTY),
+      sql_loop.ISSUE_ORDER)
+check("it is something the loop can act on", sql_loop.first_requery_issue(iss30) is not None)
+instr30 = iss30[0].instruction if iss30 else ""
+check("the instruction quotes the error it is reacting to",
+      "Binder Error" in instr30, instr30[:200])
+_err = getattr(sql_loop, "result_failure_error", None)
+check("the error extractor exists", _err is not None)
+check("and only the first 200 characters of it - an 8 KB error does not become "
+      "the next prompt",
+      bool(_err) and len(_err("SQL query failed: " + "x" * 5000)) <= 200,
+      len(_err("SQL query failed: " + "x" * 5000)) if _err else "-")
+check("it forbids the set operation that caused this", "no UNION" in instr30, instr30)
+check("and names the other two set operations too",
+      "INTERSECT" in instr30 and "EXCEPT" in instr30, instr30)
+check("it asks for ONE table", "ONE table" in instr30, instr30)
+check("it asks for one plain SELECT", "ONE plain SELECT" in instr30, instr30)
+check("it forbids inventing columns", "invented column" in instr30, instr30)
+check("it says how to answer a two-part question instead: the specific part, "
+      "JOINed to the entity's own row",
+      "two parts" in instr30 and "JOIN" in instr30, instr30)
+check("a normal result raises no FAILED_SQL",
+      not any(i.kind == getattr(sql_loop, "FAILED_SQL", "FAILED_SQL")
+              for i in sql_loop.inspect_result(good, q2, [CARD_LIST])))
+
+# ---------------------------------------------------------------------------
+print("\n31. [failed, good] - the loop re-queries and keeps the good result")
+# ---------------------------------------------------------------------------
+GOOD31 = table_result(["unit_tag", "level_code", "kind", "notes"],
+                      [["U-1", "L1", "a", ""]], 'SELECT * FROM "bld_units"')
+ex = FakeExec([BINDER, GOOD31])
+se = FakeSearch("DOCTEXT")
+inv = sql_loop.run_sql_investigation("what is unit 7 and what is inside it?", "u1", None,
+                                     execute=ex, search=se, routed_cards=[CARD_LIST],
+                                     max_steps=3)
+check("exactly two SQL calls", len(ex.questions) == 2, len(ex.questions))
+check("the second question carries the re-query instruction",
+      "no UNION" in ex.questions[1] and "Investigation step 2" in ex.questions[1],
+      ex.questions[1][-300:])
+check("the good result is what the answer writer gets",
+      "U-1" in inv.result_text and "Binder Error" not in inv.result_text,
+      inv.result_text[:200])
+check("and the documents were never searched - the tables answered",
+      se.queries == [], se.queries)
+check("the failure is on the record for the answer writer",
+      getattr(sql_loop, "FAILED_SQL", "") in inv.issues, inv.issues)
+check("source_tool still says the tables", inv.source_tool == "query_structured_data",
+      inv.source_tool)
+
+# ---------------------------------------------------------------------------
+print("\n32. [failed, failed] - two steps, then the document fallback")
+# ---------------------------------------------------------------------------
+ex = FakeExec([BINDER, BINDER])
+se = FakeSearch("DOCTEXT")
+inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=se,
+                                     routed_cards=[CARD_LIST], max_steps=3)
+check("two SQL calls, not three - the repeat-issue guard stops it",
+      len(ex.questions) == 2, len(ex.questions))
+check("then the documents are searched", se.queries == [q2], se.queries)
+check("the excerpts replace the error text, with no empty-result preamble",
+      "DOCTEXT" in inv.result_text and sql_loop.EMPTY_FALLBACK_PREFIX not in inv.result_text,
+      inv.result_text[:200])
+check("the terminal fallback is still reported as FAILED",
+      sql_loop.FAILED in inv.issues, inv.issues)
+check("and source_tool says the documents answered",
+      inv.source_tool == "search_documents", inv.source_tool)
+
+# ---------------------------------------------------------------------------
+print("\n33. max_steps=1 - one query, the old fallback, no re-query at all")
+# ---------------------------------------------------------------------------
+ex = FakeExec([BINDER])
+se = FakeSearch("DOCTEXT")
+inv = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=se,
+                                     routed_cards=[CARD_LIST], max_steps=1)
+check("exactly one SQL call", len(ex.questions) == 1, ex.questions)
+check("the question is not augmented at all", ex.questions == [q2], ex.questions)
+check("the documents answer", se.queries == [q2] and "DOCTEXT" in inv.result_text,
+      (se.queries, inv.result_text[:120]))
+check("no trailer line, exactly as before the loop existed",
+      "INVESTIGATION" not in inv.result_text, inv.result_text[-120:])
+
+# ---------------------------------------------------------------------------
+print("\n34. The module is still generic - the new instruction names nothing")
+# ---------------------------------------------------------------------------
+SRC34 = Path(sql_loop.__file__).read_text(encoding="utf-8")
+for tok in ("hwu", "room", "panel", "camera", "door", "fcu", "location_id"):
+    hits = len(_re.findall(tok, SRC34, _re.IGNORECASE))
+    check(f"still no '{tok}' anywhere in the module", hits == 0, f"{hits} hits")
+check("still no `while`", not _re.search(r"\bwhile\b", SRC34))
 
 
 print("\nALL PASS" if not FAILS else f"\n{len(FAILS)} FAILED")
