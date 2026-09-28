@@ -1073,7 +1073,7 @@ check("a good result raises no EMPTY at all",
                        'SELECT cam_tag, link_id FROM "bld_cam"'), q35, [CARD_CAM])))
 
 # ---------------------------------------------------------------------------
-print("\n37. The tag is quoted safely, and routed order picks the card")
+print("\n37. The tag is quoted safely, and routed order orders the choices")
 # ---------------------------------------------------------------------------
 _quote = getattr(sql_loop, "quote_literal", None)
 check("the tag goes in as a SQL string literal, and a single quote in it is DOUBLED",
@@ -1083,7 +1083,7 @@ check("an ordinary tag is quoted and otherwise untouched",
       _quote is not None and _quote("CAM-4F-B-01") == "'CAM-4F-B-01'",
       _quote("CAM-4F-B-01") if _quote else "-")
 _build = getattr(sql_loop, "_empty_identifier_issue", None)
-_i37 = _build("QM-O'BRIEN-2", "bld_q", "q_tag") if _build else None
+_i37 = _build([("QM-O'BRIEN-2", "bld_q", "q_tag")]) if _build else None
 check("the instruction carries the doubled form in BOTH places it prints the tag",
       _i37 is not None and _i37.instruction.count("QM-O''BRIEN-2") == 2,
       _i37.instruction if _i37 else "no _empty_identifier_issue")
@@ -1107,11 +1107,12 @@ CARD_CAM_B = {"table": "bld_cam_b", "columns": ["tag_b", "y"], "identifier_colum
               "identifier_prefixes": ["CAM"]}
 first = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_CAM, CARD_CAM_B])[0]
 second = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_CAM_B, CARD_CAM])[0]
-check("two cards match: the FIRST in routed order is the one addressed",
-      '"bld_cam"' in first.instruction and "bld_cam_b" not in first.instruction,
+check("two cards match: BOTH are offered, the first routed one first",
+      0 <= first.instruction.find('"bld_cam"') < first.instruction.find('"bld_cam_b"'),
       first.instruction)
-check("and reversing the routed order reverses the choice - order is the whole rule",
-      '"bld_cam_b"' in second.instruction, second.instruction)
+check("and reversing the routed order reverses the listing - order is the whole rule",
+      0 <= second.instruction.find('"bld_cam_b"') < second.instruction.find('"bld_cam" '),
+      second.instruction)
 # the tokenising agrees with the router's, which is where the prefixes come from
 from app.services import table_router as _tr
 check("the prefix this module reads is the prefix the router scored the card on",
@@ -1170,6 +1171,101 @@ check("empty twice: two SQL calls, not three", len(ex.questions) == 2, len(ex.qu
 check("then the document fallback, exactly as before",
       se.queries == [q35] and "DOCTEXT" in inv39b.result_text,
       (se.queries, inv39b.result_text[:120]))
+# ===========================================================================
+# THE COORDINATOR'S RULING, 2026-09-28. Replayed against the real cards, four
+# of the seven questions the address fires on reached a table whose name marks
+# it as an EARLIER state of the building, because the caller hands these cards
+# over in name order and the router's own ranking never survives the trip. The
+# ruling: do not reorder anything upstream - when MORE THAN ONE routed card can
+# address the identifier, OFFER them all, in routed order, and let the writer
+# pick by subject. It is the one choice a model is better placed to make than
+# this module: which table holds what the question asks about, and which one
+# its own name says is superseded.
+#
+# With exactly one match nothing changes: there is nothing to choose between.
+# ===========================================================================
+print("\n40. Several routed cards can address the tag: offer them all, in routed order")
+# ---------------------------------------------------------------------------
+CARD_NOW = {"table": "bld_now", "columns": ["feed_tag", "fed_from", "rating"],
+            "identifier_column": "feed_tag", "identifier_prefixes": ["FD"]}
+CARD_WAS = {"table": "bld_was_earlier", "columns": ["feed_tag", "fed_from"],
+            "identifier_column": "feed_tag", "identifier_prefixes": ["FD"]}
+CARD_THIRD = {"table": "bld_third", "columns": ["ref", "x"],
+              "identifier_column": "ref", "identifier_prefixes": ["FD"]}
+q40 = "what does FD-06(B)-SP-01 feed, and what feeds it?"
+sql40 = 'SELECT fed_from FROM "bld_now" WHERE feed_tag = \'FD-6-B-SP-1\''
+i40 = sql_loop.inspect_result(empty_result(sql40), q40, [CARD_WAS, CARD_NOW])[0]
+check("the kind is still EMPTY and the detail still IDENTIFIER_EMPTY",
+      i40.kind == sql_loop.EMPTY and i40.detail == sql_loop.IDENTIFIER_EMPTY,
+      (i40.kind, i40.detail))
+check("both SELECTs are written out in full",
+      'SELECT * FROM "bld_was_earlier" WHERE "feed_tag" = \'FD-06(B)-SP-01\'' in i40.instruction
+      and 'SELECT * FROM "bld_now" WHERE "feed_tag" = \'FD-06(B)-SP-01\'' in i40.instruction,
+      i40.instruction)
+check("in ROUTED order - the first routed card is offered first",
+      0 <= i40.instruction.find('"bld_was_earlier"') < i40.instruction.find('"bld_now"'),
+      i40.instruction)
+check("it says to write exactly ONE of them",
+      "Write exactly ONE of:" in i40.instruction, i40.instruction)
+check("it names both tables with their identifier columns",
+      'these tables: "bld_was_earlier" (column "feed_tag"), "bld_now" (column "feed_tag")'
+      in i40.instruction, i40.instruction)
+check("the choose-the-table clause is there",
+      "choose the table whose columns hold what the question asks for" in i40.instruction,
+      i40.instruction)
+check("and it says to prefer the current-state table over a superseded one",
+      "prefer a current-state table over one whose name or description marks it as an "
+      "earlier or superseded state" in i40.instruction, i40.instruction)
+check("it still forbids anything else", "Nothing else." in i40.instruction, i40.instruction)
+check("the tag is printed once as the identifier and once per SELECT",
+      i40.instruction.count("'FD-06(B)-SP-01'") == 3, i40.instruction)
+# three cards, and the reverse order
+i40c = sql_loop.inspect_result(empty_result(sql40), q40,
+                               [CARD_NOW, CARD_THIRD, CARD_WAS])[0]
+check("three matching cards: all three are offered, in routed order",
+      0 <= i40c.instruction.find('"bld_now"') < i40c.instruction.find('"bld_third"')
+      < i40c.instruction.find('"bld_was_earlier"'), i40c.instruction)
+check("and the third one's own identifier column comes with it",
+      '"bld_third" (column "ref")' in i40c.instruction
+      and 'SELECT * FROM "bld_third" WHERE "ref" = \'FD-06(B)-SP-01\'' in i40c.instruction,
+      i40c.instruction)
+
+# ---------------------------------------------------------------------------
+print("\n41. Exactly one match keeps the single-table wording, word for word")
+# ---------------------------------------------------------------------------
+SINGLE = ("The previous query returned no rows. The question names the identifier "
+          "'CAM-4F-B-01', which is the identifier of table \"bld_cam\" (column "
+          "\"cam_tag\"). Write exactly: SELECT * FROM \"bld_cam\" WHERE "
+          "\"cam_tag\" = 'CAM-4F-B-01' \u2014 the entity's own row with every column "
+          "\u2014 and nothing else.")
+i41 = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_CAM])[0]
+check("one match: the single-table instruction is exactly as it was",
+      i41.instruction == SINGLE, i41.instruction)
+check("it says 'table', singular, and never offers a choice",
+      "these tables" not in i41.instruction and "ONE of" not in i41.instruction,
+      i41.instruction)
+# a routed card that matches a DIFFERENT printed tag is not listed alongside
+CARD_OTHERTAG = {"table": "bld_other", "columns": ["o_tag"], "identifier_column": "o_tag",
+                 "identifier_prefixes": ["ZED"]}
+q41 = "does unit CAM-4F-B-01 depend on unit ZED-9?"
+i41b = sql_loop.inspect_result(empty_result(sql35), q41, [CARD_CAM, CARD_OTHERTAG])[0]
+check("a card addressing a DIFFERENT tag is not offered beside this one - every "
+      "SELECT offered filters the same printed value",
+      "bld_other" not in i41b.instruction and "CAM-4F-B-01" in i41b.instruction
+      and "ZED-9" not in i41b.instruction, i41b.instruction)
+# the run is unchanged: still two steps, still the good result
+ex = FakeExec([empty_result(sql40),
+               table_result(["feed_tag", "fed_from", "rating"],
+                            [["FD-06(B)-SP-01", "BOARD-X", "100"]],
+                            'SELECT * FROM "bld_now" WHERE "feed_tag" = \'FD-06(B)-SP-01\'')])
+se = FakeSearch("DOCTEXT")
+inv41 = sql_loop.run_sql_investigation(q40, "u1", None, execute=ex, search=se,
+                                       routed_cards=[CARD_WAS, CARD_NOW], max_steps=3)
+check("the offered choice is still one re-query, not two", len(ex.questions) == 2,
+      len(ex.questions))
+check("and the chosen table's row is what the answer writer gets",
+      "BOARD-X" in inv41.result_text and se.queries == [],
+      (inv41.result_text[:160], se.queries))
 
 print("\nALL PASS" if not FAILS else f"\n{len(FAILS)} FAILED")
 sys.exit(1 if FAILS else 0)

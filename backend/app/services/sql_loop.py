@@ -88,6 +88,17 @@ with (`identifier_prefixes`). Those two together are an ADDRESS, not advice, so 
 match the instruction becomes the address: the entity's own row, every column, nothing else.
 The KIND stays `EMPTY`, so the priority order and the repeat guard are exactly as they were,
 and only the `detail` (`IDENTIFIER_EMPTY`) says which of the two EMPTY instructions fired.
+Replayed against the real cards before it shipped, and the replay changed the rule. Four of
+the seven questions it fires on reached a table whose NAME marks it as an earlier state of the
+building, because the caller hands these cards over in name order and the router's own ranking
+does not survive the trip. Reordering that is a different module's decision and a different
+measurement, so the rule instead OFFERS every routed card that can address the same printed
+identifier, in the order it was handed them, and asks the writer to choose by subject: which
+table holds what the question asks about, and which one its own name says is superseded. That
+is the one part of this that a model is better placed to decide than code, and it is the only
+part delegated. With exactly one match the wording is unchanged - there is nothing to choose
+between.
+
 Still generic: the prefixes and the column are read off the cards, and nothing about any
 building is written here.
 """
@@ -448,21 +459,33 @@ def question_identifiers(question: str) -> list:
     return found
 
 
-def card_identifier_match(question, routed_cards):
-    """`(tag, table, column)` — the first ROUTED card whose declared `identifier_prefixes`
-    cover the prefix of a coded token the question prints, or None.
+def card_identifier_matches(question, routed_cards):
+    """`[(tag, table, column), …]` — every ROUTED card that can address the SAME printed
+    identifier, in the order the cards were handed over; `[]` when none can.
 
-    ROUTED ORDER decides which card, and nothing else. The router has already ranked these
-    cards against this question, so its own order is the best evidence available here; a
-    second rule applied on top (longest prefix, widest table, most columns) would make the
-    choice depend on two orderings instead of one, and neither of them would be visible in
-    the instruction the writer is handed. A card that declares prefixes but no identifier
-    column is skipped: there is no column to address the row by, so there is no instruction
-    to write.
+    ROUTED ORDER is preserved and never re-sorted. A second rule applied on top (longest
+    prefix, widest table, most columns) would make the offer depend on two orderings instead
+    of one, and neither of them would be visible in the instruction the writer is handed.
+
+    ALL of them, not the first. The first card is not reliably the right one: the caller
+    hands these over in name order, so a table whose name marks it as an EARLIER state of
+    the same thing can sort ahead of the current one, and picking it silently would answer a
+    question about today out of a superseded record. Which table holds the subject the
+    question asks about is a reading judgement, not an arithmetic one — so the instruction
+    lists the addresses and the writer picks, which is the only judgement this module
+    delegates.
+
+    ONE identifier, not several. The list is filtered to the cards addressing the FIRST
+    printed tag that any card matched, so every SELECT offered filters the same printed
+    value. A question naming two different entities does not get a menu mixing them.
+
+    A card that declares prefixes but no identifier column is skipped: there is no column to
+    address the row by, so there is no instruction to write.
     """
     coded = question_identifiers(question)
     if not coded:
-        return None
+        return []
+    addressable = []
     for card in routed_cards or []:
         table = (card or {}).get("table") or ""
         column = (card or {}).get("identifier_column") or ""
@@ -474,8 +497,12 @@ def card_identifier_match(question, routed_cards):
             continue
         for prefix, tag in coded:
             if prefix in prefixes:
-                return (tag, str(table), str(column))
-    return None
+                addressable.append((tag, str(table), str(column)))
+                break
+    if not addressable:
+        return []
+    lead_tag = addressable[0][0]
+    return [m for m in addressable if m[0] == lead_tag]
 
 
 def quote_literal(value: str) -> str:
@@ -535,7 +562,7 @@ def _empty_issue(sql: str) -> Issue:
     )
 
 
-def _empty_identifier_issue(tag: str, table: str, column: str) -> Issue:
+def _empty_identifier_issue(matches) -> Issue:
     """Empty, and the question printed the identifier of a routed table — so the re-query is
     an ADDRESS rather than advice.
 
@@ -549,20 +576,37 @@ def _empty_identifier_issue(tag: str, table: str, column: str) -> Issue:
     exactly that row and forbids anything else — a narrower SELECT is how the first query
     lost the columns in the first place.
 
-    The literal is quote-doubled in BOTH places it appears, so there is only ever one written
+    When SEVERAL routed cards carry the same identifier, all of them are offered in routed
+    order and the writer chooses by subject — see `card_identifier_matches` for why picking
+    one here would be a guess about which STATE of the building a table records. With one
+    match the wording is unchanged, because there is nothing to choose between.
+
+    The literal is quote-doubled everywhere it appears, so there is only ever one written
     form of the tag for the writer to copy.
 
-    Generic, like every other instruction here: the table, the column and the prefixes are
+    Generic, like every other instruction here: the tables, the columns and the prefixes are
     all read off the routed cards."""
+    tag = matches[0][0]
     literal = quote_literal(tag)
+    if len(matches) == 1:
+        _, table, column = matches[0]
+        body = (f"which is the identifier of table \"{table}\" (column \"{column}\"). "
+                f"Write exactly: SELECT * FROM \"{table}\" WHERE \"{column}\" = {literal}"
+                f" — the entity's own row with every column — and nothing else.")
+    else:
+        named = ", ".join(f"\"{t}\" (column \"{c}\")" for _, t, c in matches)
+        offered = " / ".join(f"SELECT * FROM \"{t}\" WHERE \"{c}\" = {literal}"
+                             for _, t, c in matches)
+        body = (f"which is the identifier of these tables: {named}. "
+                f"Write exactly ONE of: {offered} — choose the table whose columns hold "
+                f"what the question asks for; prefer a current-state table over one whose "
+                f"name or description marks it as an earlier or superseded state. "
+                f"Nothing else.")
     return Issue(
         EMPTY,
         IDENTIFIER_EMPTY,
-        (f"The previous query returned no rows. The question names the identifier "
-         f"{literal}, which is the identifier of table \"{table}\" (column "
-         f"\"{column}\"). Write exactly: SELECT * FROM \"{table}\" WHERE "
-         f"\"{column}\" = {literal} — the entity's own row with every column — "
-         f"and nothing else."),
+        f"The previous query returned no rows. The question names the identifier "
+        f"{literal}, {body}",
     )
 
 
@@ -626,9 +670,9 @@ def inspect_result(result_text: str, question: str, routed_cards) -> list:
         # a writer that declined to look anywhere to "look again" asks an abstention to become
         # a claim. An address asks nothing of the kind: it names a row, and the row either
         # exists or it does not.
-        addressed = card_identifier_match(question, routed_cards)
+        addressed = card_identifier_matches(question, routed_cards)
         if addressed:
-            issues.append(_empty_identifier_issue(*addressed))
+            issues.append(_empty_identifier_issue(addressed))
         else:
             issues.append(_empty_issue(sql) if cards else _empty_abstention(sql))
 
