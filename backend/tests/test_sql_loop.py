@@ -975,6 +975,201 @@ for tok in ("hwu", "room", "panel", "camera", "door", "fcu", "location_id"):
     check(f"still no '{tok}' anywhere in the module", hits == 0, f"{hits} hits")
 check("still no `while`", not _re.search(r"\bwhile\b", SRC34))
 
+# ===========================================================================
+# 2026-09-28 - AN EMPTY RESULT, AND THE QUESTION ITSELF NAMES THE ROW.
+#
+# Traced from card ex-047. Step 1 wrote a nonsense self-join, matched nothing,
+# and the generic EMPTY instruction ("filter a place by its printed NAME ...
+# if the question names a place ...") then sent the writer to a different table
+# joined to the place index. It came back with one row of five columns, none of
+# them the ones asked about, and the answer said there was no link on record -
+# when the answer was sitting on the entity's OWN row in a routed table all
+# along.
+#
+# The question printed that entity's coded identifier, and the routed card
+# DECLARES both the column that identifier lives in and the prefixes it starts
+# with. That is a deterministic address, not a guess, so the EMPTY instruction
+# becomes the address: select the entity's own row, every column, nothing else.
+# The kind stays EMPTY, so the priority order and the repeat guard do not move;
+# only the `detail` says which of the two EMPTY instructions fired.
+# ===========================================================================
+print("\n35. A coded identifier the question prints becomes the EMPTY instruction")
+# ---------------------------------------------------------------------------
+CARD_CAM = {
+    "table": "bld_cam",
+    "columns": ["cam_tag", "level_code", "link_id", "backup_units", "notes"],
+    "identifier_column": "cam_tag",
+    "identifier_prefixes": ["CAM"],
+}
+q35 = "which support units back up unit CAM-4F-B-01, and where are they?"
+sql35 = ('SELECT T1.cam_tag FROM "bld_cam" T1 JOIN "bld_cam" T2 '
+         "ON T1.level_code = T2.level_code AND T2.kind = 'SUPPORT'")
+iss35 = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_CAM])
+check("the kind is still EMPTY", [i.kind for i in iss35] == [sql_loop.EMPTY],
+      [i.kind for i in iss35])
+e35 = iss35[0] if iss35 else None
+WANT35 = 'SELECT * FROM "bld_cam" WHERE "cam_tag" = \'CAM-4F-B-01\''
+check("the instruction is the entity's own row, written out in full",
+      e35 is not None and WANT35 in e35.instruction, e35.instruction if e35 else "")
+check("it names the identifier the question printed",
+      e35 is not None and "CAM-4F-B-01" in e35.instruction and "identifier" in e35.instruction,
+      e35.instruction if e35 else "")
+check("it names the table and the column the card declares",
+      e35 is not None and '"bld_cam"' in e35.instruction and '"cam_tag"' in e35.instruction,
+      e35.instruction if e35 else "")
+check("it asks for every column and nothing else",
+      e35 is not None and "every column" in e35.instruction
+      and "nothing else" in e35.instruction, e35.instruction if e35 else "")
+check("it does not also carry the generic advice it replaces",
+      e35 is not None and "ILIKE" not in e35.instruction, e35.instruction if e35 else "")
+check("the detail says IDENTIFIER_EMPTY", e35 is not None and hasattr(sql_loop, "IDENTIFIER_EMPTY")
+      and e35.detail == sql_loop.IDENTIFIER_EMPTY, e35.detail if e35 else "")
+check("it is something the loop can act on",
+      sql_loop.first_requery_issue(iss35) is not None
+      and sql_loop.first_requery_issue(iss35).kind == sql_loop.EMPTY)
+check("IDENTIFIER_EMPTY is a DETAIL, not a kind - the priority order is unchanged",
+      getattr(sql_loop, "IDENTIFIER_EMPTY", None) not in sql_loop.ISSUE_ORDER
+      and sql_loop.ISSUE_ORDER == (sql_loop.FAILED_SQL, sql_loop.EMPTY,
+                                   sql_loop.IDENTIFIER_MISSING, sql_loop.NARROW_SELECT,
+                                   sql_loop.TRUNCATED_NO_SHAPE, sql_loop.COUNT_CROSSCHECK),
+      sql_loop.ISSUE_ORDER)
+
+# ---------------------------------------------------------------------------
+print("\n36. No prefix match, no coded token: the generic EMPTY text stands, word for word")
+# ---------------------------------------------------------------------------
+def generic_empty_text(sql):
+    """The wording `_empty_issue` has always used, written out here so a change to it
+    turns this check red rather than sliding through."""
+    return ("The previous query `" + sql + "` returned no rows. Re-read the column "
+            "samples; filter a place or entity by its printed NAME on the name column "
+            "with ILIKE '%…%', never by a built id; if the question names a place, "
+            "use the one-row-per-place-and-item table.")
+
+# same question shape, a card whose declared prefixes do NOT cover it
+CARD_OTHER = dict(CARD_CAM, identifier_prefixes=["ZZZ"])
+iss36 = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_OTHER])
+check("an unmatched prefix leaves the generic instruction exactly as it was",
+      bool(iss36) and iss36[0].instruction == generic_empty_text(sql35),
+      iss36[0].instruction if iss36 else "")
+check("and its detail is not the identifier one",
+      bool(iss36) and iss36[0].detail != getattr(sql_loop, "IDENTIFIER_EMPTY", "IDENTIFIER_EMPTY"),
+      iss36[0].detail if iss36 else "")
+# a question with no coded token at all
+q36 = "which support units back up the ground unit, and where are they?"
+iss36b = sql_loop.inspect_result(empty_result(sql35), q36, [CARD_CAM])
+check("a question printing no coded token gets the generic instruction",
+      bool(iss36b) and iss36b[0].instruction == generic_empty_text(sql35),
+      iss36b[0].instruction if iss36b else "")
+# a card that declares prefixes but no identifier column cannot address anything
+CARD_NO_COL = dict(CARD_CAM, identifier_column=None)
+iss36c = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_NO_COL])
+check("a card with prefixes but no identifier column is skipped",
+      bool(iss36c) and iss36c[0].instruction == generic_empty_text(sql35),
+      iss36c[0].instruction if iss36c else "")
+# and a result that is NOT empty raises none of this
+check("a good result raises no EMPTY at all",
+      not any(i.kind == sql_loop.EMPTY for i in sql_loop.inspect_result(
+          table_result(["cam_tag", "link_id"], [["CAM-4F-B-01", "X"]],
+                       'SELECT cam_tag, link_id FROM "bld_cam"'), q35, [CARD_CAM])))
+
+# ---------------------------------------------------------------------------
+print("\n37. The tag is quoted safely, and routed order picks the card")
+# ---------------------------------------------------------------------------
+_quote = getattr(sql_loop, "quote_literal", None)
+check("the tag goes in as a SQL string literal, and a single quote in it is DOUBLED",
+      _quote is not None and _quote("QM-O'BRIEN-2") == "'QM-O''BRIEN-2'",
+      _quote("QM-O'BRIEN-2") if _quote else "no quote_literal")
+check("an ordinary tag is quoted and otherwise untouched",
+      _quote is not None and _quote("CAM-4F-B-01") == "'CAM-4F-B-01'",
+      _quote("CAM-4F-B-01") if _quote else "-")
+_build = getattr(sql_loop, "_empty_identifier_issue", None)
+_i37 = _build("QM-O'BRIEN-2", "bld_q", "q_tag") if _build else None
+check("the instruction carries the doubled form in BOTH places it prints the tag",
+      _i37 is not None and _i37.instruction.count("QM-O''BRIEN-2") == 2,
+      _i37.instruction if _i37 else "no _empty_identifier_issue")
+check("and the unescaped form appears nowhere in it",
+      _i37 is not None and "QM-O'BRIEN-2'" not in _i37.instruction.replace("QM-O''BRIEN-2", ""),
+      _i37.instruction if _i37 else "-")
+# ...and the tokeniser cannot hand it one in the first place, which is the point of
+# copying the router's token shape rather than inventing a wider one: a printed
+# apostrophe ENDS the token, so an English possessive stuck to a tag can never be
+# read as part of it.
+_qi = getattr(sql_loop, "question_identifiers", None)
+check("a printed apostrophe ends the token - it is never swallowed into the tag",
+      _qi is not None and [t for _, t in _qi("what is unit QM-O'BRIEN-2?")] == ["QM-O", "BRIEN-2"],
+      [t for _, t in _qi("what is unit QM-O'BRIEN-2?")] if _qi else "-")
+check("an ordinary word is not a coded token, and a hyphenated or numbered one is",
+      _qi is not None
+      and [t for _, t in _qi("list the units")] == []
+      and [t for _, t in _qi("list unit CAM-4F-B-01 and unit 7")] == ["CAM-4F-B-01", "7"],
+      [_qi("list unit CAM-4F-B-01 and unit 7")] if _qi else "-")
+CARD_CAM_B = {"table": "bld_cam_b", "columns": ["tag_b", "y"], "identifier_column": "tag_b",
+              "identifier_prefixes": ["CAM"]}
+first = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_CAM, CARD_CAM_B])[0]
+second = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_CAM_B, CARD_CAM])[0]
+check("two cards match: the FIRST in routed order is the one addressed",
+      '"bld_cam"' in first.instruction and "bld_cam_b" not in first.instruction,
+      first.instruction)
+check("and reversing the routed order reverses the choice - order is the whole rule",
+      '"bld_cam_b"' in second.instruction, second.instruction)
+# the tokenising agrees with the router's, which is where the prefixes come from
+from app.services import table_router as _tr
+check("the prefix this module reads is the prefix the router scored the card on",
+      _tr._question_prefixes(q35) >= {"CAM"}, _tr._question_prefixes(q35))
+
+# ---------------------------------------------------------------------------
+print("\n38. An abstention with a printed identifier is addressed, not abandoned")
+# ---------------------------------------------------------------------------
+# W4 (section 29) makes an empty result whose SQL read NO routed table a finding:
+# the writer declined to look anywhere, and telling an abstention to look again
+# asks it to become a claim. That reasoning is about a VAGUE instruction. When the
+# question prints the identifier of a routed table, the re-query is not "look
+# again" - it is an address, and the row either exists or it does not.
+iss38 = sql_loop.inspect_result(empty_result("SELECT NULL WHERE FALSE"), q35, [CARD_CAM])
+check("the abstention still reports EMPTY", [i.kind for i in iss38] == [sql_loop.EMPTY],
+      [i.kind for i in iss38])
+check("but it now carries the address", bool(iss38) and WANT35 in iss38[0].instruction,
+      iss38[0].instruction if iss38 else "")
+check("an abstention with NO identifier match is still a finding",
+      sql_loop.first_requery_issue(sql_loop.inspect_result(
+          empty_result("SELECT NULL WHERE FALSE"), q36, [CARD_CAM])) is None)
+
+# ---------------------------------------------------------------------------
+print("\n39. The run: [empty, good] - two steps, and the entity's own row wins")
+# ---------------------------------------------------------------------------
+GOOD39 = table_result(["cam_tag", "level_code", "link_id", "backup_units", "notes"],
+                      [["CAM-4F-B-01", "L4", "LNK-9", "U-1, U-2", ""]],
+                      'SELECT * FROM "bld_cam" WHERE "cam_tag" = \'CAM-4F-B-01\'')
+ex = FakeExec([empty_result(sql35), GOOD39])
+se = FakeSearch("DOCTEXT")
+inv39 = sql_loop.run_sql_investigation(q35, "u1", None, execute=ex, search=se,
+                                       routed_cards=[CARD_CAM], max_steps=3)
+check("exactly two SQL calls", len(ex.questions) == 2, len(ex.questions))
+check("the second question carries the address",
+      len(ex.questions) == 2 and WANT35 in ex.questions[1]
+      and "Investigation step 2" in ex.questions[1],
+      ex.questions[-1][-300:])
+check("the good result is what the answer writer gets",
+      "U-1, U-2" in inv39.result_text, inv39.result_text[:200])
+check("two steps on the record", len(inv39.steps) == 2, len(inv39.steps))
+check("the second step's detail names IDENTIFIER_EMPTY",
+      len(inv39.steps) == 2
+      and inv39.steps[1]["detail"] == getattr(sql_loop, "IDENTIFIER_EMPTY", "IDENTIFIER_EMPTY"),
+      [s["detail"] for s in inv39.steps])
+check("the step event still reports the kind as EMPTY - the caller's wiring is unmoved",
+      len(inv39.steps) == 2 and inv39.steps[1]["issue"] == sql_loop.EMPTY,
+      [s["issue"] for s in inv39.steps])
+check("and the documents were never searched - the tables answered",
+      se.queries == [], se.queries)
+# [empty, empty] - the repeat guard is unchanged: same kind twice, then the documents
+ex = FakeExec([empty_result(sql35)] * 2)
+se = FakeSearch("DOCTEXT")
+inv39b = sql_loop.run_sql_investigation(q35, "u1", None, execute=ex, search=se,
+                                        routed_cards=[CARD_CAM], max_steps=3)
+check("empty twice: two SQL calls, not three", len(ex.questions) == 2, len(ex.questions))
+check("then the document fallback, exactly as before",
+      se.queries == [q35] and "DOCTEXT" in inv39b.result_text,
+      (se.queries, inv39b.result_text[:120]))
 
 print("\nALL PASS" if not FAILS else f"\n{len(FAILS)} FAILED")
 sys.exit(1 if FAILS else 0)

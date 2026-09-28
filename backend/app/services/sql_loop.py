@@ -77,6 +77,19 @@ was never reaching its questions was widened:
   MORE: the cross-check is the part that paid (+3 / −1).
 
 Each removal takes its firings with it, so the loop also gets cheaper.
+
+FIX WAVE 2 (2026-09-28) — an empty result whose QUESTION already names the row. The generic
+EMPTY instruction is advice: filter by a printed name, and prefer the table that is one row
+per place and item. That advice sent a writer whose first query matched nothing away from the
+one routed table that carried the answer, and the answer then said there was no record of it.
+But the question had printed the entity's own coded identifier, and a routed card DECLARES
+both the column such an identifier lives in (`identifier_column`) and the strings one starts
+with (`identifier_prefixes`). Those two together are an ADDRESS, not advice, so when they
+match the instruction becomes the address: the entity's own row, every column, nothing else.
+The KIND stays `EMPTY`, so the priority order and the repeat guard are exactly as they were,
+and only the `detail` (`IDENTIFIER_EMPTY`) says which of the two EMPTY instructions fired.
+Still generic: the prefixes and the column are read off the cards, and nothing about any
+building is written here.
 """
 from __future__ import annotations
 
@@ -114,6 +127,13 @@ COUNT_CROSSCHECK = "COUNT_CROSSCHECK"
 #: a query that did not run at all has nothing for the other checks to read.
 ISSUE_ORDER = (FAILED_SQL, EMPTY, IDENTIFIER_MISSING, NARROW_SELECT, TRUNCATED_NO_SHAPE,
                COUNT_CROSSCHECK)
+
+#: The `detail` of an `EMPTY` issue whose instruction came from an identifier the question
+#: itself printed, rather than from the generic advice. It is deliberately NOT a kind and is
+#: deliberately NOT in `ISSUE_ORDER`: making it one would give the repeat guard two EMPTY
+#: kinds to tell apart, and a question could then spend two steps failing to find the same
+#: row. It names WHICH instruction fired, nothing more.
+IDENTIFIER_EMPTY = "IDENTIFIER_EMPTY"
 
 TOOL_SQL = "query_structured_data"
 TOOL_SEARCH = "search_documents"
@@ -405,6 +425,66 @@ def best_identifier(cards, result_cols):
     return (best[1], best[2]) if best else None
 
 
+#: What a printed identifier looks like inside a question. The token shape is a DELIBERATE
+#: duplicate of `table_router`'s (letters, digits and parentheses, joined by hyphens), because
+#: the prefixes matched against it are the router's own `identifier_prefixes` — a tag it
+#: scored a card on must be a tag this finds. It is copied rather than imported for the same
+#: reason `result_is_empty` is: reaching into another module's private tokeniser couples the
+#: inspector to the router's internals, and the test pins the two to agree.
+_TAG_TOKEN_RE = re.compile(r"[A-Za-z0-9()][A-Za-z0-9()\-]*")
+
+#: A token is CODED when it carries a hyphen or a digit. Ordinary English words carry
+#: neither, which is the whole discriminator: `CAM-4F-B-01` is an identifier, `units` is not.
+_CODED_TOKEN_RE = re.compile(r"[-0-9]")
+
+
+def question_identifiers(question: str) -> list:
+    """Every coded token the question prints, in the order printed, as `(prefix, token)` —
+    the token itself and the part before its first hyphen, upper-cased for matching."""
+    found = []
+    for tok in _TAG_TOKEN_RE.findall(question or ""):
+        if _CODED_TOKEN_RE.search(tok):
+            found.append((tok.split("-", 1)[0].upper(), tok))
+    return found
+
+
+def card_identifier_match(question, routed_cards):
+    """`(tag, table, column)` — the first ROUTED card whose declared `identifier_prefixes`
+    cover the prefix of a coded token the question prints, or None.
+
+    ROUTED ORDER decides which card, and nothing else. The router has already ranked these
+    cards against this question, so its own order is the best evidence available here; a
+    second rule applied on top (longest prefix, widest table, most columns) would make the
+    choice depend on two orderings instead of one, and neither of them would be visible in
+    the instruction the writer is handed. A card that declares prefixes but no identifier
+    column is skipped: there is no column to address the row by, so there is no instruction
+    to write.
+    """
+    coded = question_identifiers(question)
+    if not coded:
+        return None
+    for card in routed_cards or []:
+        table = (card or {}).get("table") or ""
+        column = (card or {}).get("identifier_column") or ""
+        if not table or not column:
+            continue
+        prefixes = {str(p).strip().upper()
+                    for p in ((card or {}).get("identifier_prefixes") or []) if str(p).strip()}
+        if not prefixes:
+            continue
+        for prefix, tag in coded:
+            if prefix in prefixes:
+                return (tag, str(table), str(column))
+    return None
+
+
+def quote_literal(value: str) -> str:
+    """A printed identifier goes into the instruction as a SQL string literal, so a single
+    quote inside it is doubled — the one character that would otherwise close the literal
+    early and turn a deterministic instruction into a query that cannot even be parsed."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def quote_identifier(name: str) -> str:
     """A column name goes into the instruction as SQL the writer can paste. A plain name
     needs nothing; one carrying a space or punctuation needs double quotes, because
@@ -452,6 +532,37 @@ def _empty_issue(sql: str) -> Issue:
          f"filter a place or entity by its printed NAME on the name column with "
          f"ILIKE '%…%', never by a built id; if the question names a place, use the "
          f"one-row-per-place-and-item table."),
+    )
+
+
+def _empty_identifier_issue(tag: str, table: str, column: str) -> Issue:
+    """Empty, and the question printed the identifier of a routed table — so the re-query is
+    an ADDRESS rather than advice.
+
+    MEASURED 2026-09-28. A question about one entity and its dependants was written as a
+    self-join with an invented predicate, matched nothing, and the generic EMPTY instruction
+    then sent the writer to a different table joined to the place index: one row, five
+    columns, not one of them the columns asked about, and an answer that said no link was on
+    record. The entity's own row in a routed table carried every one of them. The card
+    declares the column its identifier lives in and the strings such an identifier starts
+    with; the question printed one. That is enough to name the row by code, so this asks for
+    exactly that row and forbids anything else — a narrower SELECT is how the first query
+    lost the columns in the first place.
+
+    The literal is quote-doubled in BOTH places it appears, so there is only ever one written
+    form of the tag for the writer to copy.
+
+    Generic, like every other instruction here: the table, the column and the prefixes are
+    all read off the routed cards."""
+    literal = quote_literal(tag)
+    return Issue(
+        EMPTY,
+        IDENTIFIER_EMPTY,
+        (f"The previous query returned no rows. The question names the identifier "
+         f"{literal}, which is the identifier of table \"{table}\" (column "
+         f"\"{column}\"). Write exactly: SELECT * FROM \"{table}\" WHERE "
+         f"\"{column}\" = {literal} — the entity's own row with every column — "
+         f"and nothing else."),
     )
 
 
@@ -508,7 +619,18 @@ def inspect_result(result_text: str, question: str, routed_cards) -> list:
         issues.append(_failed_sql_issue(result_failure_error(result_text)))
 
     if empty:
-        issues.append(_empty_issue(sql) if cards else _empty_abstention(sql))
+        # The address first, and it is tried against the ROUTED cards rather than the ones
+        # the SQL read: the query that matched nothing is precisely the one that looked in
+        # the wrong place, so what it read is no guide to where the row is. It also overrides
+        # the ABSTENTION above, deliberately. That rule is about a vague instruction — telling
+        # a writer that declined to look anywhere to "look again" asks an abstention to become
+        # a claim. An address asks nothing of the kind: it names a row, and the row either
+        # exists or it does not.
+        addressed = card_identifier_match(question, routed_cards)
+        if addressed:
+            issues.append(_empty_identifier_issue(*addressed))
+        else:
+            issues.append(_empty_issue(sql) if cards else _empty_abstention(sql))
 
     # An aggregate result is exempt: it has no per-entity identifier and no wider row to
     # widen to. An empty result is NOT exempt — its header still says which columns were
