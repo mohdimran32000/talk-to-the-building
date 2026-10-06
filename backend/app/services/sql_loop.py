@@ -229,8 +229,12 @@ CURRENT_TWIN = "CURRENT_TWIN"
 #: instruction; the last three never carry one. Pinned by test §21 — a fixture that raises
 #: two issues at once, so inverting this tuple turns a check red. `FAILED_SQL` leads it:
 #: a query that did not run at all has nothing for the other checks to read.
-#: `LITERAL_ELSEWHERE` (wave 3, F2) comes right after `EMPTY`: a filter that looked in the
-#: wrong column means rows are missing, which outranks a list missing its labels.
+#: `LITERAL_ELSEWHERE` (wave 3, F2) comes right after it, AHEAD of `EMPTY` (wave 6, W6-A1,
+#: reordered — see below): a filter that looked in the wrong column means rows are missing,
+#: which outranks a list missing its labels, and, once an EMPTY result's own text can carry
+#: the line too, it is also the more specific of the two things an empty result can say —
+#: it names the exact column where the value IS, which outranks both of EMPTY's own
+#: instructions (the identifier address, the generic advice).
 #: `CURRENT_TWIN` (wave 5, G13 a) follows it: reading the wrong ERA of table entirely is a more
 #: fundamental defect than how a right-era result is grouped or compared, so it outranks both
 #: `PLACE_RANKED_ON_TEXT` and `PLACE_COMPARED_ON_TEXT`, which come right after it as before.
@@ -239,8 +243,20 @@ CURRENT_TWIN = "CURRENT_TWIN"
 #: cross-check does not. `PLACE_COMPARED_ON_TEXT` (wave 4, A2), its generalisation, comes right
 #: after it: a comparison that split one place by its spellings has the wrong rows, which
 #: outranks a list missing its labels.
-ISSUE_ORDER = (FAILED_SQL, EMPTY, LITERAL_ELSEWHERE, CURRENT_TWIN, PLACE_RANKED_ON_TEXT,
-               PLACE_COMPARED_ON_TEXT, IDENTIFIER_MISSING, NARROW_SELECT, TRUNCATED_NO_SHAPE,
+#: `EMPTY` moves to right before the column-shaped issues (wave 6, W6-A1). MEASURED on the
+#: goal-function run of 2026-09-30: a then-vs-now question's first query compared a code with
+#: the PARENT column of a table where it only ever appears as a CHILD, found no rows, and the
+#: question's own printed identifier ALSO addressed a routed card — so the loop sent the (by
+#: construction wrong, for a question needing two states) identifier address, when the data
+#: already knew exactly where the value was. `CURRENT_TWIN`, `PLACE_RANKED_ON_TEXT` and
+#: `PLACE_COMPARED_ON_TEXT` are all raised only on a NON-empty result by construction (each is
+#: guarded by `not empty` in `inspect_result`), so moving EMPTY past them changes nothing for
+#: any of the three — it matters only for the new EMPTY+LITERAL_ELSEWHERE overlap this wave
+#: adds (`sql_tool` can now write the line on an empty result too; see
+#: `_literal_elsewhere_lines`'s call site there).
+ISSUE_ORDER = (FAILED_SQL, LITERAL_ELSEWHERE, CURRENT_TWIN, PLACE_RANKED_ON_TEXT,
+               PLACE_COMPARED_ON_TEXT, EMPTY, IDENTIFIER_MISSING, NARROW_SELECT,
+               TRUNCATED_NO_SHAPE,
                COUNT_CROSSCHECK, LETTER_CROSSCHECK)
 
 #: The `detail` of an `EMPTY` issue whose instruction came from an identifier the question

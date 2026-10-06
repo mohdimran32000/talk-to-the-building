@@ -152,6 +152,11 @@ check("RED: the figure WITHOUT the noted row is given, and it differs from the o
 check("picks neither figure as THE answer - no verdict word in the block",
       not any(w in block1.lower() for w in (" is the answer", "correct figure", "true total")),
       block1)
+check("RED (wave 6, W6-A1): this fixture ALSO has 2 output rows, so the In-all line appears, "
+      "summing both additive columns across every group - with ALL rows (7, 700) and without "
+      "the noted one (6, 600)",
+      "In all: total_units 7 (6 without the noted rows); total_load 700 (600 without the "
+      "noted rows)" in block1, block1)
 
 # ===========================================================================
 print("\n2. Silent shapes - no block added")
@@ -237,9 +242,102 @@ check("RED: it says to name what each note says and which row it is about",
       "which row it is about" in bullet, bullet)
 check("RED: never print the block, its heading, or a table/column name",
       "Never print the block" in bullet, bullet)
+check("RED (wave 6, W6-A1): it says to give EACH figure as one complete set, never a count "
+      "from one reading beside a total from the other",
+      "a single complete set" in bullet
+      and "never a count read from one reading beside a total read from the other" in bullet,
+      bullet)
+check("RED: it names the In-all line as where to read a complete set from, and never to print "
+      "its own words",
+      '"In all"' in bullet, bullet)
 frozen_bullet = next((ln for ln in oc.TOOL_CHOICE_FORMAT_RULES.splitlines()
                       if "NOTES INSIDE THE FIGURE" in ln), "")
 check("RED: the frozen tool-choice copy carries none of it (ruling W7)", frozen_bullet == "")
+
+# ===========================================================================
+print("\n5. Wave 6, W6-A1: the In-all line")
+# ===========================================================================
+# Three groups; the noted rows are BOTH of one whole group's own rows (PNL-C), so excluding
+# them drops that group from `without` entirely - the exact shape the diagnosis found.
+UNITS3 = {
+    "table_name": "bld_units3", "columns": ["panel", "kind", "pts", "watts", "notes"],
+    "rows": [_unit("PNL-A", "FCU", "1", "100", ""), _unit("PNL-A", "FCU", "1", "100", ""),
+             _unit("PNL-B", "FCU", "2", "200", ""), _unit("PNL-B", "FCU", "3", "300", ""),
+             _unit("PNL-C", "FCU", "4", "400", "Inference: disputed reading"),
+             _unit("PNL-C", "FCU", "1", "150", "Inference: disputed reading")],
+    "row_count": 6,
+}
+BLOCKS3 = {"table_name": "bld_blocks3", "columns": ["panel", "block"],
+          "rows": [{"panel": p, "block": "X"} for p in ("PNL-A", "PNL-B", "PNL-C")],
+          "row_count": 3}
+SQL3 = ('SELECT T1.panel, SUM(T1.pts) AS total_units, SUM(T1.watts) AS total_load '
+       'FROM "bld_units3" AS T1 JOIN "bld_blocks3" AS T2 ON T1.panel = T2.panel '
+       "WHERE T1.kind = 'FCU' AND T2.block = 'X' GROUP BY T1.panel ORDER BY T1.panel")
+out3 = run(SQL3, Q, (UNITS3, BLOCKS3))
+block3 = block_of(out3)
+check("RED: three groups - WITH all of them (12, 1250) and WITHOUT the whole noted group "
+      "(7, 700), both additive columns, on one line after the without-reading",
+      block3.endswith("In all: total_units 12 (7 without the noted rows); total_load 1250 "
+                      "(700 without the noted rows)"), block3)
+
+SQL3_AVG = ('SELECT T1.panel, SUM(T1.pts) AS total_units, AVG(T1.watts) AS avg_load '
+           'FROM "bld_units3" AS T1 JOIN "bld_blocks3" AS T2 ON T1.panel = T2.panel '
+           "WHERE T1.kind = 'FCU' AND T2.block = 'X' GROUP BY T1.panel ORDER BY T1.panel")
+block3_avg = block_of(run(SQL3_AVG, Q, (UNITS3, BLOCKS3)))
+in_all3_avg = next((ln for ln in block3_avg.splitlines() if ln.startswith("In all:")), "")
+check("RED: an AVG column is left out of the In-all line entirely (it still names every "
+      "column, avg_load included, in the ordinary without-reading line above it)",
+      in_all3_avg == "In all: total_units 12 (7 without the noted rows)", block3_avg)
+
+# A single-group result: the SAME fixture as section 1, filtered to one panel - no In-all line,
+# and the rest of the block byte-identical to what it was before this change.
+SQL_ONE_GROUP = ('SELECT T1.panel, SUM(T1.pts) AS total_units, SUM(T1.watts) AS total_load '
+                 'FROM "bld_units" AS T1 JOIN "bld_blocks" AS T2 ON T1.panel = T2.panel '
+                 "WHERE T1.kind = 'FCU' AND T2.block = 'X' AND T1.panel = 'PNL-A' "
+                 "GROUP BY T1.panel ORDER BY T1.panel")
+block_one = block_of(run(SQL_ONE_GROUP, Q, (UNITS, BLOCKS)))
+EXPECTED_ONE_GROUP = (
+    "NOTES INSIDE THE FIGURE - 1 row behind this figure carries a note that may change what "
+    "it is:\n"
+    "- pts 1.0, watts 100.0: Inference: printed tick disagrees with REMARKS\n"
+    "Without the noted row(s), the same figure is: panel = PNL-A, total_units = 1.0, "
+    "total_load = 100.0."
+)
+check("RED: a single-group result adds no In-all line, and the block is otherwise BYTE "
+      "IDENTICAL to before this change",
+      block_one == EXPECTED_ONE_GROUP, block_one)
+check("...no In-all line, named explicitly", "In all" not in block_one, block_one)
+
+# ---------------------------------------------------------------------------
+print("\n6. Helper-level checks")
+# ---------------------------------------------------------------------------
+check("_additive_output_columns: a bare SUM, an aliased COUNT - a plain column, an AVG and an "
+      "expression around a SUM are all left out",
+      sql_tool._additive_output_columns(
+          "SELECT a, SUM(b), COUNT(c) AS n, AVG(d) AS avgd, SUM(e) + 1 AS bad FROM t",
+          ["a", "sum(b)", "n", "avgd", "bad"]) == [1, 2])
+check("COUNT(*) and COUNT(DISTINCT x) both count as additive",
+      sql_tool._additive_output_columns(
+          "SELECT COUNT(*) AS n1, COUNT(DISTINCT x) AS n2 FROM t", ["n1", "n2"]) == [0, 1])
+check("a bare alias with no AS still strips, and a qualified argument is read through",
+      sql_tool._additive_output_columns(
+          "SELECT SUM(T1.a) s FROM t AS T1", ["s"]) == [0])
+check("MIN and MAX are excluded alongside AVG",
+      sql_tool._additive_output_columns(
+          "SELECT MIN(a) AS mn, MAX(a) AS mx FROM t", ["mn", "mx"]) == [])
+check("a query that is not one plain SELECT (a UNION) has no additive columns at all",
+      sql_tool._additive_output_columns(
+          "SELECT a FROM t UNION SELECT a FROM u", ["a"]) == [])
+check("RED: a window function - a second top-level paren group riding after the call's own - "
+      "is never one whole call, whatever its own depth happens to land on",
+      sql_tool._additive_output_columns(
+          "SELECT panel, SUM(pts) OVER (PARTITION BY panel) AS running FROM t",
+          ["panel", "running"]) == [])
+check("_summed_column sums what parses as a number and ignores the rest; None with nothing to "
+      "add",
+      sql_tool._summed_column([(1, "2"), (2, "3.5"), (3, None)], 1) == "5.50"
+      and sql_tool._summed_column([(1, "2"), (2, "3")], 1) == "5"
+      and sql_tool._summed_column([(1, None)], 1) is None)
 
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

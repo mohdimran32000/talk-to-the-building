@@ -1049,16 +1049,25 @@ check("it is something the loop can act on",
 # section 5).
 check("IDENTIFIER_EMPTY is a DETAIL, not a kind - the priority order is unchanged "
       "apart from T7's LETTER_CROSSCHECK appended at the end, wave 3's LITERAL_ELSEWHERE "
-      "after EMPTY and PLACE_RANKED_ON_TEXT after it, wave 4's PLACE_COMPARED_ON_TEXT "
-      "after that, and wave 5's CURRENT_TWIN right after LITERAL_ELSEWHERE (ahead of both "
-      "PLACE_RANKED_ON_TEXT and PLACE_COMPARED_ON_TEXT: the wrong ERA of table outranks how "
-      "a right-era result is grouped or compared)",
+      "(now leading the whole group, wave 6, W6-A1 - see below) and PLACE_RANKED_ON_TEXT "
+      "after it, wave 4's PLACE_COMPARED_ON_TEXT after that, and wave 5's CURRENT_TWIN right "
+      "after LITERAL_ELSEWHERE (ahead of both PLACE_RANKED_ON_TEXT and "
+      "PLACE_COMPARED_ON_TEXT: the wrong ERA of table outranks how a right-era result is "
+      "grouped or compared). Re-pinned in wave 6 (W6-A1), deliberately: once an EMPTY "
+      "result's own text can carry the LITERAL_ELSEWHERE line too, that finding - it names "
+      "the exact column where the value IS - must be chosen ahead of either EMPTY "
+      "instruction (the identifier address, the generic advice), so EMPTY moves to right "
+      "before the column-shaped issues. CURRENT_TWIN, PLACE_RANKED_ON_TEXT and "
+      "PLACE_COMPARED_ON_TEXT are all raised only on a NON-empty result by construction, so "
+      "this move changes nothing for any of them - it matters only for the new "
+      "EMPTY+LITERAL_ELSEWHERE overlap (test_sql_literal_elsewhere.py section 6).",
       getattr(sql_loop, "IDENTIFIER_EMPTY", None) not in sql_loop.ISSUE_ORDER
-      and sql_loop.ISSUE_ORDER == (sql_loop.FAILED_SQL, sql_loop.EMPTY,
+      and sql_loop.ISSUE_ORDER == (sql_loop.FAILED_SQL,
                                    sql_loop.LITERAL_ELSEWHERE,
                                    getattr(sql_loop, "CURRENT_TWIN", None),
                                    sql_loop.PLACE_RANKED_ON_TEXT,
                                    getattr(sql_loop, "PLACE_COMPARED_ON_TEXT", None),
+                                   sql_loop.EMPTY,
                                    sql_loop.IDENTIFIER_MISSING, sql_loop.NARROW_SELECT,
                                    sql_loop.TRUNCATED_NO_SHAPE, sql_loop.COUNT_CROSSCHECK,
                                    sql_loop.LETTER_CROSSCHECK),

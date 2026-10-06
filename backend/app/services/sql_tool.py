@@ -1953,6 +1953,128 @@ def _aggregate_rows_with_notes(con, sql: str, tables: list):
     return None
 
 
+#: Wave 6, W6-A1 (2026-10-06). MEASURED on the goal-function run of 2026-09-30: the block above
+#: fired correctly on a GROUP BY aggregate with several output groups - a couple of rows behind
+#: one whole group carried a note, and the figure without them was given, per group, by
+#: `_inline_result` above. The answer then stated the WITH-reading's count beside the
+#: WITHOUT-reading's total - a mixed pair, wrong under either reading - because nothing in the
+#: block ever gives the TWO FULL SETS (count and total TOGETHER) to read from. So: when the
+#: aggregate has 2 or more output rows (groups) and at least one of its own SELECT-list items is,
+#: in its entirety but for one optional trailing alias, a single top-level `SUM(...)` or
+#: `COUNT(...)` call - never `AVG`/`MIN`/`MAX`, never an expression around one, which could not
+#: be re-summed across groups and mean anything - that column is summed again over EVERY output
+#: row, with the figure above (`result`) and without the noted rows (`without`, already
+#: computed), and one more line is appended naming each such column both ways. A single-group
+#: result adds nothing: there is only ever one set to begin with. Pure arithmetic over values
+#: already in hand - no extra query.
+_ADDITIVE_AGGREGATE_FUNCS = ("SUM", "COUNT")
+
+
+def _select_item_spans(sql: str):
+    """`(tokens, words, depths, [(start, end), …])` - `sql`'s own top-level SELECT-list,
+    split on its top-level commas, token-span pairs both exclusive of the comma - or None when
+    `sql` does not open with one plain, unset-operated SELECT. A leading DISTINCT is its own
+    token, never part of the first item. Shares its reading of 'one top-level SELECT, no set
+    operation' with `_aggregate_arg_columns`, which reads the same span for a different
+    purpose (the raw argument column of each call, rather than whether the whole item is one)."""
+    tokens = sql_token_spans(sql)
+    if not tokens or _word(tokens[0]) != "SELECT":
+        return None
+    words = [_word(t) for t in tokens]
+    depths = _paren_depths(tokens)
+    top = [k for k in range(len(tokens)) if depths[k] == 0]
+    if sum(1 for k in top if words[k] == "SELECT") != 1 or _SET_OPERATIONS.intersection(
+            words[k] for k in top):
+        return None
+    froms = [k for k in top if words[k] == "FROM"]
+    end = froms[0] if froms else len(tokens)
+    start = 1
+    if start < end and words[start] == "DISTINCT":
+        start += 1
+    items, item_start = [], start
+    for k in range(start, end):
+        if depths[k] == 0 and tokens[k][1] == ",":
+            items.append((item_start, k))
+            item_start = k + 1
+    items.append((item_start, end))
+    return tokens, words, depths, items
+
+
+def _is_whole_aggregate_item(tokens, words, depths, start, end) -> bool:
+    """Whether select-list item `tokens[start:end]` is, once one optional trailing alias
+    (`AS name`, or a bare name) is dropped, nothing but a single top-level SUM or COUNT call -
+    whatever its own argument, `*` included: the shape that can be summed again across output
+    rows and still mean the same figure the query itself computed. A window function - a
+    SECOND top-level paren group riding after the call's own, as `OVER (...)` does - is never
+    one: the call's own closing paren must be the item's last token, not merely A token at the
+    same depth somewhere before it."""
+    base = depths[start] if start < end else 0
+    k = end
+    if k > start and depths[k - 1] == base and _is_name(tokens[k - 1]):
+        k -= 1
+        if k > start and depths[k - 1] == base and words[k - 1] == "AS":
+            k -= 1
+    if (k - start < 3 or words[start] not in _ADDITIVE_AGGREGATE_FUNCS
+            or depths[start] != base or tokens[start + 1][1] != "(" or depths[start + 1] != base):
+        return False
+    # The call's OWN matching close paren: the first token after its open paren whose depth
+    # returns to `base` - everything strictly between is inside the call, by the paren-matching
+    # invariant `_paren_depths` keeps. Additive only when THAT is the item's very last token.
+    close = next((j for j in range(start + 2, k) if depths[j] == base), None)
+    return close == k - 1 and tokens[close][1] == ")"
+
+
+def _additive_output_columns(sql: str, col_names) -> list:
+    """The 0-based indices of `col_names` whose own SELECT-list item is a whole SUM or COUNT
+    call (`_is_whole_aggregate_item`) - positional, since the query's own SELECT-list order is
+    `col_names`' order, so a GROUP BY key ahead of the aggregates is skipped without reading
+    its name. [] when `sql` cannot be read as one plain SELECT."""
+    spans = _select_item_spans(sql)
+    if spans is None:
+        return []
+    tokens, words, depths, items = spans
+    found = []
+    for i, (start, end) in enumerate(items):
+        if i >= len(col_names):
+            break
+        if _is_whole_aggregate_item(tokens, words, depths, start, end):
+            found.append(i)
+    return found
+
+
+def _summed_column(rows, index) -> str:
+    """The sum of `rows`' own column `index`, formatted as a bare integer when it is whole and
+    to two decimal places otherwise (the same rule the result's own TOTAL line uses) - or None
+    when no row offers a numeric value there."""
+    total, seen = 0.0, False
+    for row in rows:
+        try:
+            value = float(str(row[index]).replace(",", ""))
+        except (TypeError, ValueError, IndexError):
+            continue
+        total += value
+        seen = True
+    if not seen:
+        return None
+    return str(int(total)) if total == int(total) else f"{total:.2f}"
+
+
+def _in_all_line(sql: str, col_names, result, without) -> str:
+    """The \"In all: …\" line for a NOTES INSIDE THE FIGURE block with 2+ output rows, or "" -
+    see the comment above for when it applies and why. Pure - `result` and `without` are
+    already in hand."""
+    if len(result) < 2:
+        return ""
+    parts = []
+    for i in _additive_output_columns(sql, col_names):
+        with_sum = _summed_column(result, i)
+        without_sum = _summed_column(without, i)
+        if with_sum is None or without_sum is None:
+            continue
+        parts.append(f"{col_names[i]} {with_sum} ({without_sum} without the noted rows)")
+    return f"In all: {'; '.join(parts)}" if parts else ""
+
+
 def _notes_inside_aggregate_line(con, sql: str, tables: list, col_names, result) -> str:
     """The NOTES INSIDE THE FIGURE block for `sql`, or "" - see the comment above for when it
     applies. One extra query to find the noted rows (`_aggregate_rows_with_notes`), one more
@@ -1980,8 +2102,12 @@ def _notes_inside_aggregate_line(con, sql: str, tables: list, col_names, result)
               f"carries a note that may change what it is" if len(noted) == 1 else
               f"{NOTES_INSIDE_FIGURE_HEADING}{_counted(len(noted), 'row')} behind this figure "
               f"carry a note that may change what they are")
-    return "\n".join([heading + ":"] + bullets
-                     + [f"Without the noted row(s), the same figure is: {shown_without}."])
+    lines_out = [heading + ":"] + bullets + [
+        f"Without the noted row(s), the same figure is: {shown_without}."]
+    in_all = _in_all_line(sql, col_names, result, without)
+    if in_all:
+        lines_out.append(in_all)
+    return "\n".join(lines_out)
 
 
 # ---------------------------------------------------------------------------
@@ -3524,11 +3650,19 @@ _DECLARED_JOIN_RE = re.compile(r"`([^`.]+)\.([^`]+)`\s*=\s*`([^`.]+)\.([^`]+)`")
 _LOCATION_KEY = "location_id"
 
 
+def _level_name_column(columns):
+    """The column of `columns` that most likely names each row's LEVEL (storey): the first
+    naming both a level and a name, else the first naming a level at all, else None. Shared by
+    `_places_of` (a joined table's own level column) and the PLACES line below (the places
+    table's own) - one rule, read off a header, never a table or building name."""
+    levels = [c for c in columns if "level" in str(c).lower()]
+    return next((c for c in levels if "name" in str(c).lower()), levels[0] if levels else None)
+
+
 def _places_of(shape, tables: list, cards: list):
     """The `_Places` of a walked table - when its card declares a join from its
     `location_id` to a table that is loaded and has a level column - else None. Read off
-    the card's declared join, never a table name. The level column is the places table's
-    first column naming a level and a name, else its first naming a level."""
+    the card's declared join, never a table name. The level column is `_level_name_column`'s."""
     card = next((c for c in cards or [] if c.get("table") == shape.table), None)
     loaded = {t["table_name"]: t for t in tables if t.get("rows")}
 
@@ -3544,9 +3678,7 @@ def _places_of(shape, tables: list, cards: list):
             continue
         dst_columns = list(loaded[dst_table].get("columns") or [])
         loc_col, key_col = column_of(shape.columns, src_col), column_of(dst_columns, dst_col)
-        levels = [c for c in dst_columns if "level" in str(c).lower()]
-        level_col = next((c for c in levels if "name" in str(c).lower()),
-                         levels[0] if levels else None)
+        level_col = _level_name_column(dst_columns)
         if loc_col is not None and key_col is not None and level_col is not None:
             return _Places(loc_col, dst_table, key_col, level_col)
     return None
@@ -4667,6 +4799,113 @@ def _place_lines(question: str, cards: list, loaded: list, every: list) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# PLACES - wave 6, W6-A1, 2026-10-06.
+#
+# Measured on the goal-function run of 2026-09-30: a where-question's SQL read a folded table
+# printing the spine's own location key, a display name and an item/quantity - a sensible
+# result for "what is kept where", but it never states a PLACE's floor in words. The answer
+# named each place by its display name alone, which answers "what" but not "where" - the one
+# thing a where-question actually asks.
+#
+# So: when the question - read WITHOUT the loop's step suffix, exactly as `_place_lines` above
+# reads it - ASKS WHERE something is (`_asks_where`: a small word-boundary, case-insensitive
+# detector - "where", "located", "location(s)", "which floor/level/room/block" - never a table
+# or column name), and the result's own columns carry the spine's location key (`_LOCATION_KEY`,
+# the SAME column `_places_of`/`_places_table` already recognise - never a table name) with 1 to
+# PLACES_MAX_IDS distinct, non-blank values: each id is looked up in the places table
+# (`_places_table`, found the same generic way `_place_lines` finds it - never by its name) for
+# its own display name and its level's name (`_level_name_column`, the SAME rule `_places_of`
+# uses for a JOINED table's level column, shared rather than duplicated). An id that IS a level
+# (its own row's kind column reads 'level') gives just its own name: there is no separate level
+# to add. An id the places table does not hold is skipped; the whole line is left out when
+# nothing resolves, or when the result shows no such column, or more than PLACES_MAX_IDS of it -
+# a list that long is not what a where-question about ONE thing is asking for. Pure - the
+# places table is already in hand, loaded or not, the same way `_place_lines` above reads it,
+# never a fresh query; an error drops the line and nothing else (`_companion`). One answer rule
+# reads it. Written from SHAPE: no table, column or value of the project is named.
+#
+#     PLACES - RM-1.01 = Office 1, Level 01; RM-1.02 = Store Room, Level 01
+# ---------------------------------------------------------------------------
+PLACES_HEADING = "PLACES - "
+#: A result naming more places than this is not what a where-question about one thing or a
+#: handful of things is asking for - the line is dropped rather than spelling out a long list.
+PLACES_MAX_IDS = 12
+#: A kind-column value that means the row itself IS a level, not a room or any other placeable
+#: kind - `_places_table`'s own kind column, read the same way `_ROOM_KIND` reads 'room'.
+_LEVEL_KIND = "level"
+_WHERE_QUESTION_RE = re.compile(
+    r"\bwhere\b|\blocated\b|\blocations?\b|\bwhich\s+(?:floor|level|room|block)\b",
+    re.IGNORECASE)
+
+
+def _asks_where(text: str) -> bool:
+    """Whether `text` asks where something is - a small word-boundary, case-insensitive
+    detector, never a hard-coded table or column name. Pure."""
+    return bool(_WHERE_QUESTION_RE.search(text or ""))
+
+
+def _result_location_ids(col_names, result) -> list:
+    """The distinct, non-blank values of `col_names`' own location-key column, in the order
+    `result` first prints them - or [] when the result carries no such column. The column is
+    found by NAME alone (`_LOCATION_KEY`, exactly as `_places_of`/`_places_table` read it),
+    never by which table the SQL happened to read. Pure."""
+    idx = next((i for i, c in enumerate(col_names or ())
+               if str(c).strip().lower() == _LOCATION_KEY), None)
+    if idx is None:
+        return []
+    found, seen = [], set()
+    for row in result or []:
+        value = row[idx] if idx < len(row) else None
+        text = "" if value is None else str(value).strip()
+        if text and text not in seen:
+            seen.add(text)
+            found.append(text)
+    return found
+
+
+def _place_shown(row, kind_col, display_col, level_col, location_id: str) -> str:
+    """What the PLACES line shows for one resolved `row` of the places table: its own name and
+    level together, its name alone with no level to add, or (least likely, both blank) the id
+    itself - never nothing. A row whose OWN kind is a level is shown by its name alone: there is
+    no separate level for a level to be on."""
+    def cell(column):
+        return re.sub(r"\s+", " ", str(row.get(column) or "")).strip() if column else ""
+
+    name, level = cell(display_col), cell(level_col)
+    is_level = str(row.get(kind_col) or "").strip().lower() == _LEVEL_KIND
+    if is_level:
+        return name or level or location_id
+    if name and level:
+        return f"{name}, {level}"
+    return name or level or location_id
+
+
+def _places_line(question: str, cards: list, loaded: list, every: list, col_names, result) -> str:
+    """The PLACES line for `question`, or "" when it does not apply - see the comment above for
+    when it does. Pure - no query; the caller (`_companion`) drops the line, and nothing else,
+    if it raises."""
+    text = _split_step_suffix(question)[0]
+    if not _asks_where(text):
+        return ""
+    ids = _result_location_ids(col_names, result)
+    if not 1 <= len(ids) <= PLACES_MAX_IDS:
+        return ""
+    places = _places_table(cards, loaded, every)
+    if places is None:
+        return ""
+    table, key_col, kind_col, display_col = places
+    level_col = _level_name_column(table.get("columns") or [])
+    rows = {}
+    for row in table.get("rows") or []:
+        key = str(row.get(key_col) or "").strip()
+        if key and key not in rows:
+            rows[key] = row
+    parts = [f"{id_} = {_place_shown(rows[id_], kind_col, display_col, level_col, id_)}"
+            for id_ in ids if id_ in rows]
+    return f"{PLACES_HEADING}{'; '.join(parts)}" if parts else ""
+
+
 def _fix_table_names(sql: str, real_table_names: list[str],
                       all_table_names: list[str] | None = None) -> str:
     """Fix truncated or incorrect table names in generated SQL by fuzzy matching.
@@ -5394,7 +5633,22 @@ User question: {question}"""
 
         # 6. Format as markdown table (max 50 rows)
         if not result:
-            return f"Query returned no results.\n\nSQL: `{sql}`"
+            # Wave 6, W6-A1: a value looked for in a column that never holds it, though another
+            # column of the same table does, is exactly as informative on a result with NO rows
+            # at all as it already was (since wave 3, F2) on one an empty arm merely hides
+            # inside - MEASURED on the goal-function run of 2026-09-30, a then-vs-now question's
+            # first query compared a code with the wrong column of a table, found nothing, and
+            # the generic re-query advice that followed was wrong by construction (it assumes
+            # one state answers, not two). The text must still START with "Query returned no
+            # results" - result_is_empty / openai_client._sql_result_is_empty key on that
+            # prefix - so the line is appended after the SQL line, never folded into it; an
+            # empty result with no such literal is byte-identical to before this change.
+            text = f"Query returned no results.\n\nSQL: `{sql}`"
+            elsewhere = _companion("literal elsewhere", _literal_elsewhere_lines, con, sql,
+                                   tables, table_col_types)
+            if elsewhere:
+                text += "\n\n" + elsewhere
+            return text
 
         max_rows = 50
         truncated = len(result) > max_rows
@@ -5514,6 +5768,13 @@ User question: {question}"""
         shared = _companion("shared value", _shared_value_line, con, sql, tables)
         if shared:
             md += "\n\n" + shared
+        # A where-question's result named by the spine's own location key gets each place's
+        # name and level spelled out in words (wave 6, W6-A1) - nothing else here says which
+        # floor something is on, and a where-question is asking exactly that.
+        places_line = _companion("places", _places_line, question, cards, tables, all_tables,
+                                 col_names, result)
+        if places_line:
+            md += "\n\n" + places_line
 
         # Hierarchy warning must travel WITH the result — the answer-writing
         # model never sees the SQL-generation prompt, and without this it adds

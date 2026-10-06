@@ -282,9 +282,11 @@ check("RED: its instruction quotes the sentence, word for word",
       hit is not None and SENTENCE in hit.instruction, hit.instruction if hit else "")
 check("RED: and it can be acted on", sql_loop.first_requery_issue(iss) is not None
       and sql_loop.first_requery_issue(iss).kind == KIND, iss)
-check("RED: LITERAL_ELSEWHERE is ranked right after EMPTY",
+check("RED: LITERAL_ELSEWHERE outranks EMPTY (wave 6, W6-A1 - once an EMPTY result's own text "
+      "can carry this line too, it must be the one the loop acts on, ahead of either EMPTY "
+      "instruction)",
       KIND in sql_loop.ISSUE_ORDER
-      and sql_loop.ISSUE_ORDER.index(KIND) == sql_loop.ISSUE_ORDER.index(sql_loop.EMPTY) + 1,
+      and sql_loop.ISSUE_ORDER.index(KIND) < sql_loop.ISSUE_ORDER.index(sql_loop.EMPTY),
       sql_loop.ISSUE_ORDER)
 own_words = hit.instruction.replace(SENTENCE, "") if hit else "-"
 check("RED: the instruction's own words carry no hyphen (each re-query is routed on its text)",
@@ -348,8 +350,10 @@ check("a FAILED result raises no such issue, whatever its text",
           "SQL query failed: Binder Error\n" + LEAD + SENTENCE, "q", [CARD])))
 EMPTY_WITH = "Query returned no results.\n\nSQL: `x`\n\n" + LEAD + SENTENCE
 iss_e = sql_loop.inspect_result(EMPTY_WITH, "q", [CARD])
-check("on an EMPTY result, EMPTY still comes first",
-      bool(iss_e) and iss_e[0].kind == sql_loop.EMPTY, [i.kind for i in iss_e])
+check("RED: on an EMPTY result that ALSO carries the line, LITERAL_ELSEWHERE comes first "
+      "(wave 6, W6-A1 - a deliberate reordering: it names the exact column where the value "
+      "IS, the most specific instruction available, ahead of the generic EMPTY advice)",
+      bool(iss_e) and iss_e[0].kind == KIND, [i.kind for i in iss_e])
 
 
 class FakeExec:
@@ -415,6 +419,71 @@ check("RED: the second writer prompt carries the sentence",
 check("RED: the final result holds both rows, and no line any more",
       "| Before | 77.5 |" in inv5.result_text and "| Now | 140.25 |" in inv5.result_text
       and LEAD not in inv5.result_text, inv5.result_text[:400])
+
+# ---------------------------------------------------------------------------
+print("\n6. Wave 6, W6-A1: the line fires on an EMPTY result too, and leads there")
+# ---------------------------------------------------------------------------
+# A plain, non-UNION query - no rows at all, not a result an empty arm merely hides inside.
+# `bld_boards` is left out of what is loaded so the elsewhere count matches SENTENCE exactly
+# (bld_boards.board ALSO holds 'QZ-7F' - it is one of UNION_SQL's own two arms there, so that
+# query already compares it and it is correctly excluded from UNION_SQL's own elsewhere list;
+# this query never reads bld_boards at all, so loading it would add a third holder instead).
+EMPTY_SQL = "SELECT kw FROM \"bld_feeds_old\" WHERE parent = 'QZ-7F'"
+oe = run(EMPTY_SQL, tables=(OLD, WAYS))
+check("RED: it really is empty - no rows, no other table's data",
+      oe.startswith("Query returned no results"), oe[:200])
+check("RED: result_is_empty is still True (the prefix is untouched)",
+      sql_loop.result_is_empty(oe), oe[:200])
+check("RED: and it NOW carries the SAME literal-elsewhere line a result with rows would",
+      lines(oe) == [LEAD + SENTENCE], lines(oe) or oe[-500:])
+check("RED: the line comes after the SQL line",
+      LEAD in oe and oe.index("SQL: `") < oe.index(LEAD), oe)
+
+EMPTY_NONE_SQL = "SELECT kw FROM \"bld_feeds_old\" WHERE parent = 'QZ-NONE'"
+oe_none = run(EMPTY_NONE_SQL, tables=(OLD, WAYS))
+check("a literal no column of the table holds: the empty text is BYTE IDENTICAL to today's - "
+      "nothing added, nothing taken away",
+      oe_none == f"Query returned no results.\n\nSQL: `{EMPTY_NONE_SQL}`", oe_none)
+check("...and inspect_result raises no LITERAL_ELSEWHERE issue on it",
+      not any(i.kind == KIND for i in sql_loop.inspect_result(oe_none, "q", [CARD])))
+
+# The question's own identifier would otherwise address a routed card - an ACTIONABLE EMPTY
+# issue, the exact shape the diagnosis found (a then-vs-now question whose first query matched
+# nothing, sent down the identifier address, which is wrong by construction for two states).
+CARD_ID = {"table": "bld_feeds_old", "columns": ["parent", "child", "kw", "rating_a"],
+          "identifier_column": "child", "identifier_prefixes": ["QZ"]}
+Q6 = "What was QZ-7F's rated output before, and what is it now?"
+addr6 = sql_loop._empty_identifier_issue(sql_loop.card_identifier_matches(Q6, [CARD_ID]))
+check("RED: the question's identifier really would raise an ACTIONABLE EMPTY address",
+      bool(addr6.instruction), addr6)
+
+# Unit-level: the loop's own priority, independent of sql_tool - a hand-built text, exactly as
+# section 3's EMPTY_WITH is, but with a card that CAN address the question's identifier.
+EMPTY_WITH_ID = ("Query returned no results.\n\nSQL: `" + EMPTY_SQL + "`\n\n" + LEAD + SENTENCE)
+iss7 = sql_loop.inspect_result(EMPTY_WITH_ID, Q6, [CARD_ID])
+check("RED: LITERAL_ELSEWHERE is issues[0], ahead of the identifier address",
+      bool(iss7) and iss7[0].kind == KIND, [i.kind for i in iss7])
+check("RED: ...and it is the one the loop acts on",
+      sql_loop.first_requery_issue(iss7) is not None
+      and sql_loop.first_requery_issue(iss7).kind == KIND, [i.kind for i in iss7])
+check("never appended twice: exactly one LITERAL_ELSEWHERE issue",
+      sum(1 for i in iss7 if i.kind == KIND) == 1, [i.kind for i in iss7])
+
+# End to end: the real executor, the real card, the real question.
+iss8 = sql_loop.inspect_result(oe, Q6, [CARD_ID])
+check("RED: end to end - the acted-on issue is the literal-elsewhere one, not the identifier "
+      "address",
+      sql_loop.first_requery_issue(iss8) is not None
+      and sql_loop.first_requery_issue(iss8).kind == KIND, [i.kind for i in iss8])
+
+# SQL_LOOP_MAX_STEPS=1 degrades cleanly, exactly as every other issue already does: one call,
+# the text exactly as executed.
+ex6 = FakeExec([oe])
+inv6 = sql_loop.run_sql_investigation(Q6, "u", None, execute=ex6, routed_cards=[CARD_ID],
+                                      max_steps=1)
+check("max_steps=1: one call, the EMPTY+literal-elsewhere text exactly as executed - nothing "
+      "added or taken away",
+      len(ex6.questions) == 1 and inv6.result_text == oe, inv6.result_text[-300:])
 
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)
