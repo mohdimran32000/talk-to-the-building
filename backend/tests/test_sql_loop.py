@@ -264,8 +264,13 @@ check("step 1 carries no issue", inv.steps[0]["issue"] is None, inv.steps[0])
 check("step 2 is driven by EMPTY", inv.steps[1]["issue"] == sql_loop.EMPTY, inv.steps[1])
 check("the final text is the good result", good in inv.result_text, inv.result_text[:120])
 check("no document search happened", se.queries == [], se.queries)
-check("the trailer names the steps and the issue",
-      "INVESTIGATION - steps: 2; issues: EMPTY" in inv.result_text, inv.result_text[-160:])
+# spec-fix10: the trailer counts the steps and names no issue kind - the kinds stay with
+# the investigation (its `issues` and each step's events), never in the writer's text.
+check("the trailer counts the steps and names no issue",
+      inv.result_text.endswith("\n\nINVESTIGATION - steps: 2")
+      and "issues:" not in inv.result_text, inv.result_text[-160:])
+check("the issue that drove step 2 is still on the investigation itself",
+      inv.issues == [sql_loop.EMPTY], inv.issues)
 
 expected_q = (q2 + "\n(Investigation step 2: "
               + sql_loop.inspect_result(empty_result(sql2), q2, [CARD_LIST])[0].instruction
@@ -293,7 +298,7 @@ check("the fallback text replaces the empty result",
       inv.result_text[:200])
 check("the fallback keeps today's do-not-guess closing line",
       sql_loop.EMPTY_FALLBACK_SUFFIX in inv.result_text, inv.result_text[-300:])
-check("the trailer counts the steps", "INVESTIGATION - steps: 2;" in inv.result_text,
+check("the trailer counts the steps", inv.result_text.endswith("INVESTIGATION - steps: 2"),
       inv.result_text[-160:])
 check("the answer text now says it came from the documents",
       inv.source_tool == "search_documents", inv.source_tool)
@@ -393,8 +398,11 @@ check("at most three excerpts are kept",
       "EXC" in inv.result_text and "EXD" not in inv.result_text, inv.result_text[-400:])
 check("Investigation.crosscheck carries the excerpt text", inv.crosscheck and "EXA" in inv.crosscheck,
       inv.crosscheck)
-check("the trailer names the cross-check",
-      "INVESTIGATION - steps: 1; issues: COUNT_CROSSCHECK" in inv.result_text, inv.result_text[-160:])
+check("the trailer counts the step and names no issue; the cross-check stays on the "
+      "investigation (spec-fix10)",
+      inv.result_text.endswith("\n\nINVESTIGATION - steps: 1")
+      and sql_loop.COUNT_CROSSCHECK not in inv.result_text
+      and sql_loop.COUNT_CROSSCHECK in inv.issues, inv.result_text[-160:])
 
 # no search callable at all -> degrade quietly
 ex = FakeExec([r6])
@@ -685,13 +693,16 @@ check("inside the budget the loop runs on", len(ex.questions) == 2, ex.questions
 # ---------------------------------------------------------------------------
 print("\n25. The remaining minors")
 # ---------------------------------------------------------------------------
-# F9 — a finding that is not a re-query still reaches the trailer and the Investigation
+# F9 — a finding that is not a re-query still reaches the Investigation. (It used to reach
+# the trailer too; since spec-fix10 the trailer counts the steps and names no issue kind.)
 ex = FakeExec([trunc])
 inv = sql_loop.run_sql_investigation("list all the units", "u1", None, execute=ex,
                                      search=FakeSearch(), routed_cards=[CARD_LIST], max_steps=3)
 check("TRUNCATED_NO_SHAPE reaches Investigation.issues",
       sql_loop.TRUNCATED_NO_SHAPE in inv.issues, inv.issues)
-check("and the trailer", "TRUNCATED_NO_SHAPE" in inv.result_text, inv.result_text[-160:])
+check("and never the trailer the answer writer reads (spec-fix10)",
+      "TRUNCATED_NO_SHAPE" not in inv.result_text
+      and inv.result_text.endswith("INVESTIGATION - steps: 1"), inv.result_text[-160:])
 check("without causing a re-query", len(ex.questions) == 1, ex.questions)
 
 # NEW-1 (fix round 3) — the round-1 narrowing to single-cell/aggregate results silenced the
@@ -725,7 +736,7 @@ check("and an EMPTY result is not cross-checked — it goes to the document fall
           empty_result('SELECT COUNT(*) FROM "bld_units"'), "how many units are there?", [CARD_LIST])))
 check("a single-cell total is cross-checked",
       any(i.kind == sql_loop.COUNT_CROSSCHECK for i in sql_loop.inspect_result(
-          table_result(["total_kw"], [[5785.87]], 'SELECT SUM(kw) AS total_kw FROM "bld_units"'),
+          table_result(["total_kw"], [[1234.56]], 'SELECT SUM(kw) AS total_kw FROM "bld_units"'),
           "what is the total load of the site?", [CARD_LIST])))
 check("and so is a GROUP BY count", any(i.kind == sql_loop.COUNT_CROSSCHECK
       for i in sql_loop.inspect_result(
@@ -804,7 +815,9 @@ check("exactly one SQL call — the complete result is not replaced",
       len(ex.questions) == 1, ex.questions)
 check("the finding still reaches Investigation.issues",
       inv.issues == [sql_loop.NARROW_SELECT], inv.issues)
-check("and the trailer", "NARROW_SELECT" in inv.result_text, inv.result_text[-160:])
+check("and never the trailer the answer writer reads (spec-fix10)",
+      "NARROW_SELECT" not in inv.result_text
+      and inv.result_text.endswith("INVESTIGATION - steps: 1"), inv.result_text[-160:])
 
 # ---------------------------------------------------------------------------
 print("\n28. W3 — a one-row result IS the answer; no identifier is demanded")
@@ -1027,29 +1040,57 @@ check("the detail says IDENTIFIER_EMPTY", e35 is not None and hasattr(sql_loop, 
 check("it is something the loop can act on",
       sql_loop.first_requery_issue(iss35) is not None
       and sql_loop.first_requery_issue(iss35).kind == sql_loop.EMPTY)
-check("IDENTIFIER_EMPTY is a DETAIL, not a kind - the priority order is unchanged",
+# Re-pinned in wave 3 (F2), deliberately: LITERAL_ELSEWHERE is a new KIND, ranked right after
+# EMPTY (tests/test_sql_literal_elsewhere.py section 3). IDENTIFIER_EMPTY is still no kind.
+# Re-pinned again in wave 3 (G6), deliberately: PLACE_RANKED_ON_TEXT is a new KIND, ranked right
+# after LITERAL_ELSEWHERE (tests/test_sql_place_ranked.py section 1).
+# Re-pinned again in wave 4 (A2), deliberately: PLACE_COMPARED_ON_TEXT, G6 generalised to set
+# comparisons, is a new KIND ranked right after PLACE_RANKED_ON_TEXT (test_sql_place_ranked.py
+# section 5).
+check("IDENTIFIER_EMPTY is a DETAIL, not a kind - the priority order is unchanged "
+      "apart from T7's LETTER_CROSSCHECK appended at the end, wave 3's LITERAL_ELSEWHERE "
+      "after EMPTY and PLACE_RANKED_ON_TEXT after it, wave 4's PLACE_COMPARED_ON_TEXT "
+      "after that, and wave 5's CURRENT_TWIN right after LITERAL_ELSEWHERE (ahead of both "
+      "PLACE_RANKED_ON_TEXT and PLACE_COMPARED_ON_TEXT: the wrong ERA of table outranks how "
+      "a right-era result is grouped or compared)",
       getattr(sql_loop, "IDENTIFIER_EMPTY", None) not in sql_loop.ISSUE_ORDER
       and sql_loop.ISSUE_ORDER == (sql_loop.FAILED_SQL, sql_loop.EMPTY,
+                                   sql_loop.LITERAL_ELSEWHERE,
+                                   getattr(sql_loop, "CURRENT_TWIN", None),
+                                   sql_loop.PLACE_RANKED_ON_TEXT,
+                                   getattr(sql_loop, "PLACE_COMPARED_ON_TEXT", None),
                                    sql_loop.IDENTIFIER_MISSING, sql_loop.NARROW_SELECT,
-                                   sql_loop.TRUNCATED_NO_SHAPE, sql_loop.COUNT_CROSSCHECK),
+                                   sql_loop.TRUNCATED_NO_SHAPE, sql_loop.COUNT_CROSSCHECK,
+                                   sql_loop.LETTER_CROSSCHECK),
       sql_loop.ISSUE_ORDER)
 
 # ---------------------------------------------------------------------------
 print("\n36. No prefix match, no coded token: the generic EMPTY text stands, word for word")
 # ---------------------------------------------------------------------------
 def generic_empty_text(sql):
-    """The wording `_empty_issue` has always used, written out here so a change to it
-    turns this check red rather than sliding through."""
-    return ("The previous query `" + sql + "` returned no rows. Re-read the column "
-            "samples; filter a place or entity by its printed NAME on the name column "
+    """The wording `_empty_issue` uses when it has no values to list, written out here so
+    a change to it turns this check red rather than sliding through.
+
+    REWRITTEN 2026-10-01 (spec-fix7 part c). The old text said "Re-read the column
+    samples" and "the one-row-per-place-and-item table". The re-query is routed on its own
+    question text, and the router reads the head of every HYPHENATED word as a coded
+    identifier prefix - so every generic EMPTY re-query asked the router for tables whose
+    identifiers start "RE" or "ONE", and a table declaring RE took a ranked slot on most
+    of them. The advice is unchanged; only the two hyphenated words are gone."""
+    return ("The previous query `" + sql + "` returned no rows. Read the column "
+            "samples again; filter a place or entity by its printed NAME on the name column "
             "with ILIKE '%…%', never by a built id; if the question names a place, "
-            "use the one-row-per-place-and-item table.")
+            "use the table with one row per place and item.")
 
 # same question shape, a card whose declared prefixes do NOT cover it
 CARD_OTHER = dict(CARD_CAM, identifier_prefixes=["ZZZ"])
 iss36 = sql_loop.inspect_result(empty_result(sql35), q35, [CARD_OTHER])
-check("an unmatched prefix leaves the generic instruction exactly as it was",
+check("an unmatched prefix leaves the generic instruction exactly as written above",
       bool(iss36) and iss36[0].instruction == generic_empty_text(sql35),
+      iss36[0].instruction if iss36 else "")
+check("and the two hyphenated words it used to carry are gone",
+      bool(iss36) and "Re-read" not in iss36[0].instruction
+      and "one-row-per" not in iss36[0].instruction,
       iss36[0].instruction if iss36 else "")
 check("and its detail is not the identifier one",
       bool(iss36) and iss36[0].detail != getattr(sql_loop, "IDENTIFIER_EMPTY", "IDENTIFIER_EMPTY"),
@@ -1316,6 +1357,871 @@ check("the matcher itself reports the same thing",
       [m[0] for m in sql_loop.card_identifier_matches(q42, [CARD_ZED, CARD_CAM])]
       == ["CAM-4F-B-01"],
       sql_loop.card_identifier_matches(q42, [CARD_ZED, CARD_CAM]))
+
+# ===========================================================================
+# 2026-10-01 - SPEC-FIX7 PART (c). THE EMPTY INSTRUCTION CARRIES NO HYPHENATED
+# WORD, AND IT LISTS THE REAL VALUES OF EVERY COLUMN THE FAILED WHERE FILTERED.
+#
+# Measured on the goal-function run of 2026-10-01. Where the first query
+# filtered a text column with a value the column does not hold - a level
+# printed one way and asked another, a device named in words the register does
+# not use - the generic advice gave the writer nothing new to read. It guessed
+# a second code, matched nothing again, and the question fell to the documents.
+# The values were in the loaded table all along. So the instruction now lists
+# them: every value when a column holds at most VALUE_LIST_MAX, otherwise the
+# count and the values that contain the filter's words. They are read through
+# an injected `column_values(table, column)`, so this module still needs no
+# database to test.
+#
+# And the wording: the re-query is ROUTED on its own text, and the router takes
+# the head of every hyphenated word as a coded identifier prefix. "Re-read" and
+# "one-row-per-place-and-item" asked every generic EMPTY re-query for tables
+# whose identifiers start RE and ONE.
+# ===========================================================================
+print("\n43. The EMPTY instruction contains no hyphenated word and lists the values "
+      "of each filtered column")
+# ---------------------------------------------------------------------------
+
+
+class FakeValues:
+    """Scripted `column_values(table, column)`: the distinct values of a column as the
+    loaded table holds them, or None for a table or a column it does not have. Records
+    every call, so a check can prove WHEN the loop reads and when it does not."""
+    def __init__(self, tables, raises=None):
+        self.tables = tables
+        self.raises = raises
+        self.calls = []
+
+    def __call__(self, table, column):
+        self.calls.append((table, column))
+        if self.raises is not None:
+            raise self.raises
+        cols = self.tables.get(table)
+        if cols is None:
+            return None
+        for name, values in cols.items():
+            if name.lower() == str(column).lower():
+                return list(values)
+        return None
+
+
+CARD_KIT = {"table": "bld_kit",
+            "columns": ["kit_tag", "deck", "kind", "label", "grade", "shade", "notes"],
+            "identifier_column": "kit_tag"}
+CARD_BAY = {"table": "bld_bay", "columns": ["bay_code", "deck", "bay_title"],
+            "identifier_column": "bay_code"}
+DECKS = ["Upper Deck", "Lower Deck", "Mid Deck", "Sub Deck 1", "Sub Deck 2"]
+KINDS = ["widget", "sprocket", "gear"]
+LABELS = [f"Label {i:03d}" for i in range(50)] + ["Gauge Alpha", "Zeta Gauge Housing",
+                                                   "Gauge Zeta"]
+KIT_VALUES = {"bld_kit": {"deck": DECKS, "kind": KINDS, "label": LABELS,
+                          "grade": ["A", "B"], "shade": ["Teal", "Ochre"]},
+              "bld_bay": {"deck": DECKS, "bay_title": ["North Bay", "South Bay"]}}
+HYPHENATED = _re.compile(r"[A-Za-z0-9]-[A-Za-z0-9]")
+q43 = "which kits are on the top deck?"
+sql43 = 'SELECT kit_tag, deck FROM "bld_kit" WHERE deck = \'Top Deck\''
+
+
+def empty43(sql, cards=(CARD_KIT,), values=None, question=q43):
+    """The first issue `inspect_result` raises on an empty result of `sql`."""
+    found = sql_loop.inspect_result(empty_result(sql), question, list(cards),
+                                    column_values=values)
+    return found[0] if found else None
+
+
+# --- 43a. no hyphenated word, with or without values -------------------------
+plain43 = empty43(sql43)
+check("without a reader the instruction is the generic advice, word for word",
+      plain43 is not None and plain43.instruction == generic_empty_text(sql43),
+      plain43.instruction if plain43 else "")
+check("it carries no hyphenated word at all",
+      plain43 is not None and not HYPHENATED.search(plain43.instruction),
+      HYPHENATED.findall(plain43.instruction) if plain43 else "")
+check("so the router reads no coded prefix out of it (the defect was RE and ONE)",
+      plain43 is not None and _tr._question_prefixes(plain43.instruction) == set(),
+      _tr._question_prefixes(plain43.instruction) if plain43 else "")
+check("nor out of the whole step suffix it is routed as",
+      plain43 is not None and _tr._question_prefixes(
+          sql_loop.step_instruction_suffix(2, plain43, sql43)) == set())
+vals43 = FakeValues(KIT_VALUES)
+full43 = empty43(sql43, values=vals43)
+check("with the values listed there is still no hyphenated word",
+      full43 is not None and not HYPHENATED.search(full43.instruction),
+      HYPHENATED.findall(full43.instruction) if full43 else "")
+check("and still no coded prefix",
+      full43 is not None and _tr._question_prefixes(full43.instruction) == set(),
+      _tr._question_prefixes(full43.instruction) if full43 else "")
+check("the kind and the detail do not move, so neither do the priority order and the "
+      "repeat guard",
+      full43 is not None and full43.kind == sql_loop.EMPTY
+      and full43.detail == plain43.detail, (full43.kind, full43.detail) if full43 else "")
+
+# --- 43b. a column of at most VALUE_LIST_MAX values: every one of them ----------
+check("the caps are the spec's: 40 values, 80 characters a value, 4 columns",
+      (getattr(sql_loop, "VALUE_LIST_MAX", None), getattr(sql_loop, "VALUE_MAX_CHARS", None),
+       getattr(sql_loop, "VALUE_COLUMNS_MAX", None)) == (40, 80, 4))
+FULL43 = (generic_empty_text(sql43)
+          + " The real values of the columns it filtered: \"bld_kit\".\"deck\" holds "
+          "exactly these 5 values: 'Upper Deck', 'Lower Deck', 'Mid Deck', 'Sub Deck 1', "
+          "'Sub Deck 2'. Filter with the listed values that mean what the question asks "
+          "for, copied exactly as listed; never substitute a different value for the "
+          "question's term.")
+check("the whole instruction, word for word: the advice, then every value the column "
+      "holds in the table's own order, then the guidance",
+      full43 is not None and full43.instruction == FULL43,
+      full43.instruction if full43 else "")
+check("the reader was asked for exactly the filtered column",
+      vals43.calls == [("bld_kit", "deck")], vals43.calls)
+
+# --- 43c. more than VALUE_LIST_MAX: the count, and the values holding its words --
+i43c = empty43('SELECT kit_tag FROM "bld_kit" WHERE label ILIKE \'%zeta gauge%\'',
+               values=FakeValues(KIT_VALUES))
+check("more than 40 values: the count, then only the values holding the filter's words, "
+      "those holding every word first",
+      i43c is not None and "\"bld_kit\".\"label\" holds 53 values, and the 3 containing "
+      "'zeta' or 'gauge' are: 'Zeta Gauge Housing', 'Gauge Zeta', 'Gauge Alpha'"
+      in i43c.instruction, i43c.instruction if i43c else "")
+check("and no value without those words is listed",
+      i43c is not None and "Label 000" not in i43c.instruction,
+      i43c.instruction if i43c else "")
+i43d = empty43('SELECT kit_tag FROM "bld_kit" WHERE label ILIKE \'%omega%\'',
+               values=FakeValues(KIT_VALUES))
+check("when no value holds the words, it says so rather than listing others",
+      i43d is not None and "\"bld_kit\".\"label\" holds 53 values, and none contains "
+      "'omega'" in i43d.instruction and "'Label" not in i43d.instruction,
+      i43d.instruction if i43d else "")
+
+# --- 43d. IN lists, AND/OR groups, one listing per column -----------------------
+sql43e = ("SELECT kit_tag FROM \"bld_kit\" WHERE kind IN ('gadget', 'gizmo') "
+          "AND (deck ILIKE 'Top%' OR deck ILIKE 'Roof%') ORDER BY kit_tag")
+_fl = getattr(sql_loop, "filtered_literals", None)
+check("the parser reads = / ILIKE / IN literals in WHERE order, one entry per column",
+      _fl is not None and _fl(sql43e) == [(None, "kind", ["gadget", "gizmo"]),
+                                          (None, "deck", ["Top%", "Roof%"])],
+      _fl(sql43e) if _fl else "no filtered_literals")
+vals43e = FakeValues(KIT_VALUES)
+i43e = empty43(sql43e, values=vals43e)
+check("both columns are listed, in the order the WHERE filters them",
+      i43e is not None
+      and 0 <= i43e.instruction.find('"bld_kit"."kind" holds exactly these 3 values')
+      < i43e.instruction.find('"bld_kit"."deck" holds exactly these 5 values'),
+      i43e.instruction if i43e else "")
+check("a column filtered twice is listed once, and read once",
+      i43e is not None and i43e.instruction.count('"bld_kit"."deck"') == 1
+      and vals43e.calls == [("bld_kit", "kind"), ("bld_kit", "deck")],
+      (vals43e.calls, i43e.instruction if i43e else ""))
+i43in = empty43("SELECT kit_tag FROM \"bld_kit\" WHERE label IN ('Alpha', 'Housing')",
+                values=FakeValues(KIT_VALUES))
+check("the words of EVERY literal of a column count: an IN list over a long column finds "
+      "a value for each",
+      i43in is not None and "the 2 containing 'Alpha' or 'Housing' are: 'Gauge Alpha', "
+      "'Zeta Gauge Housing'" in i43in.instruction, i43in.instruction if i43in else "")
+
+# --- 43e. which TABLE a column belongs to -----------------------------------------
+vals43f = FakeValues(KIT_VALUES)
+i43f = empty43('SELECT k.kit_tag FROM "bld_kit" AS k JOIN "bld_bay" b ON k.deck = b.deck '
+               "WHERE b.bay_title ILIKE '%east%' AND k.kind = 'gadget'",
+               cards=(CARD_KIT, CARD_BAY), values=vals43f)
+check("an alias resolves through FROM ... AS and through a bare JOIN alias",
+      vals43f.calls == [("bld_bay", "bay_title"), ("bld_kit", "kind")], vals43f.calls)
+check("and a join's ON condition is not a WHERE filter, so it lists nothing",
+      i43f is not None and '"deck"' not in i43f.instruction.split("returned no rows.")[1],
+      i43f.instruction if i43f else "")
+vals43g = FakeValues(KIT_VALUES)
+empty43('SELECT k.kit_tag FROM "bld_kit" k JOIN "bld_bay" b ON k.deck = b.deck '
+        "WHERE bay_title = 'East Bay'", cards=(CARD_KIT, CARD_BAY), values=vals43g)
+check("an unqualified column belongs to the read table whose card lists it",
+      vals43g.calls == [("bld_bay", "bay_title")], vals43g.calls)
+vals43h = FakeValues(KIT_VALUES)
+empty43("SELECT kit_tag FROM \"bld_kit\" WHERE kind = 'gadget' AND deck IN "
+        "(SELECT deck FROM \"bld_bay\" WHERE deck = 'East Deck')",
+        cards=(CARD_KIT, CARD_BAY), values=vals43h)
+check("a subquery's own filter belongs to the subquery's table, even when the outer "
+      "table has a column of the same name; `IN (SELECT ...)` itself lists nothing",
+      vals43h.calls == [("bld_kit", "kind"), ("bld_bay", "deck")], vals43h.calls)
+vals43i = FakeValues(KIT_VALUES)
+i43i = empty43("SELECT kit_tag FROM \"bld_kit\" WHERE colour = 'red'", values=vals43i)
+check("a column no read card lists is not guessed at: nothing read, the advice unchanged",
+      vals43i.calls == [] and i43i is not None
+      and i43i.instruction == generic_empty_text("SELECT kit_tag FROM \"bld_kit\" WHERE colour = 'red'"),
+      (vals43i.calls, i43i.instruction if i43i else ""))
+
+# --- 43f. anything but the three simple forms lists nothing -----------------------
+for bad in ("SELECT kit_tag FROM \"bld_kit\" WHERE LOWER(kind) = 'gadget'",
+            "SELECT kit_tag FROM \"bld_kit\" WHERE kind ILIKE '%' || deck || '%'",
+            "SELECT kit_tag FROM \"bld_kit\" WHERE NOT kind = 'gadget'",
+            "SELECT kit_tag FROM \"bld_kit\" WHERE kind NOT IN ('widget')",
+            "SELECT kit_tag FROM \"bld_kit\" WHERE kind NOT ILIKE '%widget%'",
+            "SELECT kit_tag FROM \"bld_kit\" WHERE kind <> 'widget'",
+            "SELECT kit_tag FROM \"bld_kit\" WHERE grade = 5",
+            "SELECT kit_tag FROM \"bld_kit\" WHERE kind IN (SELECT kind FROM \"bld_bay\")",
+            "SELECT kit_tag FROM \"bld_kit\" WHERE kind = 'gadget",
+            "SELECT kit_tag, CASE WHEN kind = 'gear' THEN 1 END FROM \"bld_kit\" WHERE FALSE"):
+    v = FakeValues(KIT_VALUES)
+    got = empty43(bad, values=v)
+    plain_prefix = 'SELECT kit_tag FROM "bld_kit" '
+    shown_bad = bad[len(plain_prefix):] if bad.startswith(plain_prefix) else bad
+    check(f"lists nothing, keeps the advice word for word: {shown_bad}",
+          v.calls == [] and got is not None and got.instruction == generic_empty_text(bad),
+          (v.calls, got.instruction if got else ""))
+tricky = ("SELECT kit_tag FROM \"bld_kit\" WHERE deck = 'O''Neil (ORDER BY) AND x' "
+          "AND kind = 'gadget'")
+check("a literal holding a doubled quote, parentheses and keywords does not derail it",
+      _fl is not None and _fl(tricky) == [(None, "deck", ["O'Neil (ORDER BY) AND x"]),
+                                          (None, "kind", ["gadget"])],
+      _fl(tricky) if _fl else "-")
+check("a qualified column keeps its qualifier",
+      _fl is not None and _fl("SELECT * FROM \"bld_kit\" k WHERE k.\"Kind\" = 'x'")
+      == [("k", "Kind", ["x"])],
+      _fl("SELECT * FROM \"bld_kit\" k WHERE k.\"Kind\" = 'x'") if _fl else "-")
+
+# --- 43g. the caps ---------------------------------------------------------------
+FORTY = [f"Tone {i:02d}" for i in range(40)]
+i40v = empty43("SELECT kit_tag FROM \"bld_kit\" WHERE shade = 'Tone 99'",
+               values=FakeValues({"bld_kit": {"shade": FORTY}}))
+check("exactly 40 values: all of them, 'exactly'",
+      i40v is not None and '"bld_kit"."shade" holds exactly these 40 values' in i40v.instruction
+      and "'Tone 39'" in i40v.instruction, i40v.instruction if i40v else "")
+i41v = empty43("SELECT kit_tag FROM \"bld_kit\" WHERE shade = 'Tone 07'",
+               values=FakeValues({"bld_kit": {"shade": FORTY + ["Tone 40"]}}))
+check("41 values: the count, and at most 40 of the matches, the closest first",
+      i41v is not None and '"bld_kit"."shade" holds 41 values, and 41 contain \'Tone\' or '
+      "'07', the first 40 being: 'Tone 07', 'Tone 00', " in i41v.instruction
+      and "'Tone 40'" not in i41v.instruction, i41v.instruction if i41v else "")
+check("and the list is 40 values long",
+      i41v is not None and i41v.instruction.count("'Tone ") == 40 + 1,
+      i41v.instruction.count("'Tone ") if i41v else "")
+LONG = "Z" * 100
+ilong = empty43("SELECT kit_tag FROM \"bld_kit\" WHERE notes = 'short'",
+                values=FakeValues({"bld_kit": {"notes": [LONG, "two\nlines", "fine"]}}))
+check("a value over 80 characters is cut to 80 with a marker",
+      ilong is not None and "'" + "Z" * 79 + "…'" in ilong.instruction
+      and "Z" * 80 not in ilong.instruction, ilong.instruction if ilong else "")
+check("a value with a line break is cut at the break",
+      ilong is not None and "'two…'" in ilong.instruction and "lines" not in ilong.instruction,
+      ilong.instruction if ilong else "")
+check("and a cut value comes with the note that says how to match it",
+      ilong is not None and ilong.instruction.endswith(
+          " A listed value that ends in … is longer than shown: match it on its start "
+          "with ILIKE."), ilong.instruction if ilong else "")
+check("no note when nothing was cut", "longer than shown" not in full43.instruction)
+vals5 = FakeValues(KIT_VALUES)
+i5 = empty43("SELECT kit_tag FROM \"bld_kit\" WHERE kind = 'a' AND deck = 'b' "
+             "AND label = 'c' AND grade = 'd' AND shade = 'e'", values=vals5)
+check("five filtered columns: the first four are listed, the fifth is not read",
+      i5 is not None and vals5.calls == [("bld_kit", c) for c in ("kind", "deck", "label", "grade")]
+      and '"bld_kit"."shade"' not in i5.instruction, (vals5.calls, i5.instruction if i5 else ""))
+iblank = empty43("SELECT kit_tag FROM \"bld_kit\" WHERE grade = 'Z'",
+                 values=FakeValues({"bld_kit": {"grade": ["A", "", "  ", None, "B", "A"]}}))
+check("blanks and NULLs are dropped and duplicates collapsed, in first appearance order",
+      iblank is not None and '"bld_kit"."grade" holds exactly these 2 values: \'A\', \'B\''
+      in iblank.instruction, iblank.instruction if iblank else "")
+iquote = empty43("SELECT kit_tag FROM \"bld_kit\" WHERE grade = 'Z'",
+                 values=FakeValues({"bld_kit": {"grade": ["O'Neil"]}}))
+check("a value is shown as a SQL literal, its quote doubled",
+      iquote is not None and "holds exactly 1 value: 'O''Neil'" in iquote.instruction,
+      iquote.instruction if iquote else "")
+
+# --- 43h. a reader that fails never costs the instruction ----------------------
+check("a reader that answers None lists nothing and keeps the advice word for word",
+      empty43(sql43, values=FakeValues({})).instruction == generic_empty_text(sql43))
+boom43 = FakeValues(KIT_VALUES, raises=RuntimeError("read failed"))
+raised43 = None
+try:
+    got43 = empty43(sql43, values=boom43)
+except Exception as e:  # noqa: BLE001 - not raising IS the assertion
+    raised43, got43 = e, None
+check("a reader that RAISES does not escape, and the advice stands word for word",
+      raised43 is None and got43 is not None and got43.instruction == generic_empty_text(sql43),
+      repr(raised43))
+
+# --- 43i. the address and the abstention do not read values ---------------------
+v_addr = FakeValues({"bld_cam": {"level_code": ["L4"]}})
+i_addr = empty43('SELECT cam_tag FROM "bld_cam" WHERE level_code = \'L9\'', cards=(CARD_CAM,),
+                 values=v_addr, question=q35)
+check("when the question prints a routed identifier, the address wins and nothing is read",
+      i_addr is not None and i_addr.detail == sql_loop.IDENTIFIER_EMPTY and v_addr.calls == [],
+      (v_addr.calls, i_addr.detail if i_addr else ""))
+v_abst = FakeValues(KIT_VALUES)
+i_abst = empty43("SELECT kit_tag FROM \"elsewhere\" WHERE kind = 'gadget'", values=v_abst)
+check("an abstention (no routed table read) stays a finding and reads nothing",
+      i_abst is not None and i_abst.instruction == "" and v_abst.calls == [],
+      (v_abst.calls, i_abst.instruction if i_abst else ""))
+
+# --- 43j. the loop: values reach the re-query, and are read only when usable -----
+GOOD43 = table_result(["kit_tag", "deck"], [["kt1", "Upper Deck"], ["kt2", "Upper Deck"]],
+                      'SELECT kit_tag, deck FROM "bld_kit" WHERE deck = \'Upper Deck\'')
+vals_run = FakeValues(KIT_VALUES)
+ex = FakeExec([empty_result(sql43), GOOD43])
+se = FakeSearch("DOCTEXT")
+inv43 = sql_loop.run_sql_investigation(q43, "u1", None, execute=ex, search=se,
+                                       routed_cards=[CARD_KIT], max_steps=3,
+                                       column_values=vals_run)
+check("[empty, good]: two SQL calls, and the second question carries the real values",
+      len(ex.questions) == 2 and "Investigation step 2" in ex.questions[1]
+      and "holds exactly these 5 values: 'Upper Deck'" in ex.questions[1],
+      ex.questions[-1][-400:])
+check("the good result is the answer and the documents were not searched",
+      "kt1" in inv43.result_text and se.queries == [], (se.queries, inv43.result_text[:120]))
+check("read once, for the one step that could use it", vals_run.calls == [("bld_kit", "deck")],
+      vals_run.calls)
+vals_twice = FakeValues(KIT_VALUES)
+ex = FakeExec([empty_result(sql43)] * 2)
+sql_loop.run_sql_investigation(q43, "u1", None, execute=ex, search=FakeSearch("DOCTEXT"),
+                               routed_cards=[CARD_KIT], max_steps=3, column_values=vals_twice)
+check("[empty, empty]: the repeat guard ends it after two, and step 2's EMPTY is never "
+      "read for - an instruction the guard will not send is not worth a read",
+      len(ex.questions) == 2 and vals_twice.calls == [("bld_kit", "deck")],
+      (len(ex.questions), vals_twice.calls))
+vals_last = FakeValues(KIT_VALUES)
+ex = FakeExec(["SQL query failed: Binder Error: nope\n\nGenerated SQL: `SELECT kit_tag "
+               "FROM \"bld_kit\"`", empty_result(sql43)])
+sql_loop.run_sql_investigation(q43, "u1", None, execute=ex, search=FakeSearch("DOCTEXT"),
+                               routed_cards=[CARD_KIT], max_steps=2, column_values=vals_last)
+check("an EMPTY on the LAST step is not read for either - no step is left to use it",
+      len(ex.questions) == 2 and vals_last.calls == [], (len(ex.questions), vals_last.calls))
+vals_off = FakeValues(KIT_VALUES)
+ex_on = FakeExec([empty_result(sql43)])
+inv_off = sql_loop.run_sql_investigation(q43, "u1", None, execute=ex_on,
+                                         search=FakeSearch("DOCTEXT"), routed_cards=[CARD_KIT],
+                                         max_steps=1, column_values=vals_off)
+ex_none = FakeExec([empty_result(sql43)])
+inv_none = sql_loop.run_sql_investigation(q43, "u1", None, execute=ex_none,
+                                          search=FakeSearch("DOCTEXT"), routed_cards=[CARD_KIT],
+                                          max_steps=1)
+check("max_steps=1: the reader is never called", vals_off.calls == [], vals_off.calls)
+check("and the result is byte-identical to a run with no reader at all",
+      inv_off.result_text == inv_none.result_text and inv_off.steps == inv_none.steps
+      and ex_on.questions == ex_none.questions, (inv_off.result_text, inv_none.result_text))
+vals_boom = FakeValues(KIT_VALUES, raises=RuntimeError("read failed"))
+ex = FakeExec([empty_result(sql43), GOOD43])
+inv_boom = sql_loop.run_sql_investigation(q43, "u1", None, execute=ex, search=FakeSearch(),
+                                          routed_cards=[CARD_KIT], max_steps=3,
+                                          column_values=vals_boom)
+check("a raising reader inside the loop: the re-query still runs, with today's advice",
+      len(ex.questions) == 2 and generic_empty_text(sql43) in ex.questions[1]
+      and "kt1" in inv_boom.result_text, ex.questions[-1][-300:])
+check("the module stays generic and bounded after the values code",
+      not _re.search(r"\bwhile\b", Path(sql_loop.__file__).read_text(encoding="utf-8")))
+
+# ---------------------------------------------------------------------------
+print("\n44. The trailer counts the steps and names no issue kind (spec-fix10)")
+# ---------------------------------------------------------------------------
+# The writer used to read "INVESTIGATION - steps: 2; issues: IDENTIFIER_MISSING" under a
+# result that held every value its question asked for, and answered that the records had
+# no such entry: an issue name ending in MISSING, printed under a complete answer, read as
+# a verdict on it. The kinds are bookkeeping for the trace and the events, not evidence for
+# the answer, so the trailer now counts the steps and nothing else.
+ex = FakeExec([empty_result(sql2), noident, good])
+inv44 = sql_loop.run_sql_investigation(q2, "u1", None, execute=ex, search=FakeSearch(),
+                                       routed_cards=[CARD_LIST], max_steps=3)
+check("the fixture really raised two issue kinds on the way", len(ex.questions) == 3
+      and [s["issue"] for s in inv44.steps] == [None, sql_loop.EMPTY, sql_loop.IDENTIFIER_MISSING],
+      [s["issue"] for s in inv44.steps])
+try:
+    trailer44 = sql_loop.investigation_trailer(3)
+except TypeError as e:  # the old signature also took the issue kinds
+    trailer44 = f"TypeError: {e}"
+check("investigation_trailer takes the step count and prints nothing else",
+      trailer44 == "INVESTIGATION - steps: 3", trailer44)
+check("the final text ends with exactly that line",
+      inv44.result_text.endswith("\n\nINVESTIGATION - steps: 3"), inv44.result_text[-120:])
+named44 = [k for k in sql_loop.ISSUE_ORDER + (sql_loop.IDENTIFIER_EMPTY,) if k in inv44.result_text]
+check("no issue kind is named anywhere in the text the answer writer reads",
+      named44 == [] and "issues:" not in inv44.result_text, named44)
+check("the kinds stay with the investigation, for the trace and the events",
+      inv44.issues == [sql_loop.EMPTY, sql_loop.IDENTIFIER_MISSING], inv44.issues)
+
+# ===========================================================================
+# TASK T7 (2026-10-01) — a contact- or warranty-shaped question with a non-empty
+# result gets the SAME one-call document cross-check a count question gets.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+print("\n45. T7 — a who/phone question with a non-empty result raises LETTER_CROSSCHECK")
+# ---------------------------------------------------------------------------
+q45 = "Who is the contact for the units, and what is their phone number?"
+r45 = table_result(["name", "phone"], [["A Person", "0551234567"]],
+                   'SELECT name, phone FROM "bld_units"')
+iss45 = sql_loop.inspect_result(r45, q45, [CARD_LIST])
+check("LETTER_CROSSCHECK and nothing else",
+      [i.kind for i in iss45] == [sql_loop.LETTER_CROSSCHECK], [i.kind for i in iss45])
+check("it carries no re-query instruction", iss45 and iss45[0].instruction == "", iss45)
+check("so the loop finds nothing to re-query", sql_loop.first_requery_issue(iss45) is None)
+check("asks_contact reads the question as contact-shaped", sql_loop.asks_contact(q45))
+check("is_letter_shaped agrees", sql_loop.is_letter_shaped(q45))
+
+# ---------------------------------------------------------------------------
+print("\n46. T7 — a warranty question with a non-empty result raises LETTER_CROSSCHECK")
+# ---------------------------------------------------------------------------
+q46 = "Is the unit still under warranty?"
+r46 = table_result(["unit_tag", "lifespan"], [["U-1", "2 years"]],
+                   'SELECT unit_tag, lifespan FROM "bld_units"')
+iss46 = sql_loop.inspect_result(r46, q46, [CARD_LIST])
+check("LETTER_CROSSCHECK and nothing else",
+      [i.kind for i in iss46] == [sql_loop.LETTER_CROSSCHECK], [i.kind for i in iss46])
+check("asks_warranty reads the question as warranty-shaped", sql_loop.asks_warranty(q46))
+check("asks_contact does NOT (no contact words in it)", not sql_loop.asks_contact(q46))
+check("is_letter_shaped agrees", sql_loop.is_letter_shaped(q46))
+
+# ---------------------------------------------------------------------------
+print("\n47. T7-R1 — a question that is BOTH count- and letter-shaped gets the count "
+      "cross-check only")
+# ---------------------------------------------------------------------------
+q47 = "How many units are still under warranty?"
+r47 = table_result(["n"], [[4]], 'SELECT COUNT(*) AS n FROM "bld_units"')
+check("the fixture really is both shapes",
+      sql_loop.asks_count(q47) and sql_loop.is_letter_shaped(q47))
+iss47 = sql_loop.inspect_result(r47, q47, [CARD_LIST])
+check("COUNT_CROSSCHECK fires and LETTER_CROSSCHECK never does",
+      [i.kind for i in iss47] == [sql_loop.COUNT_CROSSCHECK], [i.kind for i in iss47])
+
+# ---------------------------------------------------------------------------
+print("\n48. T7-R4 — an EMPTY or FAILED result is unchanged: the document fallback only, "
+      "never a letter cross-check")
+# ---------------------------------------------------------------------------
+q48 = "Who is the contact, and what is the phone number?"
+iss48a = sql_loop.inspect_result(
+    empty_result('SELECT phone FROM "bld_units" WHERE unit_tag = \'X\''), q48, [CARD_LIST])
+check("EMPTY fires, LETTER_CROSSCHECK does not", sql_loop.EMPTY in [i.kind for i in iss48a]
+      and sql_loop.LETTER_CROSSCHECK not in [i.kind for i in iss48a], [i.kind for i in iss48a])
+iss48b = sql_loop.inspect_result("SQL query failed: boom\n\nGenerated SQL: `SELECT 1`",
+                                 q48, [CARD_LIST])
+check("FAILED_SQL fires, LETTER_CROSSCHECK does not",
+      sql_loop.FAILED_SQL in [i.kind for i in iss48b]
+      and sql_loop.LETTER_CROSSCHECK not in [i.kind for i in iss48b], [i.kind for i in iss48b])
+
+# ---------------------------------------------------------------------------
+print("\n49. T7 — a plain non-letter question raises neither cross-check kind")
+# ---------------------------------------------------------------------------
+r49 = table_result(["board", "level"], [["B-1", "2"], ["B-2", "2"]],
+                   'SELECT board, level FROM "bld_units" WHERE level = \'2\'')
+iss49 = sql_loop.inspect_result(r49, "which boards are on level 2", [CARD_LIST])
+check("no LETTER_CROSSCHECK, no COUNT_CROSSCHECK",
+      not any(i.kind in (sql_loop.LETTER_CROSSCHECK, sql_loop.COUNT_CROSSCHECK)
+              for i in iss49), [i.kind for i in iss49])
+
+# ---------------------------------------------------------------------------
+print("\n50. T7 — word boundaries hold: 'whole' and 'phoneme'-style partial words never fire")
+# ---------------------------------------------------------------------------
+check("'whole' is not read as 'who'",
+      not sql_loop.asks_contact("tell me about the whole building"))
+check("'phoneme' is not read as 'phone'", not sql_loop.asks_contact("what is a phoneme"))
+check("a real 'phone' question still fires", sql_loop.asks_contact("what is the phone number"))
+check("a real 'who' question still fires", sql_loop.asks_contact("who installed this"))
+
+# ---------------------------------------------------------------------------
+print("\n51. T7 — ISSUE_ORDER and APPENDED_CROSSCHECKS carry the new kind")
+# ---------------------------------------------------------------------------
+check("LETTER_CROSSCHECK is in ISSUE_ORDER (inspect_result sorts on it)",
+      sql_loop.LETTER_CROSSCHECK in sql_loop.ISSUE_ORDER)
+check("APPENDED_CROSSCHECKS names both appended kinds, in this order",
+      sql_loop.APPENDED_CROSSCHECKS == (sql_loop.COUNT_CROSSCHECK, sql_loop.LETTER_CROSSCHECK),
+      sql_loop.APPENDED_CROSSCHECKS)
+
+# ---------------------------------------------------------------------------
+print("\n52. T7 — the letter cross-check: one retrieval call, appended under its own "
+      "heading, the table result kept whole before it")
+# ---------------------------------------------------------------------------
+ex = FakeExec([r45])
+se = FakeSearch("LETTER-A\n\n---\n\nLETTER-B\n\n---\n\nLETTER-C\n\n---\n\nLETTER-D")
+inv52 = sql_loop.run_sql_investigation(q45, "u1", None, execute=ex, search=se,
+                                       routed_cards=[CARD_LIST], max_steps=3)
+check("only one SQL call — a letter question is never re-queried",
+      len(ex.questions) == 1, ex.questions)
+check("exactly one retrieval call", len(se.queries) == 1, se.queries)
+check("the SQL result is kept whole, and comes before the cross-check",
+      r45 in inv52.result_text
+      and inv52.result_text.index(r45) < inv52.result_text.index(sql_loop.LETTER_CROSSCHECK_HEADING),
+      inv52.result_text)
+check("the excerpts are labelled under LETTER_CROSSCHECK_HEADING",
+      sql_loop.LETTER_CROSSCHECK_HEADING in inv52.result_text, inv52.result_text[-400:])
+check("the heading says MAY NAME, worded exactly as spec'd",
+      sql_loop.LETTER_CROSSCHECK_HEADING == "Cross-check: document excerpts that may name "
+      "this party, contact or warranty (top matches, may be unrelated)",
+      sql_loop.LETTER_CROSSCHECK_HEADING)
+check("at most three excerpts are kept",
+      "LETTER-C" in inv52.result_text and "LETTER-D" not in inv52.result_text,
+      inv52.result_text[-400:])
+check("Investigation.crosscheck carries the excerpt text",
+      inv52.crosscheck and "LETTER-A" in inv52.crosscheck, inv52.crosscheck)
+check("the trailer counts the step; LETTER_CROSSCHECK never prints, but stays on "
+      "Investigation.issues",
+      inv52.result_text.endswith("\n\nINVESTIGATION - steps: 1")
+      and sql_loop.LETTER_CROSSCHECK not in inv52.result_text
+      and sql_loop.LETTER_CROSSCHECK in inv52.issues, inv52.result_text[-160:])
+
+# no search callable at all -> degrade quietly, exactly like the count cross-check
+ex = FakeExec([r45])
+inv52b = sql_loop.run_sql_investigation(q45, "u1", None, execute=ex, search=None,
+                                        routed_cards=[CARD_LIST], max_steps=3)
+check("no search callable -> no cross-check, no crash", inv52b.crosscheck is None
+      and sql_loop.LETTER_CROSSCHECK_HEADING not in inv52b.result_text)
+
+# ---------------------------------------------------------------------------
+print("\n53. T7-R3 — max_steps=1 raises no cross-check of any kind, byte-identical to today")
+# ---------------------------------------------------------------------------
+ex = FakeExec([r45])
+se = FakeSearch()
+inv53 = sql_loop.run_sql_investigation(q45, "u1", None, execute=ex, search=se,
+                                       routed_cards=[CARD_LIST], max_steps=1)
+check("exactly one execute call", len(ex.questions) == 1, ex.questions)
+check("no retrieval call at max_steps=1", se.queries == [], se.queries)
+check("the result text is byte-identical to the SQL result", inv53.result_text == r45,
+      inv53.result_text[:160])
+check("no INVESTIGATION trailer either", "INVESTIGATION" not in inv53.result_text)
+check("crosscheck is None", inv53.crosscheck is None)
+
+# ---------------------------------------------------------------------------
+print("\n54. T7 — the event sequence for a letter-shaped question matches a count "
+      "question's, kind for kind")
+# ---------------------------------------------------------------------------
+ex = FakeExec([r45])
+events54 = list(sql_loop.iter_sql_investigation(q45, "u1", None, execute=ex, search=FakeSearch(),
+                                                routed_cards=[CARD_LIST], max_steps=3))
+check("step, step_done, crosscheck, final",
+      [k for k, _ in events54] == ["step", "step_done", "crosscheck", "final"],
+      [k for k, _ in events54])
+check("the crosscheck event names LETTER_CROSSCHECK",
+      events54[2][1].get("kind") == sql_loop.LETTER_CROSSCHECK, events54[2][1])
+check("its detail never says SQL failed or falling back (it is an appended cross-check, "
+      "not a fallback)",
+      "fail" not in events54[2][1].get("detail", "").lower()
+      and "falling back" not in events54[2][1].get("detail", "").lower(), events54[2][1])
+
+# ===========================================================================
+# SPEC-FIX3 PART (c), 2026-10-01 - AN EMPTY RESULT THAT FILTERED A STOREY.
+#
+# Measured on the goal-function run of 2026-09-30: a storey filtered on printed floor text
+# came back empty, and the generic advice - filter by the printed NAME with ILIKE - sent the
+# writer back to printed text. It guessed another spelling, matched nothing again, or
+# WIDENED the filter to other codes until something matched, and stated that figure. The
+# data side stamps a level-code column beside every location id, so the re-query is told to
+# re-express the storey through it, keep the filter, and never widen it.
+#
+# T11a-R6: the stamped level code is NOT on the cards (so routing cannot move), so the
+# loop also reads the LOADED table's columns - through the reader's `columns` capability -
+# both to place a filtered column no card lists and to know whether a table has a level
+# code at all. The new instruction fires only where it can be obeyed: on a table with a
+# level-code column, its card's or its loaded table's.
+# ===========================================================================
+print("\n55. An EMPTY result that filtered a storey gets the level code instruction (fix3 c)")
+
+
+class FakeLoaded(FakeValues):
+    """A reader that can also list a loaded table's columns, as
+    `sql_tool.column_value_reader` can: `columns(table) -> [column, ...] | None`."""
+    def __init__(self, tables, listed, raises=None):
+        super().__init__(tables, raises)
+        self.listed = listed
+        self.column_calls = []
+
+    def columns(self, table):
+        self.column_calls.append(table)
+        cols = self.listed.get(table)
+        return None if cols is None else list(cols)
+
+
+# The stock table's level code is on the LOADED table only - like every stamped table - and
+# its card lists a location key; the spots table's card lists its level code; the plain
+# table has no level code anywhere.
+CARD_STOCK = {"table": "bld_stock", "identifier_column": "stock_tag",
+              "columns": ["stock_tag", "floor_text", "kind", "notes", "location_id"]}
+CARD_SPOTS = {"table": "bld_spots", "identifier_column": "spot_ref",
+              "columns": ["spot_ref", "display_name", "kind", "qty", "level_code"]}
+CARD_PLAIN = {"table": "bld_plain", "identifier_column": "plain_tag",
+              "columns": ["plain_tag", "floor_text", "kind"]}
+LISTED55 = {"bld_stock": CARD_STOCK["columns"] + ["grade", "level_code"],
+            "bld_spots": list(CARD_SPOTS["columns"]),
+            "bld_plain": list(CARD_PLAIN["columns"])}
+VALUES55 = {"bld_stock": {"floor_text": ["Floor Two", "Floor Nine North", "Floor Ten"],
+                          "kind": ["gizmo", "doohickey"], "grade": ["V7", "V8"],
+                          "level_code": ["Z2", "Z9"], "notes": ["kept"]},
+            "bld_spots": {"display_name": ["Quiet Nook Nine", "Long Hall Two"],
+                          "kind": ["gizmo"], "level_code": ["Z2", "Z9"]},
+            "bld_plain": {"floor_text": ["Floor Two", "Floor Nine North"],
+                          "kind": ["gizmo"]}}
+q55 = "which stock items are on the ninth floor?"
+
+
+def empty55(sql, cards=(CARD_STOCK,), question=q55, reader="loaded"):
+    """The first issue raised on an empty result of `sql`, and the reader it was handed."""
+    if reader == "loaded":
+        reader = FakeLoaded(VALUES55, LISTED55)
+    found = sql_loop.inspect_result(empty_result(sql), question, list(cards),
+                                    column_values=reader)
+    return (found[0] if found else None), reader
+
+
+_KEYS_DETAIL = getattr(sql_loop, "PLACE_KEYS_EMPTY", "PLACE_KEYS_EMPTY")
+
+# --- 55a. printed floor text on a table whose loaded columns hold a level code -------------
+sql55a = 'SELECT stock_tag FROM "bld_stock" WHERE floor_text = \'Floor Nine\''
+e55a, rd55a = empty55(sql55a)
+ins55a = e55a.instruction if e55a else ""
+check("PLACE_KEYS_EMPTY is a DETAIL, not a kind: the priority order does not move",
+      hasattr(sql_loop, "PLACE_KEYS_EMPTY") and sql_loop.PLACE_KEYS_EMPTY not in sql_loop.ISSUE_ORDER)
+check("the kind is still EMPTY and the loop acts on it",
+      e55a is not None and e55a.kind == sql_loop.EMPTY and bool(ins55a))
+check("its detail says the level code instruction fired", e55a is not None
+      and e55a.detail == _KEYS_DETAIL, e55a.detail if e55a else "")
+check("it quotes the SQL that returned nothing, and says so",
+      sql55a in ins55a and "returned no rows" in ins55a, ins55a)
+check("it re-expresses the storey through a level code column - the table's own, or the "
+      "places table's through the location key",
+      "level code column" in ins55a and "places table" in ins55a and "location key" in ins55a,
+      ins55a)
+check("never on printed floor wording or a place name",
+      "never on printed floor wording or a place name" in ins55a, ins55a)
+check("it KEEPS the filter, to the storey the question names",
+      "keep that filter to the storey the question names" in ins55a.lower(), ins55a)
+check("and never widens it: every 'widen' it prints is a 'never widen'",
+      "never widen it to further levels or codes" in ins55a
+      and len(_re.findall(r"widen", ins55a)) == len(_re.findall(r"never widen", ins55a)),
+      ins55a)
+check("a storey with no matching rows is the answer",
+      "that storey has no such rows, and that is the answer" in ins55a, ins55a)
+check("it does not also carry the generic printed-name advice it replaces",
+      "by its printed NAME" not in ins55a and "with ILIKE" not in ins55a, ins55a)
+check("no hyphenated word, so the router reads no coded prefix out of it",
+      not HYPHENATED.search(ins55a.replace(sql55a, ""))
+      and _tr._question_prefixes(ins55a.replace(sql55a, "")) == set(),
+      (HYPHENATED.findall(ins55a), _tr._question_prefixes(ins55a)))
+check("the printed floor column's values are NOT listed - they are what it must not filter on",
+      '"bld_stock"."floor_text"' not in ins55a and "Floor Nine North" not in ins55a, ins55a)
+check("the loaded table's columns were asked for, so the stamped level code was seen",
+      "bld_stock" in rd55a.column_calls, rd55a.column_calls)
+
+# --- 55b. another filter on the same query still gets its real values -------------------
+e55b, _ = empty55('SELECT stock_tag FROM "bld_stock" WHERE floor_text = \'Floor Nine\' '
+                  "AND kind = 'gizmoo'")
+ins55b = e55b.instruction if e55b else ""
+check("the other filtered column's values are listed after the instruction",
+      e55b is not None and e55b.detail == _KEYS_DETAIL
+      and '"bld_stock"."kind" holds exactly these 2 values: \'gizmo\', \'doohickey\''
+      in ins55b and '"bld_stock"."floor_text"' not in ins55b, ins55b)
+
+# --- 55c. a place-name column searched for a storey -------------------------------------
+sql55c = 'SELECT spot_ref FROM "bld_spots" WHERE display_name ILIKE \'%Level Nine%\''
+e55c, _ = empty55(sql55c, cards=(CARD_SPOTS,), question="what is on level nine?")
+check("a display-name column searched for a storey's words gets the level code instruction",
+      e55c is not None and e55c.detail == _KEYS_DETAIL, e55c.instruction if e55c else "")
+e55c0, _ = empty55(sql55c, cards=(CARD_SPOTS,), question="what is on level nine?", reader=None)
+check("its card lists the level code, so it fires with no reader at all",
+      e55c0 is not None and e55c0.detail == _KEYS_DETAIL, e55c0.instruction if e55c0 else "")
+
+# --- 55d. T11a-R1: a place-name column naming ONE place keeps today's advice ------------
+sql55d = 'SELECT spot_ref FROM "bld_spots" WHERE display_name ILIKE \'%Quiet Nook%\''
+e55d, _ = empty55(sql55d, cards=(CARD_SPOTS,), question="what is in the quiet nook?",
+                  reader=None)
+check("T11a-R1: a place named by its printed name keeps the generic advice, word for word",
+      e55d is not None and e55d.instruction == generic_empty_text(sql55d),
+      e55d.instruction if e55d else "")
+
+# --- 55e. the level code itself, filtered and empty: kept, never widened; R6 values -------
+sql55e = 'SELECT stock_tag FROM "bld_stock" WHERE level_code = \'Z7\''
+e55e, _ = empty55(sql55e, question="which stock items are on storey seven?")
+ins55e = e55e.instruction if e55e else ""
+check("an empty filter on the level code itself gets the same instruction - keep it, never "
+      "widen it", e55e is not None and e55e.detail == _KEYS_DETAIL
+      and "never widen" in ins55e, ins55e)
+check("T11a-R6: its real values are listed although no card lists the column - the loaded "
+      "table has it",
+      '"bld_stock"."level_code" holds exactly these 2 values: \'Z2\', \'Z9\'' in ins55e, ins55e)
+
+# --- 55f. T11a-R6 for any column: placed by the loaded table, listed under today's advice --
+sql55f = 'SELECT stock_tag FROM "bld_stock" WHERE grade = \'V9\''
+e55f, rd55f = empty55(sql55f, question="which stock items are graded nine?")
+check("T11a-R6: an unqualified column only the LOADED table has is placed and its values "
+      "listed, under today's advice",
+      e55f is not None and e55f.instruction.startswith(generic_empty_text(sql55f))
+      and '"bld_stock"."grade" holds exactly these 2 values: \'V7\', \'V8\'' in e55f.instruction,
+      e55f.instruction if e55f else "")
+plain55f = FakeValues(VALUES55)
+e55f0, _ = empty55(sql55f, question="which stock items are graded nine?", reader=plain55f)
+check("a reader that cannot list columns places nothing new: today's advice, word for word, "
+      "and nothing read", e55f0 is not None
+      and e55f0.instruction == generic_empty_text(sql55f) and plain55f.calls == [],
+      (plain55f.calls, e55f0.instruction if e55f0 else ""))
+check("a card that lists the column still wins the placement - no columns call needed",
+      empty55('SELECT stock_tag FROM "bld_stock" WHERE kind = \'gizmoo\'')[1].column_calls
+      == [], "columns asked for a card-listed column")
+
+# --- 55g. no level code anywhere: the instruction cannot be obeyed, so today's stands ----
+sql55g = 'SELECT plain_tag FROM "bld_plain" WHERE floor_text = \'Floor Nine\''
+e55g, _ = empty55(sql55g, cards=(CARD_PLAIN,))
+check("a table with no level code, on its card or loaded, keeps today's advice and lists "
+      "its printed values",
+      e55g is not None and e55g.detail != _KEYS_DETAIL
+      and e55g.instruction.startswith(generic_empty_text(sql55g))
+      and '"bld_plain"."floor_text" holds exactly these 2 values' in e55g.instruction,
+      e55g.instruction if e55g else "")
+
+# --- 55h. a storey word inside an item's own text is not a storey ------------------------
+sql55h = 'SELECT stock_tag FROM "bld_stock" WHERE notes ILIKE \'%floor mat%\''
+e55h, _ = empty55(sql55h, question="which stock items are floor mats?")
+check("a floor word in an item or notes column is no storey filter: today's advice",
+      e55h is not None and e55h.detail != _KEYS_DETAIL
+      and e55h.instruction.startswith(generic_empty_text(sql55h)),
+      e55h.instruction if e55h else "")
+
+# --- 55i. a sub-SELECT's storey filter, qualified ----------------------------------------
+sql55i = ('SELECT stock_tag FROM "bld_stock" WHERE stock_tag IN (SELECT s.stock_tag FROM '
+          '"bld_stock" s WHERE s.floor_text = \'Floor Nine\')')
+e55i, _ = empty55(sql55i)
+check("a qualified storey filter inside a sub-SELECT is read too",
+      e55i is not None and e55i.detail == _KEYS_DETAIL, e55i.instruction if e55i else "")
+
+# --- 55j/k. the address still wins; an abstention stays a finding -------------------------
+e55j, rd55j = empty55('SELECT cam_tag FROM "bld_cam" WHERE floor_text = \'Floor Nine\'',
+                      cards=(CARD_CAM,), question=q35)
+check("when the question prints a routed identifier, the address wins and nothing is read",
+      e55j is not None and e55j.detail == sql_loop.IDENTIFIER_EMPTY and rd55j.calls == []
+      and rd55j.column_calls == [], (e55j.detail if e55j else "", rd55j.calls))
+e55k, rd55k = empty55('SELECT x FROM "elsewhere" WHERE floor_text = \'Floor Nine\'')
+check("an abstention (no routed table read) stays a finding and reads nothing",
+      e55k is not None and e55k.instruction == "" and rd55k.calls == []
+      and rd55k.column_calls == [], (e55k.instruction if e55k else "", rd55k.calls))
+
+# --- 55l. the shape rules, one by one -----------------------------------------------------
+_lc = getattr(sql_loop, "is_level_code_column", None)
+check("is_level_code_column: a level code by its words, in any case or spacing",
+      _lc is not None and _lc("level_code") and _lc("Level Code") and _lc("floor_level_code"))
+check("is_level_code_column: a level name, a bare level, a floor code read off a tag are not",
+      _lc is not None and not _lc("level_name") and not _lc("level")
+      and not _lc("story_code_from_tag"))
+_st = getattr(sql_loop, "_storey_text", None)
+check("_storey_text: a floor or storey column, any literal",
+      _st is not None and _st("floor", ["B%"]) and _st("floor_as_printed", ["9X"])
+      and _st("storey_text", ["Nine"]))
+check("_storey_text: a place-name or printed column only with a storey's words in the literal",
+      _st is not None and _st("display_name", ["%Level Nine%"]) and _st("level_name", ["Ground"])
+      and _st("spot_area", ["%Ground%"]) and _st("thing_as_printed", ["Roof"])
+      and not _st("display_name", ["%Quiet Nook%"]) and not _st("floor_area", ["%Nook%"]))
+check("_storey_text: never the level code, never an id, never an item's own text",
+      _st is not None and not _st("level_code", ["Z9"]) and not _st("place_id", ["%Level 9%"])
+      and not _st("notes", ["%Level Nine%"]) and not _st("kind", ["floor"]))
+
+# --- 55m. the loop: the instruction reaches the re-query, and the guard still holds -------
+GOOD55 = table_result(["stock_tag", "level_code"], [["st1", "Z9"], ["st2", "Z9"]],
+                      'SELECT stock_tag, level_code FROM "bld_stock" WHERE level_code = \'Z9\'')
+ex = FakeExec([empty_result(sql55a), GOOD55])
+inv55 = sql_loop.run_sql_investigation(q55, "u1", None, execute=ex, search=FakeSearch(),
+                                       routed_cards=[CARD_STOCK], max_steps=3,
+                                       column_values=FakeLoaded(VALUES55, LISTED55))
+check("[empty, good]: two SQL calls, and the second question carries the level code "
+      "instruction", len(ex.questions) == 2 and "Investigation step 2" in ex.questions[1]
+      and "level code column" in ex.questions[1] and "never widen" in ex.questions[1],
+      ex.questions[-1][-500:])
+check("the steps say EMPTY drove the re-query",
+      [s["issue"] for s in inv55.steps] == [None, sql_loop.EMPTY], inv55.steps)
+ex = FakeExec([empty_result(sql55a)] * 3)
+se55 = FakeSearch("DOCTEXT")
+inv55b = sql_loop.run_sql_investigation(q55, "u1", None, execute=ex, search=se55,
+                                        routed_cards=[CARD_STOCK], max_steps=3,
+                                        column_values=FakeLoaded(VALUES55, LISTED55))
+check("[empty, empty]: the repeat guard stops after two, then the documents",
+      len(ex.questions) == 2 and se55.queries == [q55]
+      and sql_loop.EMPTY_FALLBACK_PREFIX in inv55b.result_text, (len(ex.questions), se55.queries))
+rd_off = FakeLoaded(VALUES55, LISTED55)
+ex_on = FakeExec([empty_result(sql55a)])
+inv_off55 = sql_loop.run_sql_investigation(q55, "u1", None, execute=ex_on, search=FakeSearch("D"),
+                                           routed_cards=[CARD_STOCK], max_steps=1,
+                                           column_values=rd_off)
+ex_none = FakeExec([empty_result(sql55a)])
+inv_none55 = sql_loop.run_sql_investigation(q55, "u1", None, execute=ex_none,
+                                            search=FakeSearch("D"), routed_cards=[CARD_STOCK],
+                                            max_steps=1)
+check("max_steps=1: nothing read, and byte-identical to a run with no reader",
+      rd_off.calls == [] and rd_off.column_calls == []
+      and inv_off55.result_text == inv_none55.result_text and inv_off55.steps == inv_none55.steps,
+      (rd_off.calls, rd_off.column_calls))
+boom55 = FakeLoaded(VALUES55, LISTED55, raises=RuntimeError("read failed"))
+boom55.columns = lambda table: (_ for _ in ()).throw(RuntimeError("list failed"))
+raised55 = None
+try:
+    e55z, _ = empty55(sql55e, reader=boom55)
+except Exception as e:  # noqa: BLE001 - not raising IS the assertion
+    raised55, e55z = e, None
+check("a reader whose reads and column lists RAISE never escapes; the level code filter is "
+      "still kept, with nothing listed", raised55 is None and e55z is not None
+      and e55z.detail == _KEYS_DETAIL and sql_loop.VALUES_LEAD not in e55z.instruction,
+      (repr(raised55), e55z.instruction if e55z else ""))
+
+# ===========================================================================
+# FIX ROUND 1 (task review): two filters misread as a storey, and an answer claimed too early.
+# ===========================================================================
+print("\n56. A resolution enum and a measure are no storey; 'that is the answer' only alone")
+
+# --- 56a. what is NOT storey text ------------------------------------------------------
+check("RED: a location-resolution enum is no storey text, though its value spells a level",
+      _st is not None and not _st("location_resolution", ["level_block"])
+      and not _st("linked_location_resolution", ["level"]))
+check("RED: a measure whose name merely holds 'level' is no storey text, whatever the literal",
+      _st is not None and not _st("lumen_level_pct", ["50"])
+      and not _st("lumen_level_pct", ["%Level 2%"]))
+check("storey columns still match on their whole name parts",
+      _st is not None and _st("storey_block_as_printed", ["9N"]) and _st("level", ["Deck North"])
+      and _st("story_code_from_tag", ["9F"]) and _st("storey_text", ["Nine"]))
+check("and a place-name column still needs a storey's words in its literal",
+      _st is not None and _st("spot_name", ["%Level Nine%"]) and not _st("spot_name", ["%Nook%"])
+      and _st("thing_as_printed", ["Ground Floor"]))
+CARD_RES = dict(CARD_STOCK, columns=CARD_STOCK["columns"] + ["location_resolution"])
+sql56a = 'SELECT stock_tag FROM "bld_stock" WHERE location_resolution = \'level_block\''
+e56a, _ = empty55(sql56a, cards=(CARD_RES,))
+check("RED: an empty filter on the resolution enum keeps today's advice",
+      e56a is not None and e56a.detail != _KEYS_DETAIL
+      and e56a.instruction.startswith(generic_empty_text(sql56a)),
+      e56a.instruction if e56a else "")
+CARD_LUMEN = dict(CARD_STOCK, columns=CARD_STOCK["columns"] + ["lumen_level_pct"])
+sql56b = 'SELECT stock_tag FROM "bld_stock" WHERE lumen_level_pct = \'50\''
+e56b, _ = empty55(sql56b, cards=(CARD_LUMEN,))
+check("RED: an empty filter on a measure column keeps today's advice",
+      e56b is not None and e56b.detail != _KEYS_DETAIL
+      and e56b.instruction.startswith(generic_empty_text(sql56b)),
+      e56b.instruction if e56b else "")
+
+# --- 56b. 'that is the answer' only when the storey is the ONLY filter ------------------
+ANSWER = "that storey has no such rows, and that is the answer"
+OTHERS = "The remaining filters may be what matched nothing"
+e56c, _ = empty55(sql55a)
+check("the storey filter alone: an empty storey is the answer",
+      e56c is not None and ANSWER in e56c.instruction and OTHERS not in e56c.instruction,
+      e56c.instruction if e56c else "")
+for alone in ('SELECT stock_tag FROM "bld_stock" WHERE level_code IN (\'Z1\', \'Z2\')',
+              'SELECT stock_tag FROM "bld_stock" WHERE floor_text = \'Floor Nine\' '
+              "OR floor_text = 'Floor Ten'",
+              'SELECT stock_tag FROM "bld_stock" WHERE location_id IN (SELECT location_id '
+              'FROM "bld_places" WHERE level_code = \'Z3\')'):
+    e, _ = empty55(alone)
+    check(f"several storey filters and nothing else are still alone: {alone[38:]}",
+          e is not None and e.detail == _KEYS_DETAIL and ANSWER in e.instruction,
+          e.instruction if e else "")
+sql56d = ('SELECT stock_tag FROM "bld_stock" WHERE floor_text = \'Floor Nine\' '
+          "AND kind = 'gizmoo'")
+e56d, _ = empty55(sql56d)
+ins56d = e56d.instruction if e56d else ""
+check("RED: with another filter beside it, the storey is kept and never widened - but the "
+      "empty result is not called the answer",
+      e56d is not None and e56d.detail == _KEYS_DETAIL and ANSWER not in ins56d
+      and "never widen it to further levels or codes" in ins56d, ins56d)
+check("RED: the writer is pointed at the other filters, whose values are listed",
+      OTHERS in ins56d and '"bld_stock"."kind" holds exactly these 2 values' in ins56d
+      and ins56d.index(OTHERS) < ins56d.index(sql_loop.VALUES_LEAD), ins56d)
+sql56e = ('SELECT SUM(qty) FROM "bld_stock" WHERE kind ILIKE \'%widget%\' AND location_id IN '
+          '(SELECT location_id FROM "bld_places" WHERE level_code = \'Z3\')')
+e56e, _ = empty55(sql56e, question="how many widgets are on storey three?")
+check("RED: a right level code inside a sub-SELECT and a wrong item filter: not the answer",
+      e56e is not None and e56e.detail == _KEYS_DETAIL and ANSWER not in e56e.instruction
+      and OTHERS in e56e.instruction, e56e.instruction if e56e else "")
+sql56f = 'SELECT stock_tag FROM "bld_stock" WHERE level_code = \'Z7\' AND qty > 5'
+e56f, _ = empty55(sql56f)
+check("RED: a condition that is no literal filter counts as another filter too",
+      e56f is not None and ANSWER not in e56f.instruction and OTHERS in e56f.instruction,
+      e56f.instruction if e56f else "")
+check("neither variant carries a hyphenated word or a coded prefix",
+      all(not HYPHENATED.search(i.replace(s, "")) and _tr._question_prefixes(i.replace(s, "")) == set()
+          for i, s in ((ins56d, sql56d), (e56c.instruction if e56c else "", sql55a))))
 
 print("\nALL PASS" if not FAILS else f"\n{len(FAILS)} FAILED")
 sys.exit(1 if FAILS else 0)

@@ -29,6 +29,7 @@ Run:
     venv/Scripts/python -X utf8 tests/test_sql_tool_router_safety.py
 """
 import importlib
+import inspect
 import json
 import os
 import sys
@@ -295,6 +296,69 @@ check("the query still runs successfully via the full-schema fallback "
       "(not routed to zero tables)",
       raised is None and not (result_str or "").startswith("SQL query failed"),
       repr(result_str)[:200])
+
+
+# ---------------------------------------------------------------------------
+# spec-fix11 (2026-09-30). `openai_client.py` wraps the router's own
+# paraphrase in "(Additional context from the assistant: ...)" before handing
+# the combined text to `route_tables()`/`execute_sql_query()`. The wrapper's
+# own fixed wording carries no routing signal, and one of its words —
+# "context" — is itself a real column name on some card (a service-contacts
+# table's `context_as_printed`), so a bare question that names no such thing
+# at all can still rank that card once wrapped, purely from the boilerplate.
+# A question whose wrapper adds only boilerplate must route EXACTLY like the
+# bare question.
+# ---------------------------------------------------------------------------
+print("\nfix11. A wrapper that adds only boilerplate routes like the bare question")
+
+CARD_CONTEXT = {"table": "bld_service_contacts", "holds": "one row per named contact",
+                "columns": ["contact_name", "phone", "context_as_printed"],
+                "identifier_column": "contact_name",
+                "keywords": ["contact", "contacts", "service", "context"]}
+CARD_UNITS = {"table": "bld_alpha_units", "holds": "one row per unit on a level",
+              "columns": ["unit_tag", "level_code", "source_page"],
+              "identifier_column": "unit_tag",
+              "keywords": ["unit", "units", "level", "alpha"]}
+
+BARE_Q = "which units are on the level"
+WRAPPED_Q = f"{BARE_Q}\n(Additional context from the assistant: {BARE_Q})"
+
+_real_load_fix11 = sql_tool._load_table_cards
+sql_tool._load_table_cards = lambda *a, **k: [CARD_CONTEXT, CARD_UNITS]
+try:
+    sql_tool._reset_table_cards_cache()
+    bare_routed = sql_tool.route_tables(BARE_Q, "u-1", None)
+    sql_tool._reset_table_cards_cache()
+    wrapped_routed = sql_tool.route_tables(WRAPPED_Q, "u-1", None)
+finally:
+    sql_tool._load_table_cards = _real_load_fix11
+    sql_tool._reset_table_cards_cache()
+
+bare_names = [c.get("table") for c in bare_routed]
+wrapped_names = [c.get("table") for c in wrapped_routed]
+check("a question whose wrapper adds only boilerplate routes exactly like "
+      "the bare question (route_tables)",
+      bare_names == wrapped_names, (bare_names, wrapped_names))
+check("the boilerplate's own word 'context' does not smuggle the "
+      "context-carrying card into the routed set",
+      "bld_service_contacts" not in wrapped_names, wrapped_names)
+
+# The SQL writer must still see the full wrapped text — this fix touches
+# ROUTING only, never the text `execute_sql_query` puts in its prompt.
+EXEC_SRC = inspect.getsource(sql_tool.execute_sql_query)
+check("execute_sql_query interpolates the untouched `question` into the SQL "
+      "prompt (the writer still sees the full wrapped text)",
+      "User question: {question}" in EXEC_SRC, EXEC_SRC.count("User question:"))
+
+# Both routing entry points must apply the same normalisation, not two
+# independently-maintained copies of it.
+ROUTE_SRC = inspect.getsource(sql_tool.route_tables)
+check("route_tables() routes through the shared, normalised helper",
+      "_routed_table_names(" in ROUTE_SRC,
+      "no _routed_table_names( call in route_tables()")
+check("execute_sql_query() routes through the SAME shared, normalised helper",
+      "_routed_table_names(" in EXEC_SRC,
+      "no _routed_table_names( call in execute_sql_query()")
 
 
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")

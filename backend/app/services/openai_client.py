@@ -2,6 +2,7 @@ import contextvars
 import json
 import logging
 import re
+from datetime import date
 from itertools import zip_longest
 from typing import Generator, Optional, List
 
@@ -55,6 +56,61 @@ SYSTEM_PROMPT_NO_DOCS = "You are a helpful assistant. Answer the user's question
 # sentence; the alternative is relying on the model not to misread a line we put
 # there ourselves.
 OUTPUT_FORMAT_RULES = """
+OUTPUT FORMAT RULES (strict):
+- Never output raw HTML in your answer. Tags like <table>, <tr>, <td>, <th>, <br>, <span>, <div> are forbidden. If the source excerpts contain HTML, extract the data into clean markdown.
+- For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render the rows you were given as a clean markdown table. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity). MANDATORY: when a quantity/points column is present, the table's last row MUST be a Total row, and the sentence introducing or closing the table MUST state that total explicitly. That Total is the figure on the result's own "TOTAL <col> (all N rows)" line whenever the result carries one — never a sum over the rows you were shown, which may be only part of the result. If the result carries no such line, sum the rows you were given and say that the total covers only those rows.
+- If a tool result says "Showing M of N rows" or carries a "RESULT SHAPE" line, say how many rows exist and how many you were shown. The RESULT SHAPE line is where the row and shown counts and every per-value count come from; it carries no sums. Every total comes from the result's own "TOTAL <col> (all N rows)" line instead. NEVER describe, count or generalise about rows you were not shown — whatever the question's form. Never print the words RESULT SHAPE or TOTAL, those lines themselves or the "value (N)" notation — state those numbers in plain words. When the result shows several investigation steps, answer from the LAST result only — the earlier ones were superseded.
+- Never reveal internal notes from tool results. Lines like "SQL: `...`", a line beginning "INVESTIGATION - steps:" and blocks starting with "IMPORTANT (for interpreting these results)" are instructions for YOU — apply them silently, never quote or mention them in the answer.
+- When a tool result carries a section of document excerpts added as a cross-check to a count or total: the TABLE figure (with its SOURCE) is the answer. NEVER replace it with a figure from the cross-check excerpts, and never open with a yes/no about an excerpt figure. Then, in one sentence after the answer, name each different figure the excerpts print and where it is printed — they are OTHER records standing beside the answer, not corrections to it. When the structured data instead returned NO rows at all, there is no table figure to stand beside: the cross-check excerpts may then only CONFIRM or REFUTE the asked-for quantity, by quoting ONE figure that is itself a verbatim sentence of a single excerpt about the asked-for place or entity — never assemble a new breakdown or total out of rows that merely sit near each other or do not share the asked-for place or entity. When no excerpt confirms a figure this way, say the quantity is not recorded.
+- A result may carry a PRINTED TOTAL ROWS line: the figure in the table above it counted the sheet's own printed total row(s) as if they were items. The figure WITHOUT the printed total rows, from that line, is the answer — in place of the table's own figure, wherever another rule calls the table figure the answer. Name the printed total row(s) figure beside it as the document's own printed figure, and never state the combined figure. Never print the words PRINTED TOTAL ROWS or the line itself.
+- A result may carry a NOTES INSIDE THE FIGURE block: 1 to 3 (never all) of the raw rows behind an aggregate carry their own note that may mean a row is not the kind the question asked for, each listed with what that row itself contributed, followed by the SAME figure recomputed without those rows. Give BOTH figures — the one in the table above and the one without the noted rows — name what each note says and which row it is about, and never silently pick one of the two as the answer. Never print the block, its heading, or a table or column name.
+- A result may carry a MATCHED line ("MATCHED - every row above has <column> <comparison> <value>"): it quotes the filter every row above was selected by. When that filter is the name or value the question asked about, those rows are that thing even if none of their own columns prints its name — answer from them. When the filter is a pattern or a fragment that could match other things (a short text matched inside a longer one), do not present the rows as the asked-for thing without saying what they matched. Never print the MATCHED line itself.
+- A result may carry a WHAT THE FIGURE COUNTS line: it splits the figure into the items whose names carry the asked word and the other items the same filter caught. When the question asks for those items themselves, that part is the answer, ahead of the MATCHED rule; name the other items as what the table's figure also counted. When it asks for everything under that filter, the table's figure stands. When this line shows the combined figure spans more than one named category, the headline figure you open with must be this line's own asked-word sub-figure, named with the asked word (e.g. "4 pump units") — never the combined total, which the split itself contradicts as that word's count; if you mention the combined total at all, give it with a neutral noun instead of the asked word (e.g. "9 units" or "9 records", never "9 pump units" when only 4 of them are pumps). A LITERAL ELSEWHERE line means the value was never found where the query looked, so no figure in that result belongs to it. Never print either line, its heading, or a table or column name.
+- A result may carry an OTHER KINDS line: the query filtered a kind column on one code, and that column also holds longer codes ending in it (the code with a qualifier in front). For each, the line gives the rows the same query returns - or, on a hierarchical table, only how many rows of that kind the same filter matches. When the question names the whole class rather than that one code or its qualifier, those rows belong in the answer beside the table's own, each named with its kind, ahead of the MATCHED rule; when it asks how many, give the combined count - the table's own row count does not include them - and say how many are of each kind. A total of a measure on a hierarchical table (the result's hierarchy note names its parent-reference column) never adds the other kinds' figures, because their rows already include the rows below them: follow the hierarchy note and the area-total rule. On a table with no hierarchy, a total adds the line's figures to the table's own, each part named with its kind. When the question names that one code, they do not belong in the answer. Never print the line or its heading.
+- A result may carry a KINDS IN SCOPE line: the query narrowed a kind/type column with a word pattern, and the line lists every kind the same filters hold without that pattern, each with the query's own figure for it - the line names that figure: rows, or the query's own sum or count - marking the kinds the pattern did not match. A class word in the question covers every kind of its class, so give one figure per kind from that line and their total. A kind the pattern did not match belongs to the asked class when the SOURCE line says each row is one such item - then it counts, under its own kind, and the table's own figure, which left it out, is not the answer. When the question names ONE kind, that kind's figure is the answer, and the other kinds are named as what the class also holds. Never print the line or its heading.
+- A result may carry a HIERARCHY line: it is computed in code from the recorded parent references, walking the whole chain below or above the thing the question names — every row below it by depth, or every link above it back to the top. When the question asks what lies below or above something, answer from that line in full — every node it lists, never only the one step the table above it shows — and when it ends with "… and N more" or "… and more below depth N", say that more exist. The name in brackets after a node is the level that node's location key records: when the question asks where that thing is, state that level, and name any different location printed for it (in a table cell or a note) as printed, beside it. Never print the word HIERARCHY or the line itself.
+- A result may carry a CHILDREN BY PLACE line: computed in code, it counts a parent-reference tree's own node(s) by their DIRECT children, split by a place or category the question named two or more values of. A parent supplies, or belongs to, the place or category most of its own children are in — when the question asks which of several named things supplies, feeds, or belongs to a named place, answer from this line's counts for each node, naming every value and its count it gives. Never print the line, its heading, or a table or column name.
+- A result may carry a FEED NAMES line: two records list what one parent feeds, and their names differ. Answer what it feeds from the tree's own names - the line's first list, the rows whose own parent reference names it. Name the other record's names that match no row of the tree as that record prints them: they may be other loads, provisions or the same thing spelled another way, and the line does not say which. A space or spare way is never something it feeds. Never print the line, its heading, or a table or column name.
+- A result may carry a GRAPH LINKS line: computed in code, it lists every link the dependency graph records from the ids the rows above print, grouped by link and target, with how many links each group holds and, when they all carry the same one, the links' note. When the question asks what something depends or relies on, or what relies on it, answer per group of that line, naming each target; a group the rows above leave out still belongs in the answer, and never say that a link the line lists is not recorded. When the line says the ids fall into sets by their own links, answer per set: how many ids it holds and every target of its links, the shared ones included. Never print the line, its heading, or a table or column name.
+- A result may carry a SHARED VALUE ELSEWHERE line: the query looked for another row sharing a value only inside its own table and found none there, and the line lists rows of other records that print the same value, with their notes. Such a row may be another item, or the same item printed another way - its identifier and notes tell which. Never say that no other row prints that value while the line lists one; name each listed row as that record prints it - its identifier, and what its notes say - say which of the two it is when its identifier or notes tell, and name that record in plain words. Never print the line, its heading, or a table or column name.
+- A tool result may end with one or more "SOURCE - <table>: ..." lines saying which record each number was read from. When you state a count, total or any other figure from that result, NAME the record it came from in plain words (e.g. "68 door positions, counted from the as-built access-control drawings"; "421 units, from the mechanical asset register"), because the building's documents often print more than one figure for the same thing. Never print the table name or the word SOURCE itself.
+- Identifiers are copied character for character: phone numbers, meter and account numbers, serials, tags and part numbers keep every leading zero, space, dash and letter exactly as the result shows them. Never reformat one as a number.
+- Data cells sometimes contain long data-entry/verification notes (e.g. "blank as printed - verified against image...", "SL NO printed twice on this page..."). Present only the meaningful value (e.g. "FCU") and drop the note.
+- EXCEPTION: when a note — a notes cell, a "NOTE - <table>:" line, or the "NOTES ON THE ROWS BEHIND THIS RESULT" block — records a substantive correction to a value (struck out, superseded, handwritten replacement, revised by the authority), a DIFFERENT figure printed elsewhere for the same quantity, or which group of items a value applies to, surface it: state the current value and the other figure, each with where it is printed, and say which group each value applies to when the note does (e.g. "Max Demand: 1156.36 kW (corrected by DEWA from the printed 1120.40)"; "12, from the register — the summary sheet prints 14"). Never present a superseded value as current, and never print that block's heading. Each line of that block opens with the identifier of the row it belongs to: what the note says - another name that row is also printed under included - describes that row, never a separate item or place.
+- When excerpts contain BOTH project/site-specific records (asset registers, schedules, commissioning sheets, warranty letters) AND generic manufacturer literature (datasheets, marketing copy), answer from the project-specific records — they state what was actually installed WHERE and FOR WHAT. Use generic literature only for details the project records lack.
+- For questions about warranties, maintenance terms, or service intervals: lead with the CONCRETE values found in the excerpts (duration, start/end dates, frequency, who provides it) before any terms and conditions. If a warranty letter states a period (e.g. "12 months from ..."), that period IS the answer — never reply with only the claim conditions. But a warranty or certificate covers ONLY the scope it prints (its "scope of works", the equipment or system it names): equipment the certificate does not name is not covered by that record, even when it is controlled by, connected to or installed alongside what is named. If the question asks about something the certificate's scope does not name, say no warranty record for it was found, and only then mention the related certificate and what it does cover. A lifespan, service life, expected life or a purchase date is NEVER a warranty period or a warranty expiry, and is never used to compute or imply one — a warranty is only what a warranty letter, a certificate, or a column named for warranty actually states; with no such record, say no warranty record was found (you may still state the lifespan or purchase date separately, clearly labelled as that, not as a warranty). When an excerpt states a concrete start date and a duration or end date for THIS entitlement, and the question asks about its current status ("is it still...", "are they...", "until when"), say explicitly whether that end date is before or after today (today's date is stated above) — in unambiguous language (e.g. "expired", "no longer valid", "still valid until ...") — grounded only in a date the document itself prints for this item, never a date the question supplies or a different entitlement's date.
+- For a who/contact question (who to contact, a phone, telephone, mobile number or e-mail): answer from whichever source — a table row or a cross-check excerpt of document text — actually names the party or the system the question asks about. A contact recorded for a different system or a different party is not the answer, even when it is the only contact on hand; say so, and name whose it is instead. When contacts for more than one system or party appear in the result, say which system or party each one belongs to, rather than presenting one as if it were the only candidate.
+- Never present an equipment RATING (W, kW, kVA, A) as energy CONSUMPTION (kWh), and never estimate consumption/cost/runtime from ratings — if consumption is asked and only ratings exist, say the records do not state it.
+- When the user asks for the answer "as a table" or "in a table", the answer MUST contain a markdown table — a bulleted list is not acceptable.
+- Never paste, echo, or reproduce source excerpts verbatim. Always synthesize the answer in your own words.
+- When the user asks you to explain or simplify a figure from earlier in the conversation ("explain it in simple terms"), ALWAYS restate that figure explicitly in the explanation — an explanation that never names the value it explains is incomplete.
+- Only state facts that appear in the provided excerpts/results. If they don't contain the asked-for specifics (locations, values, dates, names), say the records don't show them — NEVER construct plausible-looking specifics.
+- THE ATTRIBUTE AND THE OWNER MUST BOTH MATCH. Before you give a value, check two things: that it is the attribute that was asked for, and that it belongs to the exact entity or party named in the question. If the records hold a value of the right KIND but it is a different attribute, a different piece of equipment, or a different company, then the asked-for fact is NOT recorded — say so plainly first. You may then add what IS recorded, clearly labelled as such. Specifically forbidden: answering a request for a serial or part number with a quantity, unit count or row number; giving a local supplier's or contractor's phone number when the question named the manufacturer; giving one party's warranty when the question asked for another's. A value that merely sits nearby in the same row, table or paragraph is not the answer.
+- If a question asks for a field the tables have no column for, that is a missing fact, not a reason to pick the closest-looking column. Say the records do not record it.
+- READ THE COLUMN NAME BEFORE YOU ATTRIBUTE A VALUE. Column and field names say whose value it is: `service_provider_tel` is the SERVICE PROVIDER's phone, not the manufacturer's, even when the manufacturer's name sits in the very next column of the same row. `manufacturer_name` names the maker; it does not make the neighbouring contact details theirs. If the question names one party and the only matching value belongs to a column named for a different party, say the asked-for party's value is not recorded, and name whose it actually is.
+- Keep answers focused on what was asked. If a source has extra detail, leave it out."""
+
+# ---------------------------------------------------------------------------
+# THE TOOL CHOICE READS A FROZEN COPY OF THE RULES (2026-10-02, ruling W7).
+#
+# `_build_system_prompt` is the system prompt of the temperature-0 call that CHOOSES THE TOOL, so
+# every word in it is an input to that choice. It used to append OUTPUT_FORMAT_RULES, the rules for
+# WRITING THE ANSWER - and the bullets later added for reading a tool result (the printed-total,
+# matched-filter and hierarchy lines, the notes block, the contact and warranty sentences; 7,524 ->
+# 10,491 chars) moved the tool choice as well: 15 of 50 first tool calls on the ruler changed, each
+# one identically in both runs of its arm, so the shift was deterministic, not noise. With answer
+# rules inside the choice, no later answer-rule change could be credited to its own fix.
+#
+# So the tool choice reads THIS constant: OUTPUT_FORMAT_RULES exactly as v1.3 shipped it (main =
+# 7743166), frozen byte for byte - `tests/test_tool_choice_input.py` pins its sha256 and a golden
+# copy of the whole tool-choice request. It also governs a follow-up the model answers WITHOUT a
+# tool, since that answer streams straight from the same prompt. The live OUTPUT_FORMAT_RULES, with
+# every later bullet, goes only into the four prompts that write an answer.
+#
+# Do not edit this text to change how answers are written - edit OUTPUT_FORMAT_RULES. Editing this
+# one changes which tool the model picks, for every question, and is a measured change of its own.
+# ---------------------------------------------------------------------------
+TOOL_CHOICE_FORMAT_RULES = """
 OUTPUT FORMAT RULES (strict):
 - Never output raw HTML in your answer. Tags like <table>, <tr>, <td>, <th>, <br>, <span>, <div> are forbidden. If the source excerpts contain HTML, extract the data into clean markdown.
 - For tabular source data, prefer a concise markdown bulleted list unless the user asked for a table, list, breakdown, or Excel-style output. When the user DOES ask for a list/breakdown/table/"Excel format", render the rows you were given as a clean markdown table. Pick the columns that answer the question (e.g. board, circuit, area/location, quantity). MANDATORY: when a quantity/points column is present, the table's last row MUST be a Total row, and the sentence introducing or closing the table MUST state that total explicitly. That Total is the figure on the result's own "TOTAL <col> (all N rows)" line whenever the result carries one — never a sum over the rows you were shown, which may be only part of the result. If the result carries no such line, sum the rows you were given and say that the total covers only those rows.
@@ -117,8 +173,42 @@ CHANGE-IMPACT QUESTIONS — how to work one before you answer it:
 {CHANGE_IMPACT_ANSWER_SHAPE}"""
 
 
-def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_search_enabled: bool, structured_tables=None) -> str:
-    """Build system prompt dynamically based on which tools are available."""
+# ---------------------------------------------------------------------------
+# TODAY'S DATE, FOR THE FOUR ANSWER PROMPTS ONLY - wave 5, D3, 2026-10-04.
+#
+# Measured on the goal-function run of 2026-09-30 (deferred through waves 3-4 as "D3,
+# optional"): a warranty letter's own 12-month period was read and quoted correctly, but no
+# prompt this app sends ever states what day it is, so the writer had no way to say whether
+# that period had elapsed - a correct "...to <end date>" shipped with no "this has expired",
+# even once that end date was long past.
+#
+# `_today` is the ONE place that reads the wall clock - a test swaps it for a fixed date, so
+# every answer-prompt test is deterministic without touching the real clock anywhere else in
+# this module. `_today_line` is injected as its OWN line, separate from OUTPUT_FORMAT_RULES'
+# text (never folded into that constant): test_tool_choice_input.py's own golden test asserts
+# `oc.OUTPUT_FORMAT_RULES in <answer prompt>` verbatim, which only holds if the constant's own
+# text never changes per call.
+#
+# Never injected into `_build_system_prompt` - the temperature-0 call that CHOOSES THE TOOL,
+# held to the frozen v1.3 text (ruling W7) - only into the four prompts that WRITE an answer.
+# ---------------------------------------------------------------------------
+def _today() -> date:
+    return date.today()
+
+
+def _today_line() -> str:
+    """One line stating today's date - grounds the warranty/expiry bullet's "before or after
+    today" comparison in a concrete value, without baking a moving date into
+    OUTPUT_FORMAT_RULES itself."""
+    return f"Today's date is {_today().isoformat()}."
+
+
+def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_search_enabled: bool, structured_tables=None, table_cards=None) -> str:
+    """Build system prompt dynamically based on which tools are available.
+
+    This is the input of the temperature-0 TOOL CHOICE, so it is held to the v1.3 text: it reads
+    the frozen TOOL_CHOICE_FORMAT_RULES, and its table menu lists each table's columns as the
+    router card `table_cards` holds for it (see `_format_structured_tables`)."""
     if not has_documents and not has_structured_data and not web_search_enabled:
         return SYSTEM_PROMPT_NO_DOCS
 
@@ -130,7 +220,7 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
         parts.append("- explore_knowledge_base: Open-ended exploration that spawns a sub-agent which iteratively uses tree/glob/grep/list_files/read_document over up to 8 turns and returns a compact summary. Use when the user asks 'find everything about Y' or 'what does the KB say about Z' and the answer requires multi-step exploration to even find what to read. NOT for single-fact lookups — those go to search_documents.")
     if has_structured_data:
         sql_line = "- query_structured_data: Query tabular data (from CSV/XLSX files) using SQL. Use this for quantitative questions (totals, averages, counts, comparisons) and for looking up specific values — but ONLY when the subject of the question lives in the available tables listed below."
-        schema_summary = _format_structured_tables(structured_tables)
+        schema_summary = _format_structured_tables(structured_tables, table_cards)
         if schema_summary:
             sql_line += f" Available tables: {schema_summary}"
         parts.append(sql_line)
@@ -240,7 +330,10 @@ def _build_system_prompt(has_documents: bool, has_structured_data: bool, web_sea
     # Answers produced WITHOUT a tool round-trip (follow-ups answered from
     # conversation history) stream this same prompt's response directly, so the
     # format rules must live here too — not only in the tool-result final call.
-    parts.append(OUTPUT_FORMAT_RULES)
+    # But this prompt is also the temperature-0 tool choice, so it carries the
+    # FROZEN v1.3 copy and never the live answer rules (ruling W7 — see the block
+    # above TOOL_CHOICE_FORMAT_RULES). Answer bullets go into the answer prompts.
+    parts.append(TOOL_CHOICE_FORMAT_RULES)
     # The investigation half of the change-impact rule belongs with the tools,
     # so it lives here and nowhere else; it carries the answer shape with it.
     parts.append(CHANGE_IMPACT_RULES)
@@ -323,18 +416,50 @@ def _build_search_tool() -> types.Tool:
     )
 
 
-def _format_structured_tables(structured_tables) -> str:
+def _format_structured_tables(structured_tables, table_cards=None) -> str:
     """One-line schema summary per table: name(col1, col2, ...) — no cap, columns capped.
 
     No cap (2026-09-18): the corpus is 69 tables and the list is fetched alphabetically, so a
     cap hid 29 tables from the tool-choice step — including the panel and feeder schedules.
     ~2k tokens for 69 tables; the SQL prompt itself is routed separately.
+
+    THE COLUMNS ARE THE ROUTER CARD'S (2026-10-02, ruling W7). This menu is printed twice into
+    the temperature-0 tool choice (the system prompt and the query_structured_data description),
+    and it used to list each table's LOADED columns - so a column the data pipeline appends for
+    the SQL writer (a stamped storey key, an ISO date companion), which changes no answer to
+    "which tool?", changed the tool choice anyway. The router cards are built with exactly those
+    columns left off, so each table is listed with the columns its card lists, in the card's
+    order; only a table with no card falls back to its loaded columns. The SQL writer is not
+    affected: its schema block is read off the loaded table, never off this menu.
+
+    THE ORDER IS THE ROUTER CARD'S TOO (wave 5, 2026-10-04). `structured_tables` arrives
+    alphabetical (the database read is `.order("table_name")`), and this menu used to keep that
+    order untouched - so ADDING one table shifted the byte offset of every table sorting after
+    it in this frozen, twice-embedded, temperature-0 prompt, which silently changed an unrelated
+    question's tool-choice text and, with it, its route. Ruling W5-R1: no static table-name list
+    may live in this public repo, so the fix reads an ordering fact off the cards instead of a
+    baseline tuple - doc-prep writes each card an integer `menu_seq` (the tables that predate
+    this fix keep their old alphabetical index; a newly added table appends past the end). A
+    table whose card carries no `menu_seq` (every card today, before that write lands, and
+    every fixture that predates it, including the F0 golden) falls back to its place in the
+    incoming order, exactly as before - so with no `menu_seq` anywhere this function's output
+    is unchanged, byte for byte. `select_tables`'s own list order and scoring are untouched:
+    `menu_seq` is read only here.
     """
     if not structured_tables:
         return ""
+    card_columns = _card_columns(table_cards)
+    menu_seq = _card_menu_seq(table_cards)
+    ordered = sorted(
+        enumerate(structured_tables),
+        key=lambda pair: (0, menu_seq[pair[1].get("table_name")])
+        if pair[1].get("table_name") in menu_seq else (1, pair[0]),
+    )
     lines = []
-    for t in structured_tables:
-        cols = t.get("columns") or []
+    for _, t in ordered:
+        cols = card_columns.get(t.get("table_name"))
+        if cols is None:
+            cols = t.get("columns") or []
         col_str = ", ".join(str(c) for c in cols[:15])
         if len(cols) > 15:
             col_str += ", ..."
@@ -342,8 +467,50 @@ def _format_structured_tables(structured_tables) -> str:
     return "; ".join(lines)
 
 
-def _build_sql_tool(structured_tables=None) -> types.FunctionDeclaration:
-    """Build the query_structured_data tool definition."""
+def _card_columns(table_cards) -> dict:
+    """{table name: the columns its router card lists}, for every card that names a table and
+    lists at least one column. Anything else is treated as no card at all."""
+    out = {}
+    for card in table_cards or []:
+        if not isinstance(card, dict):
+            continue
+        name, cols = card.get("table"), card.get("columns")
+        if isinstance(name, str) and isinstance(cols, list) and cols:
+            out.setdefault(name, list(cols))
+    return out
+
+
+def _card_menu_seq(table_cards) -> dict:
+    """{table name: the router card's menu_seq}, for every card that names a table and carries
+    a plain int `menu_seq` (bool excluded - it is a subclass of int in Python, and never what
+    doc-prep writes here). A card with no `menu_seq`, or one that is not a plain int, contributes
+    nothing: that table falls back to its incoming position, same as if it had no card at all."""
+    out = {}
+    for card in table_cards or []:
+        if not isinstance(card, dict):
+            continue
+        name, seq = card.get("table"), card.get("menu_seq")
+        if isinstance(name, str) and isinstance(seq, int) and not isinstance(seq, bool):
+            out.setdefault(name, seq)
+    return out
+
+
+def _tool_choice_cards(user_id, supabase_client) -> list:
+    """The router cards for the table menu, read by the router's own loader - database, then the
+    local file, then none, cached per user exactly as the SQL path reads them. Never raises: with
+    no cards the menu lists the loaded columns, which is what it did before the cards were read."""
+    try:
+        from app.services.sql_tool import _load_table_cards
+        return _load_table_cards(user_id, supabase_client)
+    except Exception as e:  # noqa: BLE001 - the menu must never take the chat down
+        logger.warning(f"table menu: could not read the router cards "
+                       f"({type(e).__name__}: {e}); listing the loaded columns")
+        return []
+
+
+def _build_sql_tool(structured_tables=None, table_cards=None) -> types.FunctionDeclaration:
+    """Build the query_structured_data tool definition. Its table menu is the system prompt's,
+    card columns and all (see `_format_structured_tables`)."""
     description = (
         "Query the user's tabular data (from uploaded CSV/XLSX files) using SQL. "
         "Use this for totals, counts, averages, comparisons, AND for looking up any "
@@ -354,7 +521,7 @@ def _build_sql_tool(structured_tables=None) -> types.FunctionDeclaration:
         "counts/specs of equipment described only in uploaded documents belong to "
         "search_documents."
     )
-    schema_summary = _format_structured_tables(structured_tables)
+    schema_summary = _format_structured_tables(structured_tables, table_cards)
     if schema_summary:
         description += f" Available tables: {schema_summary}"
     return types.FunctionDeclaration(
@@ -831,9 +998,17 @@ def _windowed_excerpt(query: str, content: str, head: int = 900,
     # beat filler like 'have'/'what'. One window per distinct term's FIRST hit
     # beyond the head: first+last-only windowing leaves a gap in the middle
     # where the actual fact may sit.
+    #
+    # Terms of EQUAL length are taken by a fixed key - fewest hits in this
+    # chunk first, the rarer term being the more telling one, then
+    # alphabetically (wave 3, G2, 2026-10-03). They used to keep the order of a
+    # Python set, which changes with each process's string-hash seed, so the
+    # same question over the same chunk could keep one window in one process
+    # and another in the next, and a fact in the window it dropped reached the
+    # answer in some runs only.
     terms = sorted({t for t in re.findall(r"[\w]+", query.lower()) if len(t) >= 4},
-                   key=len, reverse=True)
-    out, covered = [content[:head]], []
+                   key=lambda t: (-len(t), low.count(t), t))
+    out, covered, spans = [content[:head]], [], []
     for t in terms:
         if len(covered) >= max_windows:
             break
@@ -841,16 +1016,27 @@ def _windowed_excerpt(query: str, content: str, head: int = 900,
         if pos == -1:
             continue
         start = max(head, pos - 250)
-        if any(abs(start - c) < win for c in covered):
+        near = [i for i, c in enumerate(covered) if abs(start - c) < win]
+        if near:
+            # A hit this close to a kept window's START was skipped even when that
+            # window did not contain it - the hit fell in the gap (wave 3, G2). Such a
+            # hit now widens the nearest kept window's TEXT to reach it, with the same
+            # 250-character margin a window gives its own hit. The kept starts, which
+            # every later decision reads, never move, so every window kept before is
+            # still inside the excerpt.
+            if not any(s <= pos < e for s, e in spans):
+                i = min(near, key=lambda k: abs(start - covered[k]))
+                s, e = spans[i]
+                spans[i] = (min(s, start), max(e, min(len(content), pos + len(t) + 250)))
             continue
         covered.append(start)
-        out.append(content[start:start + win])
+        spans.append((start, start + win))
     if not covered:
         return content[:head + win]
     # Query-matched windows FIRST: the head of an OCR chunk is often table
     # junk, and the answer model demonstrably anchors on leading text — a
     # decisive sentence buried mid-excerpt gets glossed over.
-    return " […] ".join(out[1:] + [out[0][:400]])
+    return " […] ".join([content[s:e] for s, e in spans] + [out[0][:400]])
 
 
 def _resolve_document(supabase_client, user_id: str, doc_name: str):
@@ -991,6 +1177,7 @@ def stream_response(
         system_text = f"""You are a helpful assistant with access to the user's uploaded documents.
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
+{_today_line()}
 {OUTPUT_FORMAT_RULES}
 {CHANGE_IMPACT_ANSWER_SHAPE}
 
@@ -1025,6 +1212,11 @@ Document excerpts:
     # Check which tools are enabled
     text_to_sql_enabled = get_text_to_sql_enabled() and has_structured_data
     web_search_enabled = get_web_search_enabled()
+    # The table menu of the tool choice lists each table's columns as its router
+    # card lists them (ruling W7, `_format_structured_tables`). Read once, here, for
+    # both places the menu is printed - and only when a menu will be printed.
+    table_cards = (_tool_choice_cards(user_id, supabase_client)
+                   if text_to_sql_enabled and structured_tables else None)
 
     # Build dynamic tool list — analyze_document listed first to reduce positional bias
     function_declarations = []
@@ -1063,7 +1255,7 @@ Document excerpts:
             logger.warning(f"Failed to build explore_knowledge_base tool (non-fatal): {e}")
     if text_to_sql_enabled:
         try:
-            function_declarations.append(_build_sql_tool(structured_tables))
+            function_declarations.append(_build_sql_tool(structured_tables, table_cards))
         except Exception as e:
             logger.warning(f"Failed to build SQL tool (non-fatal): {e}")
     if web_search_enabled:
@@ -1074,7 +1266,8 @@ Document excerpts:
 
     tools = None
     tool_config = None
-    system_text = _build_system_prompt(has_documents, text_to_sql_enabled, web_search_enabled, structured_tables)
+    system_text = _build_system_prompt(has_documents, text_to_sql_enabled, web_search_enabled,
+                                       structured_tables, table_cards)
     if function_declarations:
         tools = [types.Tool(function_declarations=function_declarations)]
         tool_config = types.ToolConfig(
@@ -1156,6 +1349,7 @@ Document excerpts:
         fallback_system = f"""You are a helpful assistant with access to the user's uploaded documents.
 Use the provided document excerpts to answer questions accurately.
 If the excerpts do not contain enough information to answer, say so and answer from general knowledge if applicable.
+{_today_line()}
 {OUTPUT_FORMAT_RULES}
 {CHANGE_IMPACT_ANSWER_SHAPE}
 
@@ -1312,9 +1506,11 @@ Document excerpts:
                 yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No documents found"}))
 
         elif tool_name == "query_structured_data":
-            from app.services.sql_tool import execute_sql_query, route_tables
-            from app.services.sql_loop import (COUNT_CROSSCHECK, CROSSCHECK_EXCERPTS,
-                                               EMPTY, iter_sql_investigation)
+            from app.services.sql_tool import (column_value_reader, execute_sql_query,
+                                               route_tables)
+            from app.services.sql_loop import (APPENDED_CROSSCHECKS, COUNT_CROSSCHECK,
+                                               CROSSCHECK_EXCERPTS, EMPTY,
+                                               iter_sql_investigation)
             question = args.get("question", "")
             # The router's paraphrase can drop parts of the user's intent
             # (e.g. "total load" reduced to "which panels") — always give the
@@ -1421,6 +1617,13 @@ Document excerpts:
                 # augmented `question` above carries the router's paraphrase,
                 # which dilutes keyword ranking.
                 user_question=last_user_msg or question,
+                # spec-fix7(c): an EMPTY re-query lists the real values of the
+                # columns the failed WHERE filtered, read from this user's tables
+                # exactly as the executor loads them. Lazy - building the reader
+                # reads nothing, and the loop asks it only when a re-query that
+                # carries the values can still be sent - so SQL_LOOP_MAX_STEPS=1
+                # never reads at all.
+                column_values=column_value_reader(user_id, supabase_client),
             ):
                 if _evt == "step":
                     if pending_done:
@@ -1450,12 +1653,16 @@ Document excerpts:
                         "tool": "query_structured_data", "detail": detail}))
                 elif _evt == "crosscheck":
                     searched_kind = _payload["kind"]
-                    if searched_kind == COUNT_CROSSCHECK:
+                    if searched_kind in APPENDED_CROSSCHECKS:
                         if pending_done:
                             yield pending_done
                             pending_done = None
-                        logger.info(f"quantity question — cross-checking the "
-                                    f"documents for: {_payload['query']}")
+                        # T7: the same APPENDED treatment for a contact/warranty question
+                        # as for a quantity one — this must never fall into the `else`
+                        # branch below, which reports "SQL failed, falling back".
+                        logger.info(
+                            f"{'quantity' if searched_kind == COUNT_CROSSCHECK else 'contact/warranty'} "
+                            f"question — cross-checking the documents for: {_payload['query']}")
                         yield ("tool_start", json.dumps({
                             "tool": "search_documents",
                             "args": {"query": _payload["query"], "purpose": "cross-check"},
@@ -1485,16 +1692,17 @@ Document excerpts:
                     # supplied the text, "query_structured_data" otherwise.
                     tool_name = _payload.source_tool
                     if searched_kind is not None:
-                        # A cross-check retrieves up to 12 chunks and APPENDS at most
-                        # CROSSCHECK_EXCERPTS of them; reporting 12 would tell the user
+                        # An appended cross-check (quantity or, T7, contact/warranty —
+                        # `APPENDED_CROSSCHECKS`) retrieves up to 12 chunks and APPENDS at
+                        # most CROSSCHECK_EXCERPTS of them; reporting 12 would tell the user
                         # (and the trace) that twelve records were weighed against the
                         # table's figure when three were (M-1). A terminal fallback
                         # appends everything it retrieved, so it reports everything.
                         reached = (min(found_count[0], CROSSCHECK_EXCERPTS)
-                                   if searched_kind == COUNT_CROSSCHECK else found_count[0])
+                                   if searched_kind in APPENDED_CROSSCHECKS else found_count[0])
                         yield ("tool_done", json.dumps({
                             "tool": ("search_documents"
-                                     if searched_kind == COUNT_CROSSCHECK else tool_name),
+                                     if searched_kind in APPENDED_CROSSCHECKS else tool_name),
                             "detail": f"Found {reached} results",
                         }))
 
@@ -1753,6 +1961,7 @@ Document excerpts:
 If the tool encountered an error, explain the issue to the user in simple terms and suggest they rephrase their question.
 If the results do not contain enough information, clearly state that the available documents do not contain the answer. Do NOT dump or echo the raw tool results back to the user. Instead, briefly explain what information was found (if any) and suggest the user try a different query or upload a document that might contain the answer. You may answer from general knowledge if applicable, but clearly label it as such.
 When citing web sources, include the URLs.
+{_today_line()}
 {OUTPUT_FORMAT_RULES}
 {CHANGE_IMPACT_ANSWER_SHAPE}
 
@@ -1845,6 +2054,7 @@ Tool ({tool_name}) results:
         if result_text:
             truncated_result = result_text[:60000] if len(result_text) > 60000 else result_text
             system_with_context = f"""You are a helpful assistant. Use the provided tool results to answer the user's question accurately.
+{_today_line()}
 {OUTPUT_FORMAT_RULES}
 {CHANGE_IMPACT_ANSWER_SHAPE}
 

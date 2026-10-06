@@ -176,5 +176,64 @@ check("and to look the model up in a specification table where one exists",
 check("the answer shape names class and model as recorded identity",
       "model" in openai_client.CHANGE_IMPACT_ANSWER_SHAPE.lower())
 
+
+# ---------------------------------------------------------------------------
+print("\n6. A note's rival figure is stated beside the figure (spec-fix1 part b)")
+# ---------------------------------------------------------------------------
+# A note can carry more than a correction: a DIFFERENT figure printed elsewhere for the
+# same quantity, or which group of items a value applies to. The EXCEPTION bullet used to
+# license only corrections ("struck out, superseded ..."), so a writer handed a note that
+# names a rival printed figure had a rule telling it to drop the note and none telling it
+# to state the rival. It now covers all three, wherever the note rides - a notes cell, a
+# card's NOTE line, or the block sql_tool appends of the notes behind a small result.
+exc = next((l for l in rules.splitlines() if l.startswith("- EXCEPTION")), "")
+check("the EXCEPTION bullet exists", bool(exc), rules[:200])
+check("it covers a DIFFERENT printed figure for the same quantity, not only a correction",
+      "different figure" in exc.lower() and "same quantity" in exc.lower(), exc)
+check("it covers which group a value applies to", "which group" in exc.lower(), exc)
+check("the answer must state the current value AND the other figure",
+      "current value and the other figure" in exc.lower(), exc)
+check("each with where it is printed", "each with where it is printed" in exc.lower(), exc)
+check("it names the card NOTE lines and the notes block as notes it applies to",
+      '"NOTE - ' in exc and sql_tool.ROW_NOTES_HEADING.rstrip(":") in exc
+      if hasattr(sql_tool, "ROW_NOTES_HEADING") else False, exc)
+check("it still forbids presenting a superseded value as current",
+      "never present a superseded value as current" in exc.lower(), exc)
+check("and the block's heading is never printed", "never print" in exc.lower(), exc)
+check("the drop-the-data-entry-note bullet before it is unchanged",
+      "Present only the meaningful value" in rules and "drop the note" in rules)
+
+
+# ---------------------------------------------------------------------------
+print("\n7. T7 (2026-10-01) — a lifespan is never a warranty, and the contact rule is "
+      "present")
+# ---------------------------------------------------------------------------
+# A purchase date plus a lifespan/service-life column is not a warranty record, and must
+# not be read as one just because both are durations/dates.
+check("the rules say a lifespan/service life/expected life is NEVER a warranty period "
+      "or a warranty expiry",
+      "lifespan" in rules.lower() and "never a warranty period" in rules.lower()
+      and "warranty expiry" in rules.lower(),
+      rules[:400])
+check("and the same holds for a bare purchase date",
+      "purchase date" in rules.lower(), rules[:400])
+check("with no warranty record, the rule says to SAY SO rather than infer one",
+      "no warranty record was found" in rules.lower(), rules[:400])
+
+# A who/phone-number question must be answered from the source that actually names the
+# asked-about party/system, not whichever table or excerpt happened to come back.
+check("a who/contact rule exists",
+      "who/contact" in rules.lower() or "contact question" in rules.lower(), rules[:400])
+check("it says to answer from whichever source names the asked-about party or system",
+      "names the party" in rules.lower() or "names the asked-about party" in rules.lower(),
+      rules[:400])
+check("a contact for a different system/party is explicitly not the answer",
+      "different system" in rules.lower() and "different party" in rules.lower(),
+      rules[:400])
+check("and when more than one system's contacts appear, the rule says to name which "
+      "system each belongs to",
+      "which system" in rules.lower() or "which system or party" in rules.lower(),
+      rules[:400])
+
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)
