@@ -71,6 +71,19 @@ check("it asks for the quantity column and a total",
 check("it names no table, column value or building of this project",
       not any(t in r for t in ("hwu_", "Energy Laboratory", "Heriot", "RM-", "L06-B")), r[:300])
 check("it is in the SQL-generation prompt", "ROOM_CONTENTS_RULE" in SRC)
+# Task W14-A1: a per-unit tag column the schema marks with an Identifier: line (task
+# W13-A2/A3, printed only for a card's DECLARED/pinned identifier) was never in this rule's
+# SELECT list, so room-contents answers carried no tags even when the schema named one.
+check("it also selects the column the schema marks as the identifier, when there is one "
+      "(task W14-A1)",
+      "the column the schema marks as the identifier" in r.lower()
+      and "when it marks one" in r.lower(), r[:600])
+check("and says nothing changes when the schema marks none",
+      "nothing changes when it marks none" in r.lower(), r[:600])
+check("consistent with LIST_IDENTIFIER_RULE's own wording for the same mark",
+      "the column the schema marks as the identifier" in r.lower()
+      and "the column the schema marks as the identifier"
+      in getattr(sql_tool, "LIST_IDENTIFIER_RULE", "").lower())
 
 print(chr(10) + "2. The rule for a two-part question about one named thing")
 check("TWO_HOP_RULE exists", hasattr(sql_tool, "TWO_HOP_RULE"))

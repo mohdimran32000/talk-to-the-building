@@ -16,11 +16,25 @@ from google import genai
 from google.genai import types
 from langsmith import traceable
 
+from app.services.answer_check import REFUSED_WITHOUT_SEARCH, find_problems, refusal_sentences
+from app.services.llm_config import apply_llm_seed
+from app.services.plan_first import (
+    build_broadened_text, build_check_user_text, build_compose_system,
+    build_planner_user_text, hedge_sentences, parse_check_response, parse_planner_response,
+    CHECK_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT,
+)
+from app.services.second_look import (
+    build_followup_user_text, build_second_look_system, parse_followup_response,
+    FOLLOWUP_SYSTEM_PROMPT,
+)
 from app.services.settings import (
-    get_llm_api_key, get_llm_model, get_metadata_schema,
+    get_agentic_second_look_enabled,
+    get_answer_check_enabled, get_answer_check_max_retries, get_answer_temperature,
+    get_llm_api_key, get_llm_model, get_metadata_schema, get_plan_first_enabled,
     get_sql_loop_max_steps,
     get_text_to_sql_enabled, get_web_search_enabled,
 )
+from app.services.table_router import asks_about_maintenance_frequency
 
 logger = logging.getLogger(__name__)
 
@@ -1142,6 +1156,643 @@ def _execute_search_documents(
         return []
 
 
+def _checked_answer_text(response) -> str:
+    """The text of a NON-STREAMING `generate_content` response - `.text` when google-genai
+    supplies it, else walked out of the candidate's own parts. Defensive the same way the
+    existing non-streaming fallback (below) already is: an empty/malformed response is "",
+    never an exception."""
+    text = getattr(response, "text", None)
+    if text:
+        return text
+    if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+        return "".join(p.text for p in response.candidates[0].content.parts if p.text)
+    return ""
+
+
+def _generate_checked_answer(client, model, contents, system_text: str, temperature: float,
+                              question_text: str, sql_results, excerpts, tools_ran,
+                              search_fn, enabled=None, use_claude: bool = False) -> str:
+    """ANSWER_CHECK=1's answer generation (task W8-A1 part B): one buffered (non-streaming)
+    generation, run through `answer_check.find_problems`, and - on a problem - exactly ONE
+    retry whose system prompt states each problem in plain words. For REFUSED_WITHOUT_SEARCH
+    specifically, the retry first runs `search_fn(question_text)` - the document search this
+    turn never ran - and adds whatever it finds as more context, never as a replacement for
+    what is already there. The retry's answer is kept whether or not it still has a problem
+    (logged, never retried again - "keep the retry's answer and log it").
+
+    Buffered rather than streamed ON PURPOSE: the checks need the WHOLE answer before they can
+    say anything, so there is no way to both stream token-by-token and check before the user
+    sees it. The OFF path (`get_answer_check_enabled()` false) never calls this - it keeps
+    streaming exactly as before.
+
+    `enabled` forwards to `find_problems` - omit it (the production call site does) to run
+    exactly `answer_check.SHIPPED_CHECKS`, the checks the gate measured zero false alarms for;
+    pass an explicit set to exercise a check that is built and tested but not yet shipped.
+
+    `use_claude` (task W9-A2, closing a W9-A1 review finding): when True, BOTH the primary
+    generation and (if needed) the retry go through `llm_provider.generate_answer_text`
+    instead of `client.models.generate_content` - `client`/`model`/`temperature` are then
+    unused for generation (the one production call site still builds and passes them; this
+    just doesn't read them on this branch) - never falling back to Gemini mid-retry, so a
+    checked retry never mixes providers.
+    """
+    if use_claude:
+        from app.services.llm_provider import generate_answer_text
+        answer_text = generate_answer_text(system_text=system_text, contents=contents,
+                                            name="answer_tool_result_checked")
+    else:
+        response = client.models.generate_content(
+            model=model, contents=contents,
+            config=apply_llm_seed(types.GenerateContentConfig(
+                system_instruction=system_text, temperature=temperature)),
+        )
+        answer_text = _checked_answer_text(response)
+    problems = find_problems(question_text, answer_text, sql_results, excerpts, tools_ran,
+                              enabled=enabled)
+    if not problems or get_answer_check_max_retries() < 1:
+        return answer_text
+
+    extra_context = ""
+    if search_fn and any(p.kind == REFUSED_WITHOUT_SEARCH for p in problems):
+        try:
+            found = search_fn(question_text)
+        except Exception as e:
+            logger.warning(f"ANSWER_CHECK: the document search the retry asked for failed: {e}")
+            found = ""
+        if found:
+            extra_context = ("\n\nDocument search results (this turn never searched the "
+                              f"documents before now):\n\n{found}")
+
+    retry_system = (
+        f"{system_text}{extra_context}\n\n"
+        "The previous answer had a problem and must be corrected:\n"
+        + "\n".join(f"- {p.instruction}" for p in problems)
+        + f"\n\nPrevious answer (for reference only - do not repeat its mistake):\n{answer_text}"
+    )
+    if use_claude:
+        from app.services.llm_provider import generate_answer_text
+        retry_text = generate_answer_text(system_text=retry_system, contents=contents,
+                                           name="answer_tool_result_checked_retry")
+    else:
+        retry_response = client.models.generate_content(
+            model=model, contents=contents,
+            config=apply_llm_seed(types.GenerateContentConfig(
+                system_instruction=retry_system, temperature=temperature)),
+        )
+        retry_text = _checked_answer_text(retry_response)
+    if find_problems(question_text, retry_text, sql_results, excerpts, tools_ran, enabled=enabled):
+        logger.warning("ANSWER_CHECK: the retry's answer still has a problem; keeping it anyway "
+                        "(never more than one retry)")
+    return retry_text or answer_text
+
+
+# =============================================================================================
+# THE AGENTIC SECOND LOOK (task W10-A1, spec 2026-09-30). Behind AGENTIC_SECOND_LOOK=1.
+#
+# One buffered answer; a sentence-level scan for a REFUSAL - a sentence saying some part of the
+# question is not recorded, not stated, or not found (`answer_check.refusal_sentences`, generic,
+# reused rather than duplicated). None found -> that buffered answer streams as-is. One or more
+# found -> ONE follow-up call decides a single focused follow-up question (or the literal NONE,
+# when the refusal names something the question never asked). A non-NONE follow-up runs BOTH of
+# the app's OWN tools - the same executor `query_structured_data` uses, routed fresh for the
+# follow-up's own text, through the bounded investigation loop; and `_execute_search_documents`,
+# the app's own windowing - and re-answers exactly ONCE more, with the original tool results PLUS
+# whatever the follow-up found, under one added instruction. At most one second look per turn,
+# by construction: nothing below ever calls `_write_followup_question` or re-answers more than
+# once.
+#
+# `_buffered_answer` is how every generation in this flow is produced, on EITHER provider: it IS
+# `_generate_checked_answer` when ANSWER_CHECK is on (its own check-and-retry fully applies -
+# requirement 4, "the answer checker, if on, still applies to the final answer", to whichever
+# generation here ends up being the one that streams), and the SAME function with an explicitly
+# empty check set when ANSWER_CHECK is off (one generation, no problem-detection, no retry -
+# today's behaviour for a buffered call). This is "reuse it or share its machinery" (requirement
+# 1) applied literally: there is exactly one place in this file that knows how to produce a
+# buffered answer, and both ANSWER_CHECK and the second look go through it.
+#
+# FAILS SAFE throughout. The first buffered answer carries the same risk profile as today's call
+# (unchanged if it raises). Every step after it - the follow-up call, routing, both follow-up
+# tools, the re-answer - is wrapped so ANY exception falls back to streaming that first answer
+# rather than raising out of the turn or leaving the user with nothing.
+# =============================================================================================
+
+def _buffered_answer(client, model, contents, system_text: str, temperature: float,
+                      question_text: str, sql_results, excerpts, tools_ran, search_fn,
+                      use_claude: bool) -> str:
+    """One buffered answer for THIS system text and contents, honoring ANSWER_CHECK exactly as
+    the production call site already does: on, this IS `_generate_checked_answer`
+    (SHIPPED_CHECKS, with its own one retry); off, the SAME function with an explicitly EMPTY
+    check set, which `find_problems` then never flags anything for - one generation, no retry,
+    nothing else about `_generate_checked_answer`'s machinery skipped."""
+    enabled = None if get_answer_check_enabled() else frozenset()
+    return _generate_checked_answer(client, model, contents, system_text, temperature,
+                                     question_text, sql_results, excerpts, tools_ran,
+                                     search_fn, enabled=enabled, use_claude=use_claude)
+
+
+def _write_followup_question(client, model, answer_temp: float, question_text: str,
+                              answer_text: str, sentences, use_claude: bool):
+    """The ONE follow-up call (task brief requirement 2), on the answer role's own provider:
+    reads the question, the first answer and its refusal sentences
+    (`second_look.build_followup_user_text`), and returns either a focused follow-up question or
+    `None` (`second_look.parse_followup_response` read the literal NONE - the refusal was about
+    something the question itself never asked)."""
+    user_text = build_followup_user_text(question_text, answer_text, sentences)
+    followup_contents = [types.Content(role="user", parts=[types.Part(text=user_text)])]
+    if use_claude:
+        from app.services.llm_provider import generate_answer_text
+        raw = generate_answer_text(system_text=FOLLOWUP_SYSTEM_PROMPT,
+                                    contents=followup_contents, name="second_look_followup")
+    else:
+        response = client.models.generate_content(
+            model=model, contents=followup_contents,
+            config=apply_llm_seed(types.GenerateContentConfig(
+                system_instruction=FOLLOWUP_SYSTEM_PROMPT, temperature=answer_temp)),
+        )
+        raw = _checked_answer_text(response)
+    return parse_followup_response(raw)
+
+
+def _second_look_sql(followup_text: str, user_id, supabase_client, structured_tables) -> str:
+    """The structured-data path for the follow-up (task brief requirement 3): the SAME executor
+    `query_structured_data` uses (`execute_sql_query`), routed fresh for the follow-up's OWN
+    text (never the original question's own routing), run through the bounded investigation
+    loop (`run_sql_investigation` - `SQL_LOOP_MAX_STEPS`, unchanged). `search` is deliberately
+    None: the second look always runs the document search as its own, separate, explicit second
+    tool (below) rather than letting the loop's internal fallback decide whether to - "both: ...
+    and the document search", not one or the other.
+
+    Raises on a genuine tool failure rather than swallowing it - the caller's own `try` is what
+    makes the whole second look fail safe; this function does not duplicate that."""
+    from app.services.sql_tool import (column_value_reader, execute_sql_query,
+                                       place_code_resolver, route_tables)
+    from app.services.sql_loop import run_sql_investigation
+
+    live_table_names = [t.get("table_name") for t in (structured_tables or [])
+                         if isinstance(t, dict) and t.get("table_name")]
+    routed_cards = route_tables(followup_text, user_id, supabase_client,
+                                live_table_names=live_table_names)
+    investigation = run_sql_investigation(
+        followup_text, user_id, supabase_client,
+        execute=execute_sql_query,
+        search=None,
+        routed_cards=routed_cards,
+        max_steps=get_sql_loop_max_steps(),
+        user_question=followup_text,
+        column_values=column_value_reader(user_id, supabase_client),
+        # Task W13-A1: the question's own printed place codes, resolved to location ids the
+        # same way the SQL-generation prompt resolves them - lazy, so this costs nothing
+        # unless PLACE_NOT_FILTERED actually asks for it.
+        place_codes=place_code_resolver(user_id, supabase_client),
+    )
+    return investigation.result_text if investigation else ""
+
+
+def _second_look_search(followup_text: str, user_id, supabase_client):
+    """The document-search path for the follow-up (task brief requirement 3):
+    `_execute_search_documents`, the SAME retrieval entry point `search_documents` uses, with
+    the SAME windowing (`_windowed_excerpt`) every other branch applies before showing an
+    excerpt to an answer model. Returns (text, chunk count) - "" / 0 when nothing was found,
+    never a distinct sentinel the caller would have to special-case."""
+    chunks = _execute_search_documents(
+        search_query=followup_text, metadata_filter=None,
+        user_id=user_id, supabase_client=supabase_client,
+    )
+    if not chunks:
+        return "", 0
+    windowed = [_windowed_excerpt(_current_question.get(), c["content"]) for c in chunks]
+    text = "\n\n---\n\n".join(f"[Source: {c['file_name']}]\n{w}"
+                              for c, w in zip(chunks, windowed))
+    return text, len(chunks)
+
+
+def _run_agentic_second_look(client, model, contents, system_with_context, answer_temp: float,
+                              question_text: str, sql_results, excerpts, tools_ran, search_fn,
+                              use_claude: bool, *, user_id, supabase_client, has_documents: bool,
+                              text_to_sql_enabled: bool, structured_tables):
+    """The agentic second look, end to end (task W10-A1). Yields SSE tuples - a
+    `tool_start`/`tool_done` pair for each follow-up tool actually attempted, shaped exactly as
+    the normal dispatch shapes them (requirement 3) - and ends with exactly one
+    `("second_look_answer", text)` event: the text to stream. Never raises past the first
+    buffered answer (see the module-level comment above for the fail-safe contract)."""
+    first_answer = _buffered_answer(client, model, contents, system_with_context, answer_temp,
+                                     question_text, sql_results, excerpts, tools_ran,
+                                     search_fn, use_claude)
+    sentences = refusal_sentences(first_answer)
+    if not sentences:
+        yield ("second_look_answer", first_answer)
+        return
+
+    try:
+        followup_text = _write_followup_question(client, model, answer_temp, question_text,
+                                                  first_answer, sentences, use_claude)
+    except Exception as e:
+        logger.warning(f"second look: the follow-up question call failed "
+                       f"({type(e).__name__}: {e}); streaming the first answer")
+        yield ("second_look_answer", first_answer)
+        return
+
+    if not followup_text:
+        yield ("second_look_answer", first_answer)
+        return
+
+    try:
+        sql_text = ""
+        if text_to_sql_enabled:
+            yield ("tool_start", json.dumps({
+                "tool": "query_structured_data", "args": {"question": followup_text}}))
+            sql_text = _second_look_sql(followup_text, user_id, supabase_client,
+                                        structured_tables)
+            yield ("tool_done", json.dumps({
+                "tool": "query_structured_data", "detail": "Second look complete"}))
+
+        doc_text, doc_count = "", 0
+        if has_documents:
+            yield ("tool_start", json.dumps({
+                "tool": "search_documents", "args": {"query": followup_text}}))
+            doc_text, doc_count = _second_look_search(followup_text, user_id, supabase_client)
+            yield ("tool_done", json.dumps({
+                "tool": "search_documents", "detail": f"Found {doc_count} results"}))
+    except Exception as e:
+        logger.warning(f"second look: a follow-up tool failed ({type(e).__name__}: {e}); "
+                       f"streaming the first answer")
+        yield ("second_look_answer", first_answer)
+        return
+
+    new_system = build_second_look_system(system_with_context, sql_text, doc_text)
+    new_sql_results = list(sql_results) + ([sql_text] if sql_text else [])
+    new_excerpts = list(excerpts) + ([doc_text] if doc_text else [])
+    try:
+        final_answer = _buffered_answer(client, model, contents, new_system, answer_temp,
+                                         question_text, new_sql_results, new_excerpts,
+                                         tools_ran, search_fn, use_claude)
+    except Exception as e:
+        logger.warning(f"second look: the re-answer generation failed "
+                       f"({type(e).__name__}: {e}); streaming the first answer")
+        yield ("second_look_answer", first_answer)
+        return
+    yield ("second_look_answer", final_answer or first_answer)
+
+
+# =============================================================================================
+# PLAN-FIRST FOR A MULTI-PART QUESTION (task W11-A1, spec 2026-09-30). Behind PLAN_FIRST=1.
+#
+# A multi-part question ("what assets are in room X, and what maintenance does the manual
+# prescribe for each?") gets ONE tool call today - the tool-choice turn picks one tool, that
+# tool answers one part, and the rest is silently dropped from the answer with no refusal
+# sentence naming it - so `second_look.py`'s own refusal-triggered mechanism, which scans the
+# ANSWER for a sentence saying something is "not recorded", has nothing to find. This runs
+# BEFORE the tool-choice turn instead: PLAN splits the question into parts, EXECUTE runs the
+# app's own tools once per part, COMPOSE answers every part at once, and a RETRY SET (CHECK's
+# own finding, widened by task W12-A1 - see below) re-runs any part the compose silently
+# missed or whose tool came back with nothing.
+#
+# PLAN: one buffered call on the answer role's own provider, parsed defensively as strict JSON
+# (`plan_first.parse_planner_response`) - a single-part question, malformed JSON, or any other
+# reason fewer than 2 usable parts come back all mean the SAME thing: `None`, and the caller
+# just lets the pre-existing tool-choice turn run for the ORIGINAL question, completely
+# unchanged (requirement 1: "a question with one part -> the normal path, unchanged").
+#
+# EXECUTE runs `_second_look_sql`/`_second_look_search` - the EXACT SAME helpers the agentic
+# second look above already uses - once per part, gated by that part's own declared source and
+# by whether the capability (structured data / documents) is even on for this turn. ONE
+# EXCEPTION (task W12-A1, requirement 3): a part whose own text
+# `table_router.asks_about_maintenance_frequency` always tries BOTH tools on this first pass,
+# because a "how often" question can be mislabelled either way by the planner and the data it
+# needs may be sitting in either kind of source - see `_run_plan_parts`'s own docstring.
+#
+# COMPOSE and the CHECK-triggered re-compose both go through `_buffered_answer`, the SAME
+# single place every buffered generation in this file goes through - so ANSWER_CHECK, if on,
+# still applies to whichever generation ends up final (requirement 5), with zero new
+# machinery. CHECK (`_write_check_response`) returns `[]` for "nothing wrong", a list of
+# 0-based part indexes to re-run, or `None` when its own reply does not parse - `None` is
+# never confused with "nothing wrong" (see `plan_first.parse_check_response`'s own docstring).
+#
+# THE RETRY SET (task W12-A1 requirement 4; widened by task W13-A1 requirement 2) is the
+# UNION of THREE sources: CHECK's own named parts (when the call succeeds and parses),
+# `_empty_first_pass_indexes(results)` - every part whose structured-data tool ran on the
+# first pass and came back empty (the recorded defect: a part routed to the wrong tables
+# came back with an honest "no result", and CHECK itself had been counting that as
+# answered) - and, new in task W13-A1, EVERY part index at all when `plan_first.
+# hedge_sentences(composed)` is non-empty: a composed answer can hedge ("My lookup covered
+# only <one level>, so I can't say whether ...") without ever using a word
+# `answer_check.refusal_sentences` recognises, so CHECK read the comparison as addressed and
+# no retry happened on the recorded run. Both the empty-result half and the hedge half are
+# pure Python over data already in hand (the first pass's own `results`, the already-composed
+# `composed` text), so BOTH are computed BEFORE CHECK is even attempted and do not depend on
+# CHECK succeeding, parsing, or being reachable at all - a CHECK failure only means its OWN
+# third of the union contributes nothing, never that the other two are skipped too. An empty
+# union (CHECK found nothing, no part came back empty, and the composed answer does not
+# hedge) ships the composed answer exactly as `[]` alone used to.
+#
+# FAILS SAFE, but to TWO DIFFERENT targets depending on whether a composed answer already
+# exists (ruling W11-R1, which revised the original requirement-4 text below).
+#
+# Before the FIRST compose has produced anything (PLAN failing, the initial EXECUTE raising,
+# or that first compose call itself raising), there is nothing yet to keep - this is
+# requirement 4's original "fall back to the NORMAL PATH's answer for the whole question":
+# `_run_plan_first` yields exactly one `("plan_first_fallback", "")` and stops;
+# `stream_response` responds to that by simply NOT returning - letting the pre-existing
+# tool-choice turn and dispatch run for the original question exactly as if PLAN_FIRST had
+# decided "one part" from the start.
+#
+# ONCE the first compose HAS produced an answer, CHECK is a REFINEMENT, not a gate (ruling
+# W11-R1) - and task W12-A1 keeps that guarantee while widening what can trigger a retry: the
+# check call itself raising, its reply failing to parse, the retry set's own re-run raising, or
+# the SECOND compose raising all KEEP that first composed answer instead - `_run_plan_first`
+# yields `("plan_first_answer", composed)`, the SAME success event, not the fallback one. The
+# normal path is never reached once a composed answer exists.
+#
+# Either way, any tool_start/tool_done events already emitted before a failure stay in the
+# stream (SSE is append-only) - accepted as-is, not worked around: a human reading a trace
+# live may see two separate tool-call sequences for one turn on a PLAN/EXECUTE/first-compose
+# fallback (the plan-first attempt's own, then the normal path's), which is harmless but
+# worth knowing.
+# =============================================================================================
+
+def _write_question_plan(client, model, answer_temp: float, question_text: str,
+                          use_claude: bool):
+    """The ONE plan call (task brief requirement 1), on the answer role's own provider: reads
+    the user's question and returns its parts, parsed defensively
+    (`plan_first.parse_planner_response`) - `None` for a single-part question, malformed JSON,
+    or anything else that does not resolve to at least 2 usable parts, which the caller treats
+    as "the normal path, unchanged, no further plan-first calls this turn"."""
+    user_text = build_planner_user_text(question_text)
+    plan_contents = [types.Content(role="user", parts=[types.Part(text=user_text)])]
+    if use_claude:
+        from app.services.llm_provider import generate_answer_text
+        raw = generate_answer_text(system_text=PLANNER_SYSTEM_PROMPT,
+                                    contents=plan_contents, name="plan_first_plan")
+    else:
+        response = client.models.generate_content(
+            model=model, contents=plan_contents,
+            config=apply_llm_seed(types.GenerateContentConfig(
+                system_instruction=PLANNER_SYSTEM_PROMPT, temperature=answer_temp)),
+        )
+        raw = _checked_answer_text(response)
+    return parse_planner_response(raw)
+
+
+def _write_check_response(client, model, answer_temp: float, parts, composed_answer: str,
+                           use_claude: bool):
+    """The ONE check call (task brief requirement 4), on the answer role's own provider: reads
+    the parts and the answer composed for them, and returns which parts (already converted
+    down to 0-based indexes) it did not address - `[]` for a clean check (ship the composed
+    answer as-is), or `None` when the reply does not parse into the expected shape at all,
+    which the caller (ruling W11-R1: CHECK is a refinement, not a gate) treats the SAME as
+    `[]` would have been treated BEFORE this ruling existed - keep and ship the already-
+    composed answer, never fall back to the normal path for a CHECK-stage problem."""
+    user_text = build_check_user_text(parts, composed_answer)
+    check_contents = [types.Content(role="user", parts=[types.Part(text=user_text)])]
+    if use_claude:
+        from app.services.llm_provider import generate_answer_text
+        raw = generate_answer_text(system_text=CHECK_SYSTEM_PROMPT,
+                                    contents=check_contents, name="plan_first_check")
+    else:
+        response = client.models.generate_content(
+            model=model, contents=check_contents,
+            config=apply_llm_seed(types.GenerateContentConfig(
+                system_instruction=CHECK_SYSTEM_PROMPT, temperature=answer_temp)),
+        )
+        raw = _checked_answer_text(response)
+    return parse_check_response(raw, len(parts))
+
+
+def _run_plan_parts(indexed_parts, base_text: str, *, broaden: bool, user_id, supabase_client,
+                     has_documents: bool, text_to_sql_enabled: bool, structured_tables):
+    """Runs the app's own tools for each part in `indexed_parts` - a list of (ORIGINAL 0-based
+    index into the full plan, part dict) pairs, so a RETRY subset's own tool_start/tool_done
+    events still name the part's original number, never its position within the retry
+    (requirement 2's trace visibility). Against ITS OWN text, or that text broadened by
+    `base_text` (the original question) when `broaden` - requirement 4's re-run, "the part
+    text broadened by the question's own subject".
+
+    `broaden` ALSO means "run BOTH tools again" literally (requirement 4): a retried part
+    tries structured-data AND documents regardless of what it was originally labelled, because
+    a wrong label is exactly why it may have gone unanswered the first time. A first (not
+    retried) pass still honours each part's own declared source - WITH ONE EXCEPTION
+    (requirement 3, task W12-A1): a part whose own text
+    `table_router.asks_about_maintenance_frequency` also runs BOTH tools on this first pass,
+    whatever it was declared. A "how often" question reads like a manual question just as
+    easily as a structured lookup, so the planner can mislabel it either way, and the data
+    it needs may equally be sitting in either kind of source - each tool is still gated by its
+    own capability below either way, so forcing "both" here never bypasses `has_documents`/
+    `text_to_sql_enabled`.
+
+    Yields a tool_start/tool_done pair per tool actually attempted (gated by the capability
+    being on for this turn either way) and returns a list of (index, result) pairs, same
+    length and order as `indexed_parts` - `result` is `{"sql": str|None, "doc": str|None}`,
+    `None` meaning that tool was never attempted for this part (not "attempted and found
+    nothing", which is an empty string with its own labelled line - see
+    `plan_first.build_compose_system`).
+
+    Raises on a genuine tool failure rather than swallowing it - the caller's own try is what
+    makes the whole plan-first flow fail safe; this function does not duplicate that (same
+    contract as `_second_look_sql`/`_second_look_search`, which it calls directly)."""
+    results = []
+    for idx, part in indexed_parts:
+        part_text = part.get("question", "")
+        run_text = build_broadened_text(part_text, base_text) if broaden else part_text
+        source = "both" if broaden else (part.get("source") or "both")
+        # Requirement 3 (task W12-A1): a frequency part gets BOTH tools on its FIRST pass
+        # whatever it was declared - never on the retry pass, where `broaden` already forces
+        # "both" for every retried part regardless of this predicate.
+        if not broaden and asks_about_maintenance_frequency(part_text):
+            source = "both"
+
+        sql_text = None
+        if source in ("data", "both") and text_to_sql_enabled:
+            yield ("tool_start", json.dumps({"tool": "query_structured_data",
+                                              "args": {"question": run_text}}))
+            sql_text = _second_look_sql(run_text, user_id, supabase_client, structured_tables)
+            yield ("tool_done", json.dumps({"tool": "query_structured_data",
+                                            "detail": f"Plan part {idx + 1} complete"}))
+
+        doc_text = None
+        if source in ("documents", "both") and has_documents:
+            yield ("tool_start", json.dumps({"tool": "search_documents",
+                                              "args": {"query": run_text}}))
+            doc_text, doc_count = _second_look_search(run_text, user_id, supabase_client)
+            yield ("tool_done", json.dumps({
+                "tool": "search_documents",
+                "detail": f"Plan part {idx + 1}: found {doc_count} results"}))
+
+        results.append((idx, {"sql": sql_text, "doc": doc_text}))
+    return results
+
+
+def _tools_ran_from_results(results) -> list:
+    """Which tool NAMES actually ran across every part's own result (for `_buffered_answer`'s
+    `tools_ran`, which `answer_check.find_problems`'s REFUSED_WITHOUT_SEARCH reads) - `None`
+    means "never attempted", so this is accurate rather than a hardcoded guess at what
+    plan-first always tries."""
+    tools = []
+    if any(r["sql"] is not None for r in results):
+        tools.append("query_structured_data")
+    if any(r["doc"] is not None for r in results):
+        tools.append("search_documents")
+    return tools
+
+
+def _empty_first_pass_indexes(results) -> set:
+    """Which 0-based part indexes ran their structured-data tool on the FIRST pass and got
+    back nothing (task W12-A1, requirement 4): the recorded defect is a part whose SQL came
+    back empty ("Query returned no results", including the deliberate no-match sentinel a
+    SQL writer can return) being silently accepted as "answered" because the part's own
+    refusal never made it into the composed answer for CHECK to notice.
+
+    `result["sql"]` is `None` when the structured-data tool was never even ATTEMPTED for
+    that part (a documents-only part, or the capability being off for this turn) - only a
+    part whose SQL DID run counts here; `sql_loop.result_is_empty` is the SAME empty-result
+    test the rest of the app already uses (`openai_client._sql_result_is_empty`'s pinned
+    duplicate), so this reads EMPTY exactly the way every other part of the app does.
+
+    Pure and deterministic - no model call, so this half of the retry set never depends on
+    CHECK succeeding, parsing, or being called at all (see `_run_plan_first`)."""
+    from app.services.sql_loop import result_is_empty
+    return {i for i, r in enumerate(results)
+            if r["sql"] is not None and result_is_empty(r["sql"])}
+
+
+def _run_plan_first(client, model, contents, system_base_text: str, answer_temp: float,
+                     question_text: str, parts, use_claude: bool, search_fn, *, user_id,
+                     supabase_client, has_documents: bool, text_to_sql_enabled: bool,
+                     structured_tables):
+    """Plan-first, end to end (task W11-A1, ruling W11-R1; retry set widened by task W12-A1):
+    EXECUTE every part's own tools, COMPOSE one answer, CHECK it once, and - for the RETRY
+    SET (requirement 4, task W12-A1) - re-EXECUTE with the part text broadened and BOTH tools
+    tried, then COMPOSE once more. Yields a tool_start/tool_done pair per tool per part, and
+    ends with exactly ONE terminal event: `("plan_first_answer", text)` on success, or
+    `("plan_first_fallback", "")` on an error in PLAN/EXECUTE/the FIRST compose - the only
+    failures with no composed answer yet to keep.
+
+    THE RETRY SET (task W12-A1; widened by task W13-A1 requirement 2) is the UNION of THREE
+    sources, computed once, after the FIRST compose: CHECK's own named parts
+    (`_write_check_response`'s `unanswered`, when the call succeeds AND parses),
+    `_empty_first_pass_indexes(results)` - every part whose structured-data tool ran on the
+    first pass and came back empty - and, new in task W13-A1, EVERY part index when
+    `plan_first.hedge_sentences(composed)` finds the composed answer hedging (a sentence
+    `answer_check.refusal_sentences` catches, or one matching `plan_first`'s own narrower
+    hedge vocabulary). The second and third sources need no model call at all, which is
+    exactly why neither depends on CHECK: a CHECK that raises or returns unparseable JSON
+    contributes an EMPTY set to the union rather than aborting anything, so an empty-result
+    part or a hedging answer still gets retried even when CHECK itself failed. The union is
+    de-duplicated by construction (all three are sets of the same 0-based indexes), so a
+    part named by more than one source is still retried exactly once.
+
+    RULING W11-R1: CHECK is a refinement, not a gate - and task W12-A1 keeps that guarantee
+    while widening what triggers a retry. Once the FIRST compose has produced an answer, the
+    check call itself raising, its reply failing to parse, a named/empty part's re-run
+    raising, or the SECOND compose raising all KEEP and yield that first composed answer
+    (`("plan_first_answer", composed)`) rather than discarding it for the normal-path
+    fallback - only PLAN, the initial EXECUTE, and the FIRST compose can still trigger
+    `("plan_first_fallback", "")`, because only THOSE have no composed answer to fall back
+    on. The caller is responsible for actually running the normal path when it sees the
+    fallback event; this function never does so itself - see the module-level comment above
+    for the full fail-safe contract."""
+    try:
+        indexed_results = yield from _run_plan_parts(
+            list(enumerate(parts)), question_text, broaden=False, user_id=user_id,
+            supabase_client=supabase_client, has_documents=has_documents,
+            text_to_sql_enabled=text_to_sql_enabled, structured_tables=structured_tables)
+    except Exception as e:
+        logger.warning(f"plan-first: a part's tool call failed ({type(e).__name__}: {e}); "
+                       f"falling back to the normal path (nothing composed yet to keep)")
+        yield ("plan_first_fallback", "")
+        return
+    results = [r for _, r in indexed_results]
+
+    composed_system = build_compose_system(system_base_text, parts, results)
+    try:
+        composed = _buffered_answer(client, model, contents, composed_system, answer_temp,
+                                     question_text, [r["sql"] for r in results if r["sql"]],
+                                     [r["doc"] for r in results if r["doc"]],
+                                     _tools_ran_from_results(results), search_fn, use_claude)
+    except Exception as e:
+        logger.warning(f"plan-first: the compose call failed ({type(e).__name__}: {e}); "
+                       f"falling back to the normal path (nothing composed yet to keep)")
+        yield ("plan_first_fallback", "")
+        return
+
+    # From here on COMPOSE has already produced `composed` - ruling W11-R1 says CHECK is a
+    # refinement, not a gate: every failure below KEEPS `composed` rather than discarding it.
+    #
+    # The empty-result half of the retry set (task W12-A1, requirement 4) is computed from
+    # `results` alone - no model call, so it can never fail and never depends on CHECK.
+    #
+    # RULING W12-R8 (fix round 1): this union is UNCONDITIONAL on a frequency part too - a
+    # part requirement 3 forced onto BOTH tools is retried on an empty SQL result even when
+    # its OWN document search already fully answered it and CHECK found nothing wrong. Kept
+    # deliberately, not a bug: a recorded case found only one of two schedule rows through
+    # the document search alone, so a second, broadened try at the data path is worth one
+    # extra retry round even on an already-correct answer - the cost is bounded (at most one
+    # extra round, same as any other retry) and ruling W11-R1's guarantee still holds (the
+    # already-good pass-1 content is never discarded, only ever added to or repeated).
+    empty_indexes = _empty_first_pass_indexes(results)
+
+    # Task W13-A1, requirement 2 - HEDGE RETRY. A recorded run's composed answer said two
+    # counts "agree" while a later sentence hedged ("My lookup covered only <one level>, so
+    # I can't say whether ...") - no word of that sentence is in `answer_check.
+    # refusal_sentences`'s own vocabulary, so CHECK read the comparison as addressed and
+    # shipped it clean. `plan_first.hedge_sentences` widens the vocabulary that reads
+    # `composed` for exactly this shape; a non-empty result means EVERY part is added to the
+    # retry set, not just whichever part the hedge happens to be about - the sentence alone
+    # cannot say which, and ruling W11-R1's guarantee (the first composed answer is never
+    # discarded, only ever added to or repeated) makes retrying every part safe. Pure Python
+    # over `composed`'s own text, so - like the empty-result half above - it never depends on
+    # CHECK succeeding, parsing, or being reachable at all.
+    hedge_indexes = set(range(len(parts))) if hedge_sentences(composed) else set()
+
+    check_unanswered = set()
+    try:
+        unanswered = _write_check_response(client, model, answer_temp, parts, composed,
+                                           use_claude)
+        if unanswered:
+            check_unanswered = set(unanswered)
+        elif unanswered is None:
+            logger.warning("plan-first: the check call returned unparseable JSON; relying "
+                           "on the empty-result retry alone for this turn (ruling W11-R1 / "
+                           "task W12-A1: the empty-part retry does not depend on CHECK)")
+    except Exception as e:
+        logger.warning(f"plan-first: the check call failed ({type(e).__name__}: {e}); "
+                       f"relying on the empty-result retry alone for this turn (ruling "
+                       f"W11-R1 / task W12-A1: the empty-part retry does not depend on "
+                       f"CHECK)")
+
+    # THE UNION (task W12-A1; widened by task W13-A1): CHECK's own named parts (when it
+    # parsed), plus every part whose first-pass SQL came back empty, plus - when the composed
+    # answer hedges - every part at all - sorted, de-duplicated by set union. An empty union
+    # means none of the three sources found anything to retry: ship the composed answer, same
+    # as today.
+    retry_set = sorted(check_unanswered | empty_indexes | hedge_indexes)
+    if not retry_set:
+        yield ("plan_first_answer", composed)
+        return
+
+    try:
+        retry_results = yield from _run_plan_parts(
+            [(i, parts[i]) for i in retry_set], question_text, broaden=True, user_id=user_id,
+            supabase_client=supabase_client, has_documents=has_documents,
+            text_to_sql_enabled=text_to_sql_enabled, structured_tables=structured_tables)
+
+        merged = list(results)
+        for idx, new_result in retry_results:
+            merged[idx] = new_result
+
+        composed_system2 = build_compose_system(system_base_text, parts, merged)
+        final_answer = _buffered_answer(client, model, contents, composed_system2, answer_temp,
+                                        question_text, [r["sql"] for r in merged if r["sql"]],
+                                        [r["doc"] for r in merged if r["doc"]],
+                                        _tools_ran_from_results(merged), search_fn, use_claude)
+    except Exception as e:
+        logger.warning(f"plan-first: the retry set's re-run or the second compose failed "
+                       f"({type(e).__name__}: {e}); keeping the already-composed answer "
+                       f"instead of falling back (ruling W11-R1)")
+        yield ("plan_first_answer", composed)
+        return
+    yield ("plan_first_answer", final_answer or composed)
+
+
 @traceable(name="gemini_chat", run_type="llm")
 def stream_response(
     messages: List[dict],
@@ -1163,6 +1814,20 @@ def stream_response(
     # excerpt trimming need those terms or the relevant passage gets cut.
     _user_turns = [m["content"] for m in messages if m["role"] == "user"][-2:]
     _current_question.set(" ".join(_user_turns))
+
+    # Claude path (task W9-A1): LLM_PROVIDER_ANSWER=anthropic sends each of the four
+    # answer prompts below to Claude instead - same system text, same conversation
+    # turns (merged onto Claude's role pair), the same configured answer temperature
+    # as its source of truth (though never actually sent as a request parameter -
+    # see llm_provider's module docstring for why). Read once here; unset/"gemini"
+    # (default) leaves every branch below byte-identical to before this task.
+    # ANSWER_CHECK=1's own buffered re-check path (_generate_checked_answer, below)
+    # is Gemini-only machinery gated by a separate flag - not one of the four
+    # prompts this switch covers - and is deliberately left untouched regardless of
+    # this switch; see the task report.
+    from app.services.llm_provider import get_llm_provider, stream_answer_text, generate_tool_choice
+
+    _answer_on_claude = get_llm_provider("answer") == "anthropic"
 
     # If manual filter is set, pre-retrieve and use context injection (no tool calling)
     if manual_metadata_filter and has_documents and supabase_client and user_id:
@@ -1190,11 +1855,19 @@ Document excerpts:
             role = "user" if msg["role"] == "user" else "model"
             contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
+        if _answer_on_claude:
+            for text in stream_answer_text(system_text=system_text, contents=contents,
+                                           name="answer_manual_filter"):
+                yield ("token", text)
+            yield ("done", "")
+            return
+
         client = _get_client()
         model = get_llm_model()
         response = client.models.generate_content_stream(
             model=model, contents=contents,
-            config=types.GenerateContentConfig(system_instruction=system_text, temperature=0.2),
+            config=apply_llm_seed(types.GenerateContentConfig(
+                system_instruction=system_text, temperature=get_answer_temperature())),
         )
         for chunk in response:
             if chunk.text:
@@ -1275,7 +1948,7 @@ Document excerpts:
             function_calling_config=types.FunctionCallingConfig(mode="AUTO")
         )
 
-    config = types.GenerateContentConfig(
+    config = apply_llm_seed(types.GenerateContentConfig(
         system_instruction=system_text,
         tools=tools,
         tool_config=tool_config,
@@ -1283,7 +1956,7 @@ Document excerpts:
         # Deterministic tool routing — default temperature makes the
         # search-vs-SQL choice flaky for lookup questions
         temperature=0,
-    )
+    ))
 
     # Emit a thinking event when tools are available so the frontend can show status
     if function_declarations:
@@ -1326,13 +1999,99 @@ Document excerpts:
     # Then stream the final response to the user
     from app.services.llm_usage import generate_with_usage
 
-    response = generate_with_usage(
-        client,
-        model=model,
-        contents=contents,
-        config=config,
-        name="chat_tool_loop",
-    )
+    # PLAN-FIRST (task W11-A1): wired HERE, before the tool-choice turn - the earliest point
+    # the brief asks for, and reached with no restructuring: the question and the user's own
+    # tables/capabilities (`structured_tables`, `text_to_sql_enabled`, `has_documents`) are
+    # already known by here from this function's own parameters and the cheap settings reads
+    # just above. NOT reachable from the `manual_metadata_filter` early-return branch at the
+    # top of this function (that branch returns long before this point - a separate,
+    # pre-existing, rare feature, left unwired for the same reason ANSWER_CHECK/the second
+    # look above never touch it either). See the big comment above `_run_plan_first` for the
+    # full design. A single-part plan, a malformed/erroring plan call, or ANY error inside
+    # EXECUTE/COMPOSE/CHECK all fall through to the code below completely UNCHANGED, exactly
+    # as if PLAN_FIRST had never run for this question - requirement 1's "the normal path,
+    # unchanged" and requirement 4's "fall back to the normal path's answer for the whole
+    # question" are the SAME fall-through, not two different code paths.
+    if get_plan_first_enabled():
+        _plan_question_text = next((m["content"] for m in reversed(messages)
+                                    if m["role"] == "user"), "")
+        _plan_answer_temp = get_answer_temperature()
+        try:
+            _plan_parts = _write_question_plan(client, model, _plan_answer_temp,
+                                               _plan_question_text, _answer_on_claude)
+        except Exception as e:
+            logger.warning(f"plan-first: the plan call failed ({type(e).__name__}: {e}); "
+                           f"falling back to the normal path")
+            _plan_parts = None
+
+        if _plan_parts:
+            _plan_system_base = (
+                "You are a helpful assistant. Use the provided tool results to answer the "
+                f"user's question accurately.\n{_today_line()}\n{OUTPUT_FORMAT_RULES}\n"
+                f"{CHANGE_IMPACT_ANSWER_SHAPE}"
+            )
+
+            def _plan_first_search(q):
+                found = _execute_search_documents(
+                    search_query=q, metadata_filter=None,
+                    user_id=user_id, supabase_client=supabase_client,
+                )
+                if not found:
+                    return ""
+                windowed = [_windowed_excerpt(_current_question.get(), c["content"])
+                           for c in found]
+                return "\n\n---\n\n".join(f"[Source: {c['file_name']}]\n{w}"
+                                         for c, w in zip(found, windowed))
+
+            for _pf_evt, _pf_data in _run_plan_first(
+                client, model, contents, _plan_system_base, _plan_answer_temp,
+                _plan_question_text, _plan_parts, _answer_on_claude,
+                _plan_first_search if has_documents else None,
+                user_id=user_id, supabase_client=supabase_client, has_documents=has_documents,
+                text_to_sql_enabled=text_to_sql_enabled, structured_tables=structured_tables,
+            ):
+                if _pf_evt == "plan_first_answer":
+                    if _pf_data:
+                        yield ("token", _pf_data)
+                    yield ("done", "")
+                    return
+                elif _pf_evt == "plan_first_fallback":
+                    break
+                else:
+                    yield (_pf_evt, _pf_data)
+            # Falling through here (via break, or - defensively - the generator ending
+            # without a terminal event) continues into the pre-existing tool-choice turn
+            # below, unchanged: plan-first either fully answers the turn (returned above) or
+            # changes nothing at all about what happens next.
+
+    # Claude path (task W9-A2): LLM_PROVIDER_TOOLS=anthropic sends this tool-choice turn to
+    # Claude instead of Gemini - the SAME system text (`system_text`, above), the SAME merged
+    # conversation turns, the SAME function declarations (converted faithfully to Claude's
+    # tool shape; see llm_provider.function_declarations_to_claude_tools), tool choice "auto"
+    # (Gemini's own mode="AUTO" just above). `generate_tool_choice` returns an object that
+    # duck-types the exact attributes every line below this one reads off a non-streaming
+    # google-genai response, so NOTHING after this call needed to change for either provider -
+    # including the MALFORMED_FUNCTION_CALL check right below (Claude has no equivalent; its
+    # finish_reason is always None here, so that check's `and` short-circuits and the branch is
+    # simply never taken) and the "no function call" branch further down (the model's own
+    # text, read the same way). Temperature is never sent to Claude on this call either (see
+    # llm_provider's module docstring); a Claude API error propagates out of this call exactly
+    # as a Gemini API error already does - neither is caught here.
+    if get_llm_provider("tools") == "anthropic":
+        response = generate_tool_choice(
+            system_text=system_text,
+            contents=contents,
+            function_declarations=function_declarations,
+            name="chat_tool_loop",
+        )
+    else:
+        response = generate_with_usage(
+            client,
+            model=model,
+            contents=contents,
+            config=config,
+            name="chat_tool_loop",
+        )
 
     # Handle malformed function calls — retry without tools using context injection
     if (response.candidates and
@@ -1356,9 +2115,17 @@ If the excerpts do not contain enough information to answer, say so and answer f
 
 Document excerpts:
 {context}"""
+        if _answer_on_claude:
+            for text in stream_answer_text(system_text=fallback_system, contents=contents,
+                                           name="answer_malformed_fallback"):
+                yield ("token", text)
+            yield ("done", "")
+            return
+
         response_fb = client.models.generate_content_stream(
             model=model, contents=contents,
-            config=types.GenerateContentConfig(system_instruction=fallback_system, temperature=0.2),
+            config=apply_llm_seed(types.GenerateContentConfig(
+                system_instruction=fallback_system, temperature=get_answer_temperature())),
         )
         for chunk in response_fb:
             if chunk.text:
@@ -1375,6 +2142,14 @@ Document excerpts:
                 break
 
     if has_function_call:
+        # ANSWER_CHECK (task W8-A1): which tools this turn actually invoked, so the checker's
+        # REFUSED_WITHOUT_SEARCH can tell "SQL alone" from "SQL, then a cross-check search" -
+        # `tool_name` below gets reassigned on a fallback, which loses exactly that distinction
+        # for the APPENDED cross-check case (T7's `source_tool` stays TOOL_SQL on purpose).
+        tools_used = []
+        # ANSWER_CHECK: the exact windowed excerpt text(s) shown to the answer model this
+        # turn, across every branch that can produce one - UNGROUNDED_NUMBER's pool.
+        excerpt_pool = []
         # Extract the function call
         fc = None
         for part in response.candidates[0].content.parts:
@@ -1404,6 +2179,7 @@ Document excerpts:
 
         # Dispatch to the correct tool executor
         if tool_name == "search_documents":
+            tools_used.append("search_documents")
             search_query = args.pop("query", "")
             # SEARCH-01: extract optional narrowing args BEFORE metadata_filter
             # assembly so they don't leak into the metadata_filter dict (which
@@ -1483,8 +2259,10 @@ Document excerpts:
             if chunks:
                 from collections import Counter
                 doc_counts = Counter(c["file_name"] for c in chunks)
+                windowed = [_windowed_excerpt(_current_question.get(), c["content"]) for c in chunks]
+                excerpt_pool.extend(windowed)  # ANSWER_CHECK: UNGROUNDED_NUMBER's pool
                 result_text = "\n\n---\n\n".join(
-                    f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
+                    f"[Source: {c['file_name']}]\n{w}" for c, w in zip(chunks, windowed)
                 )
                 dominant_doc, dominant_count = doc_counts.most_common(1)[0]
                 if dominant_count / len(chunks) >= 0.6:
@@ -1507,8 +2285,9 @@ Document excerpts:
                 yield ("tool_done", json.dumps({"tool": tool_name, "detail": "No documents found"}))
 
         elif tool_name == "query_structured_data":
+            tools_used.append("query_structured_data")
             from app.services.sql_tool import (column_value_reader, execute_sql_query,
-                                               route_tables)
+                                               place_code_resolver, route_tables)
             from app.services.sql_loop import (APPENDED_CROSSCHECKS, COUNT_CROSSCHECK,
                                                CROSSCHECK_EXCERPTS, EMPTY,
                                                iter_sql_investigation)
@@ -1574,6 +2353,7 @@ Document excerpts:
                 """The loop's `search`: today's excerpt block, plus the chunk count
                 the closing `tool_done` reports (the loop is handed text, so the
                 count has to be recorded here or it is lost)."""
+                tools_used.append("search_documents")
                 chunks = _execute_search_documents(
                     search_query=query,
                     metadata_filter=None,
@@ -1583,8 +2363,13 @@ Document excerpts:
                 found_count[0] = len(chunks) if chunks else 0
                 if not chunks:
                     return ""
+                windowed = [_windowed_excerpt(_current_question.get(), c["content"]) for c in chunks]
+                # ANSWER_CHECK (task W8-A1): the exact excerpt text the loop showed the
+                # answer model, for UNGROUNDED_NUMBER's grounding pool - never the raw
+                # chunk, which may run on well past what the model was actually shown.
+                excerpt_pool.extend(windowed)
                 return "\n\n---\n\n".join(
-                    f"[Source: {c['file_name']}]\n{_windowed_excerpt(_current_question.get(), c['content'])}" for c in chunks
+                    f"[Source: {c['file_name']}]\n{w}" for c, w in zip(chunks, windowed)
                 )
 
             try:
@@ -1625,6 +2410,10 @@ Document excerpts:
                 # carries the values can still be sent - so SQL_LOOP_MAX_STEPS=1
                 # never reads at all.
                 column_values=column_value_reader(user_id, supabase_client),
+                # Task W13-A1: the question's own printed place codes, resolved to location
+                # ids the same way the SQL-generation prompt resolves them. Lazy, same as
+                # column_values above - costs nothing unless PLACE_NOT_FILTERED asks for it.
+                place_codes=place_code_resolver(user_id, supabase_client),
             ):
                 if _evt == "step":
                     if pending_done:
@@ -1969,35 +2758,116 @@ When citing web sources, include the URLs.
 Tool ({tool_name}) results:
 {truncated_result}"""
 
-        # Stream the final answer without tools (avoids thought_signature issue)
-        response2 = client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(system_instruction=system_with_context, temperature=0.2),
-        )
+        if get_agentic_second_look_enabled():
+            # AGENTIC_SECOND_LOOK=1 (task W10-A1): one buffered answer, a sentence-level
+            # refusal scan, at most one follow-up through the app's own tools, one
+            # re-answer - see the big comment above `_run_agentic_second_look`.
+            # `tool_name` here is the FINAL one (a loop fallback to search already
+            # reassigned it), exactly as the ANSWER_CHECK branch below already relies on.
+            question_text = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            sql_results_for_check = [result_text] if tool_name == "query_structured_data" else []
 
-        has_response2_text = False
-        for chunk in response2:
-            if chunk.text:
-                has_response2_text = True
-                yield ("token", chunk.text)
-
-        # Safeguard: if streaming returned nothing, try non-streaming as fallback
-        if not has_response2_text:
-            logger.warning(f"Context injection streaming returned empty for tool={tool_name}, trying non-streaming fallback")
-            try:
-                fallback = client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(system_instruction=system_with_context, temperature=0.2),
+            def _answer_check_search(q):
+                found = _execute_search_documents(
+                    search_query=q, metadata_filter=None,
+                    user_id=user_id, supabase_client=supabase_client,
                 )
-                if fallback.candidates and fallback.candidates[0].content and fallback.candidates[0].content.parts:
-                    for part in fallback.candidates[0].content.parts:
-                        if part.text:
-                            has_response2_text = True
-                            yield ("token", part.text)
-            except Exception as e:
-                logger.warning(f"Non-streaming fallback also failed: {e}")
+                if not found:
+                    return ""
+                windowed = [_windowed_excerpt(_current_question.get(), c["content"]) for c in found]
+                excerpt_pool.extend(windowed)
+                return "\n\n---\n\n".join(
+                    f"[Source: {c['file_name']}]\n{w}" for c, w in zip(found, windowed)
+                )
+
+            answer_temp = get_answer_temperature()
+            has_response2_text = False
+            for _sl_evt, _sl_data in _run_agentic_second_look(
+                client, model, contents, system_with_context, answer_temp,
+                question_text, sql_results_for_check, list(excerpt_pool),
+                list(tools_used) or [tool_name],
+                _answer_check_search if has_documents else None, _answer_on_claude,
+                user_id=user_id, supabase_client=supabase_client, has_documents=has_documents,
+                text_to_sql_enabled=text_to_sql_enabled, structured_tables=structured_tables,
+            ):
+                if _sl_evt == "second_look_answer":
+                    if _sl_data:
+                        has_response2_text = True
+                        yield ("token", _sl_data)
+                else:
+                    yield (_sl_evt, _sl_data)
+        elif get_answer_check_enabled():
+            # ANSWER_CHECK=1 (task W8-A1 part B): buffered, checked, at most one retry -
+            # see `_generate_checked_answer`. `tool_name` here is the FINAL one (a loop
+            # fallback to search already reassigned it), so this is exactly "the last thing
+            # we have is a genuine SQL table" when it still reads "query_structured_data".
+            question_text = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            sql_results_for_check = [result_text] if tool_name == "query_structured_data" else []
+
+            def _answer_check_search(q):
+                found = _execute_search_documents(
+                    search_query=q, metadata_filter=None,
+                    user_id=user_id, supabase_client=supabase_client,
+                )
+                if not found:
+                    return ""
+                windowed = [_windowed_excerpt(_current_question.get(), c["content"]) for c in found]
+                excerpt_pool.extend(windowed)
+                return "\n\n---\n\n".join(
+                    f"[Source: {c['file_name']}]\n{w}" for c, w in zip(found, windowed)
+                )
+
+            checked_text = _generate_checked_answer(
+                client, model, contents, system_with_context, get_answer_temperature(),
+                question_text, sql_results_for_check, list(excerpt_pool), list(tools_used) or [tool_name],
+                _answer_check_search if has_documents else None,
+                use_claude=_answer_on_claude,
+            )
+            has_response2_text = bool(checked_text)
+            if checked_text:
+                yield ("token", checked_text)
+        elif _answer_on_claude:
+            has_response2_text = False
+            for text in stream_answer_text(system_text=system_with_context, contents=contents,
+                                           name="answer_tool_result"):
+                has_response2_text = True
+                yield ("token", text)
+            # No separate non-streaming retry-on-empty here (unlike the Gemini arm
+            # below) - the "last resort: yield the tool result directly" block right
+            # after this if/elif/else already covers "nothing was produced" for
+            # EITHER provider.
+        else:
+            # Stream the final answer without tools (avoids thought_signature issue)
+            response2 = client.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=apply_llm_seed(types.GenerateContentConfig(
+                    system_instruction=system_with_context, temperature=get_answer_temperature())),
+            )
+
+            has_response2_text = False
+            for chunk in response2:
+                if chunk.text:
+                    has_response2_text = True
+                    yield ("token", chunk.text)
+
+            # Safeguard: if streaming returned nothing, try non-streaming as fallback
+            if not has_response2_text:
+                logger.warning(f"Context injection streaming returned empty for tool={tool_name}, trying non-streaming fallback")
+                try:
+                    fallback = client.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=apply_llm_seed(types.GenerateContentConfig(
+                            system_instruction=system_with_context, temperature=get_answer_temperature())),
+                    )
+                    if fallback.candidates and fallback.candidates[0].content and fallback.candidates[0].content.parts:
+                        for part in fallback.candidates[0].content.parts:
+                            if part.text:
+                                has_response2_text = True
+                                yield ("token", part.text)
+                except Exception as e:
+                    logger.warning(f"Non-streaming fallback also failed: {e}")
 
         # Last resort: yield the tool result directly
         if not has_response2_text and result_text:
@@ -2061,13 +2931,19 @@ Tool ({tool_name}) results:
 
 Tool (analyze_document) results:
 {truncated_result}"""
-            response2 = client.models.generate_content_stream(
-                model=model, contents=contents,
-                config=types.GenerateContentConfig(system_instruction=system_with_context, temperature=0.2),
-            )
-            for chunk in response2:
-                if chunk.text:
-                    yield ("token", chunk.text)
+            if _answer_on_claude:
+                for text in stream_answer_text(system_text=system_with_context, contents=contents,
+                                               name="answer_forced_analyze"):
+                    yield ("token", text)
+            else:
+                response2 = client.models.generate_content_stream(
+                    model=model, contents=contents,
+                    config=apply_llm_seed(types.GenerateContentConfig(
+                        system_instruction=system_with_context, temperature=get_answer_temperature())),
+                )
+                for chunk in response2:
+                    if chunk.text:
+                        yield ("token", chunk.text)
         yield ("tool_done", json.dumps({"tool": "analyze_document", "detail": "Document analyzed"}))
     else:
         # No tool call — LLM responded directly

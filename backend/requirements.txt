@@ -9,6 +9,7 @@ sse-starlette
 python-multipart
 docling==2.91.0
 cohere
+anthropic==1.13.0
 duckdb
 tavily-python
 pywin32

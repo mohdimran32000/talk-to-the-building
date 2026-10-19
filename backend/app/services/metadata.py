@@ -8,6 +8,7 @@ import time
 from google import genai
 from google.genai import types
 
+from app.services.llm_config import apply_llm_seed
 from app.services.settings import get_llm_api_key, get_llm_model, get_metadata_schema
 
 logger = logging.getLogger(__name__)
@@ -165,10 +166,10 @@ def extract_metadata(text: str, file_name: str = "", file_content: bytes = None)
             response = client.models.generate_content(
                 model=model,
                 contents=prompt,
-                config=types.GenerateContentConfig(
+                config=apply_llm_seed(types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=response_schema,
-                ),
+                )),
             )
             result = json.loads(response.text)
             return result
@@ -225,9 +226,9 @@ User query: {query}"""
         response = client.models.generate_content(
             model=model,
             contents=prompt,
-            config=types.GenerateContentConfig(
+            config=apply_llm_seed(types.GenerateContentConfig(
                 response_mime_type="application/json",
-            ),
+            )),
         )
         result = json.loads(response.text)
 

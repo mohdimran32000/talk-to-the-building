@@ -1299,5 +1299,31 @@ check("12d. T7-R3: max_steps=1, a letter question is unchanged — today's plain
 check("12d. no document search ran", searched_lc1 == [], searched_lc1)
 
 
+# ===========================================================================
+# 13. task W13-A1: the question's own place codes reach the investigation too,
+#     through the SAME factory at BOTH call sites
+# ===========================================================================
+print("\n13. place_code_resolver(user_id, supabase_client) reaches the investigation, both "
+      "at the main dispatch and at the second look's own SQL path")
+
+check("sql_tool.place_code_resolver exists", hasattr(sql_tool, "place_code_resolver"))
+
+branch13 = _branch_source()
+check("the main dispatch branch imports place_code_resolver",
+      "place_code_resolver" in branch13
+      and "from app.services.sql_tool import" in branch13,
+      [l.strip() for l in branch13.splitlines() if "sql_tool import" in l])
+check("and hands the SAME per-turn factory the investigation already gets column_values "
+      "from - built from this turn's own user_id and supabase_client, lazily",
+      "place_codes=place_code_resolver(user_id, supabase_client)," in branch13,
+      [l.strip() for l in branch13.splitlines() if "place_codes=" in l])
+
+second_look_src = inspect.getsource(oc._second_look_sql)
+check("_second_look_sql also imports place_code_resolver",
+      "place_code_resolver" in second_look_src)
+check("and hands run_sql_investigation the same per-turn factory",
+      "place_codes=place_code_resolver(user_id, supabase_client)," in second_look_src,
+      [l.strip() for l in second_look_src.splitlines() if "place_codes=" in l])
+
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

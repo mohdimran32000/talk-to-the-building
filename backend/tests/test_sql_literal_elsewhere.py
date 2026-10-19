@@ -485,5 +485,78 @@ check("max_steps=1: one call, the EMPTY+literal-elsewhere text exactly as execut
       "added or taken away",
       len(ex6.questions) == 1 and inv6.result_text == oe, inv6.result_text[-300:])
 
+# ---------------------------------------------------------------------------
+print("\n7. Wave 7, W7-A1: the empty side of an OUTER JOIN tied to a literal")
+# ---------------------------------------------------------------------------
+# THE DEFECT (diagnosed on the goal-function run of 2026-09-30, measured again in round 7).
+# A then-vs-now question's writer tied a board to its current-state table and LEFT JOINed its
+# historical twin by the SAME board name; the board is printed only as a CHILD of the
+# historical FEEDER table, never as a row of its own historical BOARDS table, so the join's
+# own side comes back NULL on the one row the WHERE's literal matches. The result has rows (the
+# current side's), so the EMPTY path never runs, and this section's own mechanism above looks
+# only at the columns the literal is directly COMPARED with - here `b.board`, which DOES hold
+# it; the historical table's own join column is never compared with the literal directly, only
+# tied to it through the JOIN's own ON equality.
+PRE_BOARDS = {   # the historical boards table: holds QZ-MAIN, never QZ-7F
+    "table_name": "bld_pre_boards", "columns": ["board", "kw"],
+    "rows": [{"board": "QZ-MAIN", "kw": "390.0"}], "row_count": 1,
+}
+OUTER_SQL = ('SELECT b.kw AS now_kw, o.kw AS before_kw FROM "bld_boards" b LEFT JOIN '
+            '"bld_pre_boards" o ON o.board = b.board WHERE b.board = \'QZ-7F\'')
+OUTER_SENTENCE = ("'QZ-7F' never appears in bld_pre_boards.board (the joined side came back "
+                  "empty); it is printed in bld_feeds_old.child (1 entry)")
+o7 = run(OUTER_SQL, tables=(BOARDS, PRE_BOARDS, OLD))
+check("RED: the one row is the current side alone, before column NULL",
+      "| 140.25 |  |" in o7 or "140.25" in o7.split("SQL: `")[0], o7[:300])
+check("RED: a LITERAL ELSEWHERE line names the empty join column and where the literal IS "
+      "printed, among the OTHER loaded tables", lines(o7) == [LEAD + OUTER_SENTENCE],
+      lines(o7) or o7[-500:])
+check("RED: it comes after the SQL line", LEAD in o7 and o7.index("SQL: `") < o7.index(LEAD),
+      o7)
+
+# "an outer join whose side matched -> no line": the historical table NOW holds QZ-7F too.
+PRE_BOARDS_MATCHED = {
+    "table_name": "bld_pre_boards", "columns": ["board", "kw"],
+    "rows": [{"board": "QZ-7F", "kw": "130.0"}, {"board": "QZ-MAIN", "kw": "390.0"}],
+    "row_count": 2,
+}
+o7_matched = run(OUTER_SQL, tables=(BOARDS, PRE_BOARDS_MATCHED, OLD))
+check("the joined side matched: both columns filled, no line",
+      "130.0" in o7_matched and lines(o7_matched) == [], (lines(o7_matched), o7_matched[:300]))
+
+# "an INNER join -> no line (unchanged)", at the level the detector itself reads: a plain JOIN
+# token is never one of LEFT/RIGHT/FULL [OUTER], whatever its own ON and WHERE say.
+INNER_SQL = OUTER_SQL.replace("LEFT JOIN", "JOIN")
+tokens_i = sql_tool.sql_token_spans(INNER_SQL)
+words_i = [sql_tool._word(t) for t in tokens_i]
+depths_i = sql_tool._paren_depths(tokens_i)
+_, aliases_i = sql_tool._query_tables(tokens_i, depths_i)
+pins_i = sql_tool._where_literal_pins(INNER_SQL, aliases_i)
+check("RED: a plain/INNER JOIN is never read as an outer join's empty side",
+      sql_tool._outer_join_pins(tokens_i, words_i, depths_i, aliases_i, pins_i) == [])
+
+# "a literal printed nowhere -> no line": no OTHER loaded table holds 'QZ-7F' at all (bld_feeds_old
+# and bld_ways, the only tables that do, are both left out of what is loaded).
+o7_nowhere = run(OUTER_SQL, tables=(BOARDS, PRE_BOARDS))
+check("RED: held nowhere but the compared column itself - no line at all",
+      lines(o7_nowhere) == [], lines(o7_nowhere) or o7_nowhere[-400:])
+
+# The line is in the SAME family (same lead), so the loop's EXISTING LITERAL_ELSEWHERE issue
+# picks it up with no change to sql_loop at all.
+iss7o = sql_loop.inspect_result(o7, "what did the board draw before, and now?", [CARD])
+hit7o = next((i for i in iss7o if i.kind == KIND), None)
+check("RED: the loop raises LITERAL_ELSEWHERE on it, unchanged",
+      hit7o is not None and OUTER_SENTENCE in hit7o.instruction, [i.kind for i in iss7o])
+check("RED: and it is the one the loop acts on",
+      sql_loop.first_requery_issue(iss7o) is not None
+      and sql_loop.first_requery_issue(iss7o).kind == KIND, [i.kind for i in iss7o])
+
+# The new sentence's own fixed words, run through section 3's own router-safety harness
+# (the SAME SCORING words and synthetic ROUTER_CARDS that already prove the wrapper's words
+# are safe): "never naming a router-scored word the existing line avoids".
+scored_outer = {t: s for t, s in router_scores(fixed_wording(OUTER_SENTENCE)).items() if s}
+check("RED: the new sentence's own fixed words score on no router card either",
+      not scored_outer, scored_outer)
+
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

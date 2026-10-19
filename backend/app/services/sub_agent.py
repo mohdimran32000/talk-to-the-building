@@ -11,6 +11,7 @@ from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from app.services.exploration_tools._truncate import apply_12k_cap
+from app.services.llm_config import apply_llm_seed
 # Phase 5 / Plan 07 gap-closure: lazy-bind for test patchability (no production behavior change)
 from app.services import openai_client as _openai_client
 from app.services.settings import get_llm_model
@@ -327,7 +328,7 @@ def run_sub_agent(
         response = client.models.generate_content_stream(
             model=model,
             contents=contents,
-            config=types.GenerateContentConfig(system_instruction=system_prompt),
+            config=apply_llm_seed(types.GenerateContentConfig(system_instruction=system_prompt)),
         )
 
         # 7. Yield tokens as they stream
@@ -421,11 +422,11 @@ def run_explorer_sub_agent(
             response = client.models.generate_content(
                 model=model,
                 contents=contents,
-                config=types.GenerateContentConfig(
+                config=apply_llm_seed(types.GenerateContentConfig(
                     system_instruction=EXPLORER_SYSTEM_PROMPT,
                     tools=tools,
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                ),
+                )),
             )
         except Exception as e:
             logger.error(f"Explorer Gemini call failed at turn {turn}: {e}", exc_info=True)
@@ -532,7 +533,7 @@ def run_explorer_sub_agent(
         for chunk in client.models.generate_content_stream(
             model=model,
             contents=contents,
-            config=types.GenerateContentConfig(system_instruction=summary_system),
+            config=apply_llm_seed(types.GenerateContentConfig(system_instruction=summary_system)),
         ):
             if chunk.text:
                 full_summary += chunk.text

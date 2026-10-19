@@ -387,5 +387,100 @@ check("RED: end to end, the measurement adds no line and the room number still d
       place_lines(p7) == [LINE.format("8.79", "ZR-8.79", "8.79 Plant Space Block N")],
       place_lines(p7))
 
+# ---------------------------------------------------------------------------
+print("\n8. sql_tool.place_code_resolver - the SAME resolution, injected for sql_loop "
+     "(task W13-A1)")
+# ---------------------------------------------------------------------------
+check("RED: place_code_resolver exists", hasattr(sql_tool, "place_code_resolver"))
+
+if hasattr(sql_tool, "place_code_resolver"):
+    _saved_cards = sql_tool._load_table_cards
+
+    def _with_cards(cards):
+        sql_tool._load_table_cards = lambda *a, **k: list(cards)
+
+    sb8 = _Supabase(list((ASSETS, SPACES)))
+    _with_cards(CARDS)
+    try:
+        resolve8 = sql_tool.place_code_resolver("u-1", sb8)
+        got8 = resolve8("What is room Q08-318, and what is installed in it?")
+        check("RED: resolves exactly like resolve_place_codes/_place_lines do",
+              got8 == [("Q08-318", "ZR-Q08-318", "318 Reading Nook Block N")], got8)
+        check("a level-and-block code adds nothing - it is no room",
+              resolve8("what is on ZL8-N?") == [])
+        check("RED: a token matching TWO rooms adds nothing (the existing ambiguity rule, "
+              "inherited rather than re-implemented)",
+              resolve8("what is in room 9.47?") == [])
+        check("a question printing no code adds nothing",
+              resolve8("what is in the hush corner?") == [])
+        got8b = resolve8("what is in k.05?")
+        check("any case, same as resolve_place_codes",
+              got8b == [("k.05", "ZR-K.05", "K.05 Velvet Bay")], got8b)
+        check("RED: the declared join names the places table, exactly like _place_lines - a "
+              "decoy whose NAME says places is never read",
+              sql_tool.place_code_resolver(
+                  "u-1", _Supabase(list((ASSETS, DECOY, SPACES))))("what is in room 8.17?")
+              == [("8.17", "ZR-8.17", "8.17 Hush Corner Block N")])
+    finally:
+        sql_tool._load_table_cards = _saved_cards
+
+    # --- 8a. lazy and memoised: each fetch happens at most once, however many times
+    # resolve() is called, and never before the first call (the same contract as
+    # column_value_reader) ----------------------------------------------------------
+    class _CountingSupabase(_Supabase):
+        def __init__(self, tables):
+            super().__init__(tables)
+            self.table_calls = []
+
+        def table(self, name):
+            self.table_calls.append(name)
+            return super().table(name)
+
+    sb8a = _CountingSupabase(list((ASSETS, SPACES)))
+    _with_cards(CARDS)
+    try:
+        resolve8a = sql_tool.place_code_resolver("u-1", sb8a)
+        check("8a. building the reader reads nothing", sb8a.table_calls == [], sb8a.table_calls)
+        resolve8a("what is in room 8.17?")
+        after_one = list(sb8a.table_calls)
+        check("8a. the first call fetches exactly once", after_one == ["structured_data"],
+              after_one)
+        resolve8a("what is in room 8.17?")
+        resolve8a("what is in k.05?")
+        check("8a. the tables and cards are fetched once, however many times resolve() runs",
+              sb8a.table_calls == after_one, sb8a.table_calls)
+        check("8a. and it still resolves correctly on every call",
+              resolve8a("what is in room 8.17?")
+              == [("8.17", "ZR-8.17", "8.17 Hush Corner Block N")])
+    finally:
+        sql_tool._load_table_cards = _saved_cards
+
+    # --- 8b. resilient: a fetch that fails, or a corpus with no places table at all,
+    # answers [] rather than raising - an aid to a re-query must never cost it -------
+    class _RaisingSupabase:
+        def table(self, name):
+            raise RuntimeError("postgrest down")
+
+    _with_cards(CARDS)
+    try:
+        resolve8c = sql_tool.place_code_resolver("u-1", _RaisingSupabase())
+        raised8c, got8c = None, None
+        try:
+            got8c = resolve8c("what is in room 8.17?")
+        except Exception as e:  # noqa: BLE001 - not raising IS the assertion
+            raised8c = e
+        check("8b. a fetch that raises -> [], never an exception",
+              raised8c is None and got8c == [], repr(raised8c))
+    finally:
+        sql_tool._load_table_cards = _saved_cards
+
+    _with_cards([])
+    try:
+        resolve8d = sql_tool.place_code_resolver("u-1", _Supabase([ASSETS]))
+        check("8b. no places table anywhere in this user's corpus -> [], never an exception",
+              resolve8d("what is in room 8.17?") == [])
+    finally:
+        sql_tool._load_table_cards = _saved_cards
+
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED'}")
 sys.exit(1 if FAILS else 0)

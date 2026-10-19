@@ -172,6 +172,18 @@ listed as lacking what it holds, beside entries covering a whole storey. `PLACE_
 (see `_place_comparison_issue`) is G6 generalised from rankings to `[NOT] IN` a sub-SELECT of the
 same column, EXCEPT and INTERSECT: compare by the location key, kept to the kind of place the
 compared column names. Same reader, same names read off the query and the loaded table.
+
+TASK W13-A1 (2026-10-18): A LOCATION FILTER ON THE WRONG VALUE. Measured on a paid run: asked about
+two spots named by their own printed code, the SQL writer's prompt already resolved each code to its
+location id (`sql_tool._place_lines` / `resolve_place_codes`), and the SQL still filtered the
+location key column on two OTHER spots' ids — the column was right, so neither `PLACE_COMPARED_ON_TEXT`
+above (whose own job is a column that is NOT the key) nor `EMPTY` below (the result had rows) ever
+looked, and the answer said the asked spots were not shown. `PLACE_NOT_FILTERED` (see the comment
+above `_place_not_filtered_issue`) fires when the question's own resolved codes name different ids
+than the literals the query's WHERE actually filtered that column on. The resolution is the SAME one
+`_place_lines` offers the writer, handed in through a new injected `place_codes` reader
+(`sql_tool.place_code_resolver`) rather than imported a second time — `sql_tool` imports this module,
+so the reverse would be circular, the same reason `result_is_empty` above is a pinned duplicate.
 """
 from __future__ import annotations
 
@@ -224,6 +236,10 @@ PLACE_COMPARED_ON_TEXT = "PLACE_COMPARED_ON_TEXT"
 #: question, though its current-state twin was ALSO routed and so could be read instead. See
 #: `_twin_name` / `_asks_about_existing_state`.
 CURRENT_TWIN = "CURRENT_TWIN"
+#: Task W13-A1 — the WHERE filtered a column name-shaped like the location key with a plain
+#: literal via `=`/`IN (...)`, and the question's own printed place code resolves to a
+#: DIFFERENT id than every literal filtered. See `_place_not_filtered_issue`.
+PLACE_NOT_FILTERED = "PLACE_NOT_FILTERED"
 
 #: Priority order, spec §3. The loop acts on the first of these that carries an
 #: instruction; the last three never carry one. Pinned by test §21 — a fixture that raises
@@ -242,21 +258,28 @@ CURRENT_TWIN = "CURRENT_TWIN"
 #: column-shaped issues after it never are, and it carries the instruction the count
 #: cross-check does not. `PLACE_COMPARED_ON_TEXT` (wave 4, A2), its generalisation, comes right
 #: after it: a comparison that split one place by its spellings has the wrong rows, which
-#: outranks a list missing its labels.
+#: outranks a list missing its labels. `PLACE_NOT_FILTERED` (task W13-A1) sits right after
+#: THAT: the writer named the right KEY column but filtered it with the wrong VALUE — like its
+#: neighbours, a DIFFERENT KIND of miss (the right column, wrong value) rather than a more or
+#: less severe one (task W13-A3 correction: this used to read "a more complete miss", which
+#: argues for ranking it EARLIER, the opposite of where it sits), so it is grouped with them,
+#: immediately after its nearest sibling, and — like both of its neighbours — is raised only
+#: on a NON-empty result by construction (guarded by `not empty` in `inspect_result`), so it
+#: changes nothing about where `EMPTY` moves to next.
 #: `EMPTY` moves to right before the column-shaped issues (wave 6, W6-A1). MEASURED on the
 #: goal-function run of 2026-09-30: a then-vs-now question's first query compared a code with
 #: the PARENT column of a table where it only ever appears as a CHILD, found no rows, and the
 #: question's own printed identifier ALSO addressed a routed card — so the loop sent the (by
 #: construction wrong, for a question needing two states) identifier address, when the data
-#: already knew exactly where the value was. `CURRENT_TWIN`, `PLACE_RANKED_ON_TEXT` and
-#: `PLACE_COMPARED_ON_TEXT` are all raised only on a NON-empty result by construction (each is
-#: guarded by `not empty` in `inspect_result`), so moving EMPTY past them changes nothing for
-#: any of the three — it matters only for the new EMPTY+LITERAL_ELSEWHERE overlap this wave
-#: adds (`sql_tool` can now write the line on an empty result too; see
+#: already knew exactly where the value was. `CURRENT_TWIN`, `PLACE_RANKED_ON_TEXT`,
+#: `PLACE_COMPARED_ON_TEXT` and `PLACE_NOT_FILTERED` are all raised only on a NON-empty result
+#: by construction (each is guarded by `not empty` in `inspect_result`), so moving EMPTY past
+#: them changes nothing for any of them — it matters only for the new EMPTY+LITERAL_ELSEWHERE
+#: overlap this wave adds (`sql_tool` can now write the line on an empty result too; see
 #: `_literal_elsewhere_lines`'s call site there).
 ISSUE_ORDER = (FAILED_SQL, LITERAL_ELSEWHERE, CURRENT_TWIN, PLACE_RANKED_ON_TEXT,
-               PLACE_COMPARED_ON_TEXT, EMPTY, IDENTIFIER_MISSING, NARROW_SELECT,
-               TRUNCATED_NO_SHAPE,
+               PLACE_COMPARED_ON_TEXT, PLACE_NOT_FILTERED, EMPTY, IDENTIFIER_MISSING,
+               NARROW_SELECT, TRUNCATED_NO_SHAPE,
                COUNT_CROSSCHECK, LETTER_CROSSCHECK)
 
 #: The `detail` of an `EMPTY` issue whose instruction came from an identifier the question
@@ -1897,13 +1920,106 @@ def _place_comparison_issue(sql: str, column_values):
     return None
 
 
-def inspect_result(result_text: str, question: str, routed_cards, column_values=None) -> list:
+# ---------------------------------------------------------------------------
+# A LOCATION FILTER ON THE WRONG VALUE — task W13-A1 (2026-10-18).
+#
+# Measured on a paid run: asked about two spots named by their own printed code, the SQL
+# writer's prompt already carried a line resolving each code to its location id
+# (`sql_tool._place_lines` / `resolve_place_codes`), yet the SQL filtered that key
+# column on two OTHER spots' ids. The result was not empty — it held the wrong spots' rows —
+# so nothing above caught it: the filtered column WAS the key, so `PLACE_COMPARED_ON_TEXT`
+# never looks (its own job is a column that is NOT the key); and the result had rows, so
+# `EMPTY` below never looks either. The answer said the asked spots were not shown.
+#
+# `PLACE_NOT_FILTERED` closes that gap. Raised on a result with rows, whatever its shape,
+# when ALL of these hold:
+#   * the question — read WITHOUT the loop's own step suffix, the same text `_place_lines`
+#     reads — resolves one or more printed place codes to location ids: the SAME resolution
+#     `_place_lines` offers the SQL writer, handed in here through an injected `place_codes`
+#     reader rather than imported a second time (`sql_tool` imports THIS module, so the
+#     reverse would be circular — the same reason `result_is_empty` above is a pinned
+#     duplicate rather than an import);
+#   * the WHERE of the executed SQL compares a column NAME-shaped like the location key
+#     (`_KEY_WORDS`, wherever in the query it is spelled, and whichever table it belongs to)
+#     with one or more plain string literals, via `=` or `IN (...)`;
+#   * NONE of those literals is one of the resolved ids.
+# The instruction names every resolved code and its id, verbatim, and asks the writer to
+# filter on them instead — nothing of any building is written here, only what the query and
+# the resolver themselves hand over.
+#
+# Silent otherwise: no such column filtered with a literal at all (a comparison on PRINTED
+# TEXT instead is `PLACE_COMPARED_ON_TEXT`'s own job, not this one's); any ONE of the
+# literals already matches a resolved id; or nothing resolves — including a code ambiguous
+# between two places, which `resolve_place_codes` already turns into nothing, inherited here
+# for free. With no step left (the resolver is withheld on the last step, exactly like
+# `column_values` above) or the loop off, nothing is raised either — there is no resolver
+# then.
+# ---------------------------------------------------------------------------
+#: Where a loop step's own suffix begins in a question text — the exact lead
+#: `step_instruction_suffix` writes. A deliberate duplicate of `sql_tool._STEP_SUFFIX_MARKER`
+#: (`sql_tool` imports this module, so the reverse would be circular — the same reason
+#: `result_is_empty` above is copied rather than imported).
+_STEP_SUFFIX_LEAD = "\n(Investigation step "
+
+
+def _without_step_suffix(question: str) -> str:
+    """`question` up to, not including, the loop's own appended step suffix — the same text
+    `sql_tool._place_lines` reads (its own `_split_step_suffix`). Unchanged when `question`
+    carries no suffix, which is always true of the `question` `inspect_result` is actually
+    called with today (`iter_sql_investigation` passes the ORIGINAL question, never the
+    suffixed `ask`) — kept here anyway so a direct call keeps the same guarantee."""
+    text = question or ""
+    idx = text.find(_STEP_SUFFIX_LEAD)
+    return text if idx == -1 else text[:idx]
+
+
+def _place_not_filtered_issue(sql: str, question: str, place_codes):
+    """PLACE_NOT_FILTERED for `sql`, or None — see the comment above."""
+    if place_codes is None:
+        return None
+    filters, _aliases = _where_literals(sql, ("=", "IN"))
+    key_col, literals = None, []
+    for _qualifier, column, lits, _scopes in filters:
+        if tuple(_name_words(column)) == _KEY_WORDS:
+            if key_col is None:
+                key_col = column
+            for lit in lits:
+                if lit not in literals:
+                    literals.append(lit)
+    if key_col is None:
+        return None  # no location-id-shaped column filtered with a literal at all
+    try:
+        resolved = list(place_codes(_without_step_suffix(question)) or [])
+    except Exception as e:  # noqa: BLE001 - an aid to a re-query must never cost it
+        logger.warning(f"sql_loop: resolving the question's place codes failed "
+                       f"({type(e).__name__}: {e}); no place-filter check")
+        return None
+    if not resolved:
+        return None
+    resolved_ids = {str(loc_id) for _token, loc_id, *_rest in resolved}
+    if any(str(lit) in resolved_ids for lit in literals):
+        return None  # the previous query DID filter on one of the resolved ids
+    named = "; ".join(f"the question's {token} is {quote_identifier(key_col)} {loc_id}"
+                      for token, loc_id, *_rest in resolved)
+    them = "it" if len(resolved) == 1 else "them"
+    return Issue(
+        PLACE_NOT_FILTERED,
+        "A location filter used the wrong id — re-querying on the resolved id",
+        (f"The previous query filtered {quote_identifier(key_col)} with an id that is not "
+         f"the question's own: {named}. Filter {quote_identifier(key_col)} with {them} "
+         f"instead, never with the previous query's own id."))
+
+
+def inspect_result(result_text: str, question: str, routed_cards, column_values=None,
+                   place_codes=None) -> list:
     """Every issue the result text shows, in the spec's priority order. No model call and
-    no state. Its one outside read is the injected `column_values(table, column)` - the
-    distinct values of a column as the loaded table holds them, or None - which is asked
-    only for the columns an EMPTY result's WHERE filtered, and only when that EMPTY gets
-    the generic instruction; without it (the default) this is pure. An issue whose
-    `instruction` is "" is a finding, not a re-query."""
+    no state. Its outside reads are both injected and both optional, so this is pure without
+    them: `column_values(table, column)` - the distinct values of a column as the loaded
+    table holds them, or None - which is asked only for the columns an EMPTY result's WHERE
+    filtered, and only when that EMPTY gets the generic instruction; and `place_codes(text)`
+    - the question's own printed place codes resolved to location ids (task W13-A1), asked
+    only to check a WHERE that filtered a location-id-shaped column with a literal. An issue
+    whose `instruction` is "" is a finding, not a re-query."""
     issues = []
     sql = result_sql(result_text)
     cards = cards_in_sql(sql, routed_cards)
@@ -1976,6 +2092,15 @@ def inspect_result(result_text: str, question: str, routed_cards, column_values=
         compared = _place_comparison_issue(sql, column_values)
         if compared:
             issues.append(compared)
+
+    # Task W13-A1: a location-id-shaped column filtered with the wrong literal value(s) -
+    # the question's own printed place code resolves to a different id than every literal
+    # the query's WHERE actually used. On a result with rows, whatever its shape, and only
+    # with the resolver - so never on the last step.
+    if not empty and not result_is_failure(result_text):
+        not_filtered = _place_not_filtered_issue(sql, question, place_codes)
+        if not_filtered:
+            issues.append(not_filtered)
 
     # An aggregate result is exempt: it has no per-entity identifier and no wider row to
     # widen to. An empty result is NOT exempt — its header still says which columns were
@@ -2099,7 +2224,8 @@ def _top_excerpts(text: str) -> str:
 # --------------------------------------------------------------------------- the loop
 
 def iter_sql_investigation(question, user_id, sb, *, execute, search=None, routed_cards=None,
-                           max_steps=3, user_question=None, clock=None, column_values=None):
+                           max_steps=3, user_question=None, clock=None, column_values=None,
+                           place_codes=None):
     """Run the bounded investigation, yielding an event before and after every external call.
 
     Events:
@@ -2121,6 +2247,10 @@ def iter_sql_investigation(question, user_id, sb, *, execute, search=None, route
     `column_values(table, column) -> [value, …] | None` is injected the same way: the
     real values an EMPTY re-query lists for the columns its failed WHERE filtered. It is
     asked only when that re-query can still be sent, and never with the loop off.
+    `place_codes(text) -> [(token, location id, display name), …]` (task W13-A1) is injected
+    the same way again: the question's own printed place codes resolved to location ids, the
+    SAME resolution the SQL-generation prompt offers the writer. Asked only when a re-query
+    that could use it can still be sent, and never with the loop off.
     """
     cards = list(routed_cards or [])
     try:
@@ -2166,7 +2296,12 @@ def iter_sql_investigation(question, user_id, sb, *, execute, search=None, route
         # EMPTY issue drove, because a second EMPTY in a row is exactly what the repeat
         # guard below stops.
         reader = column_values if (k < max_steps and last_kind != EMPTY) else None
-        issues = (inspect_result(result_text, question, cards, column_values=reader)
+        # Task W13-A1: like `column_values`, the place-code resolver is withheld on the
+        # last step - there is no further query left for a PLACE_NOT_FILTERED re-query to
+        # reach, so resolving the question's codes would cost a read for nothing.
+        places = place_codes if k < max_steps else None
+        issues = (inspect_result(result_text, question, cards, column_values=reader,
+                                 place_codes=places)
                   if looping else [])
         for issue in issues:
             note(issue.kind)
@@ -2244,7 +2379,7 @@ def iter_sql_investigation(question, user_id, sb, *, execute, search=None, route
 
 def run_sql_investigation(question, user_id, sb, *, execute, search=None, routed_cards=None,
                           max_steps=3, user_question=None, clock=None,
-                          column_values=None) -> Investigation:
+                          column_values=None, place_codes=None) -> Investigation:
     """`iter_sql_investigation` drained: the same work, for a caller with no use for the
     per-step events."""
     final = None
@@ -2252,7 +2387,8 @@ def run_sql_investigation(question, user_id, sb, *, execute, search=None, routed
                                                 search=search, routed_cards=routed_cards,
                                                 max_steps=max_steps,
                                                 user_question=user_question, clock=clock,
-                                                column_values=column_values):
+                                                column_values=column_values,
+                                                place_codes=place_codes):
         if kind == "final":
             final = payload
     return final

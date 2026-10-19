@@ -16,6 +16,7 @@ from google import genai
 from google.genai import types as genai_types
 from langsmith import traceable
 
+from app.services.llm_config import apply_llm_seed
 from app.services.settings import get_llm_api_key, get_llm_model
 from app.services.sql_loop import (LITERAL_ELSEWHERE_LEAD, PREVIOUS_SQL_MARKER, VALUES_LEAD,
                                    _declare_tables, _filtered_columns, _is_name,
@@ -136,7 +137,9 @@ ROOM_CONTENTS_RULE = (
     "build a location id out of a floor and a block — you cannot know a room's id unless such "
     "a line states it, and the printed name is what the question gave you. SELECT the "
     "place-name column, the "
-    "system/category column, the item/description column and the quantity column, and ORDER BY "
+    "system/category column, the item/description column and the quantity column, and also "
+    "the column the schema marks as the identifier for that table when it marks one (nothing "
+    "changes when it marks none), and ORDER BY "
     "the place-name column then the system so each place's items stay together. ALSO RETURN THE "
     "TOTALS in the same query — the total quantity for the place and the quantity per system "
     "— as EXTRA COLUMNS on every row, with window functions (e.g. SUM(<quantity>) OVER () "
@@ -926,12 +929,48 @@ def _routed_holds(cards: list, selected) -> dict:
             and c["table"] in selected and c.get("holds")}
 
 
-def _schema_block(tables: list, holds_by_table: dict | None = None) -> tuple:
+def _routed_identifiers(cards: list, selected) -> dict:
+    """{table: identifier_column} of the routed cards - each table's own declared row
+    identifier, for the schema block's 'Identifier:' line (task W13-A2). Same scoping as
+    `_routed_holds`: only a card that names one, and only for a table `selected` actually
+    routed - the unrouted full-schema fallback carries no identifier line either.
+
+    Narrowed to a card's DECLARED pin only (task W13-A3): doc-prep's own `_identifier_column`
+    auto-detect guesses "most distinct column" for most cards (a room area, a product-spec
+    `value`, an `ip_address`, a description, ...), and marking one of those in the schema would
+    push LIST_IDENTIFIER_RULE to select it FIRST on every list query naming that table, with no
+    real evidence behind the choice. Only `identifier_pinned` - True when `identifier_column`
+    came from doc-prep's own IDENTIFIER_COLUMN_BY_TABLE config (a long-format table pinned to
+    its own key column, say) - is a decision rather than a guess, so only a card carrying it
+    True is kept here.
+    A card with no `identifier_pinned` key at all (an older card set, from before this field
+    existed) is treated exactly like an unpinned one: no identifier line, same as the behaviour
+    before W13-A2 ever shipped."""
+    return {c["table"]: c.get("identifier_column") for c in cards
+            if isinstance(c, dict) and isinstance(c.get("table"), str)
+            and c["table"] in selected and c.get("identifier_column")
+            and c.get("identifier_pinned") is True}
+
+
+def _schema_block(tables: list, holds_by_table: dict | None = None,
+                   identifier_by_table: dict | None = None) -> tuple:
     """`(text, types)`: the 'Available tables:' block the SQL writer reads, and each table's
     column types (`_infer_column_types`) - the types the DuckDB load uses, so the writer's view
     and the loaded table agree. Each table gets its heading, its routed card's holds sentence
-    (when there is one that says more than the column list - T9a-R5) and its body
-    (`_cached_table_body`)."""
+    (when there is one that says more than the column list - T9a-R5), then one 'Identifier:
+    <column>' line naming the column its routed card declares as the row identifier - task
+    W13-A2: LIST_IDENTIFIER_RULE tells the writer to select "the column the schema marks as the
+    identifier" first, and until this line existed nothing in the schema ever marked one.
+    `identifier_by_table` only ever carries a card's DECLARED pin, never a merely auto-detected
+    column (task W13-A3's `_routed_identifiers` is the caller that filters that; this function
+    marks whatever it is handed, unconditionally). Printed
+    only when the card names a column AND the LOADED table actually has it (resolved with
+    `_column_named`, the same helper `_row_key_column` already uses for this exact lookup) -
+    silent for no card, no declared identifier, or one the loaded table lacks. Printed in the
+    loaded table's own spelling, never the card's. Last comes each table's body
+    (`_cached_table_body`) - the identifier line is never part of that cached text: the cache is
+    keyed by a table's own content and shared across every question, while which column counts
+    as "the identifier" rides on the routed card, not the table's content."""
     text = "Available tables:\n"
     types_by_table = {}
     for t in tables:
@@ -947,6 +986,10 @@ def _schema_block(tables: list, holds_by_table: dict | None = None) -> tuple:
         holds = "" if _holds_is_column_listing(raw_holds) else _holds_sentence(raw_holds)
         if holds:
             text += f"Holds: {holds}\n"
+        declared = (identifier_by_table or {}).get(t["table_name"])
+        identifier = _column_named(t, declared) if declared else None
+        if identifier is not None:
+            text += f"Identifier: {identifier}\n"
         text += _cached_table_body(t["table_name"], cols, rows, col_types)
     return text, types_by_table
 
@@ -1928,7 +1971,24 @@ def _aggregate_rows_with_notes(con, sql: str, tables: list):
     depths = _paren_depths(tokens)
     read_tables, _ = _query_tables(tokens, depths)
     if len(read_tables) < 2:
-        return None  # a single, unjoined table is the block above's job, not this one's
+        # Wave 7, W7-A1 (2026-10-09). MEASURED on the goal-function run of 2026-09-30: the
+        # writer narrowed a one-table aggregate by a sub-SELECT over a SECOND table in its
+        # WHERE (`db IN (SELECT panel FROM panels WHERE …)`) rather than a JOIN - `_query_tables`
+        # (depth-0 FROM/JOIN only) counts just the one outer table, so this gate used to refuse
+        # it. But the single-table block above (`_rows_behind_notes`) ALSO always refuses a
+        # sub-SELECT: its own `_single_table_query` call is not `nested`-aware, so it counts the
+        # sub-SELECT as a second SELECT and bails, whatever row count the outer query returns.
+        # The two gates therefore left this one shape owned by neither. It is still ONE table's
+        # own rows behind the figure, re-readable with the SAME FROM ... WHERE (the sub-SELECT
+        # rides along verbatim, naming no table this function ever touches) - so when the
+        # single-table check only fails here because of a nested SELECT (`nested=True` passes),
+        # this block takes it instead of returning None, never when a JOIN or anything else is
+        # the reason it failed.
+        table_names = [t["table_name"] for t in tables]
+        if (len(read_tables) != 1
+                or _single_table_query(sql, table_names) is not None
+                or _single_table_query(sql, table_names, nested=True) is None):
+            return None  # a single, plain, unjoined table is the block above's job
     agg_cols = _aggregate_arg_columns(sql)
     from_where = sql[span[0]:span[1]]
     for name in read_tables:
@@ -2756,21 +2816,61 @@ def _held_counts(con, table_name: str, columns, literal) -> dict:
     return {c: int(n) for c, n in zip(columns, row)}
 
 
-def _literal_elsewhere_lines(con, sql: str, tables: list, col_types: dict) -> str:
-    """The LITERAL ELSEWHERE lines for `sql`, or "" - see the comment above. `col_types` is
-    each loaded table's column types. Runs a query only for a literal its compared columns do
-    not hold and another column of their table may; the caller drops the lines, and nothing
-    else, if anything raises."""
+def _loaded_text_context(tables: list, col_types: dict) -> tuple:
+    """`(loaded, texts, cards)` - `loaded`: every table with rows, by its lower-cased name;
+    `texts`: each one's VARCHAR columns; `cards`: the bare table+columns shape
+    `_filtered_columns` can place an unqualified filter with. Shared setup for both of LITERAL
+    ELSEWHERE's triggers (wave 3 F2's own compared-column mismatch, and wave 7 W7-A1's
+    outer-join empty side), so each reads the exact same view of what is loaded rather than
+    building its own."""
     loaded = {str(t["table_name"]).lower(): t for t in tables if t.get("rows")}
     texts = {key: [c for c in t.get("columns") or []
                    if (col_types.get(t["table_name"]) or {}).get(c) == "VARCHAR"]
              for key, t in loaded.items()}
     cards = [{"table": t["table_name"], "columns": list(t.get("columns") or [])}
              for t in loaded.values()]
-    compared = {}  # literal -> every (table, column) the query compares it with, anywhere
+    return loaded, texts, cards
+
+
+def _compared_literals(sql: str, cards) -> dict:
+    """{literal: {(table lower, column lower), …}} - every table.column `sql` compares a
+    literal with (`=` or `IN`), anywhere in it, by `_filtered_columns`. Shared setup for both
+    of LITERAL ELSEWHERE's triggers."""
+    compared = {}
     for table, column, literals in _filtered_columns(sql, cards, ops=("=", "IN")):
         for literal in literals:
             compared.setdefault(literal, set()).add((str(table).lower(), str(column).lower()))
+    return compared
+
+
+def _elsewhere_holders(con, loaded, texts, compared, key, literal) -> list:
+    """`[("<table>.<col>", entries), …]`, most-held first - the OTHER loaded tables' text
+    columns that hold `literal` (DuckDB's own case/space-folded match), `key`'s own table left
+    out, and so is any column the query already compares the literal with directly anywhere
+    (`compared`) - repeating a comparison the result already shows adds nothing. Shared by
+    both of LITERAL ELSEWHERE's triggers: wave 3 F2's own compared-column mismatch, and wave 7
+    W7-A1's outer-join empty side."""
+    elsewhere = []
+    for order, (other_key, other) in enumerate(loaded.items()):
+        if other_key == key:
+            continue
+        candidates = _held_in(other, [c for c in texts[other_key] if (
+            other_key, c.lower()) not in compared.get(literal, ())], literal)
+        if candidates:
+            for c, n in _held_counts(con, other["table_name"], candidates, literal).items():
+                if n:
+                    elsewhere.append((-n, order, f"{other['table_name']}.{c}", n))
+    elsewhere.sort()
+    return [(where, n) for _, _, where, n in elsewhere]
+
+
+def _literal_elsewhere_lines(con, sql: str, tables: list, col_types: dict) -> str:
+    """The LITERAL ELSEWHERE lines for `sql`, or "" - see the comment above. `col_types` is
+    each loaded table's column types. Runs a query only for a literal its compared columns do
+    not hold and another column of their table may; the caller drops the lines, and nothing
+    else, if anything raises."""
+    loaded, texts, cards = _loaded_text_context(tables, col_types)
+    compared = _compared_literals(sql, cards)
     sentences = []
     for branch in _query_branches(sql):
         groups = {}
@@ -2794,17 +2894,7 @@ def _literal_elsewhere_lines(con, sql: str, tables: list, col_types: dict) -> st
             if (any(counts[c] for c in cols) or not holders
                     or all((key, c.lower()) in compared.get(literal, ()) for c, _ in holders)):
                 continue
-            elsewhere = []
-            for order, (other_key, other) in enumerate(loaded.items()):
-                if other_key == key:
-                    continue
-                candidates = _held_in(other, [c for c in texts[other_key] if (
-                    other_key, c.lower()) not in compared.get(literal, ())], literal)
-                if candidates:
-                    for c, n in _held_counts(con, other["table_name"], candidates,
-                                             literal).items():
-                        if n:
-                            elsewhere.append((-n, order, f"{other['table_name']}.{c}", n))
+            elsewhere = _elsewhere_holders(con, loaded, texts, compared, key, literal)
             # Worded with no word a router card scores ("value", "rows", "other", "tables" are
             # card words): the loop routes its re-query on this sentence. Both readings, and
             # neither called wrong (ruling W3A1-R1).
@@ -2814,10 +2904,9 @@ def _literal_elsewhere_lines(con, sql: str, tables: list, col_types: dict) -> st
             sentence = (f"{value} never appears in {empty_side}, though it does in "
                         + _and_list(f"{name}.{c} ({_entries(n)})" for c, n in holders))
             if elsewhere:
-                elsewhere.sort()
                 sentence += ("; elsewhere in "
                              + _and_list(f"{where} ({_entries(n)})"
-                                         for _, _, where, n in elsewhere[:LITERAL_HOLDERS_SHOWN]))
+                                         for where, n in elsewhere[:LITERAL_HOLDERS_SHOWN]))
                 if len(elsewhere) > LITERAL_HOLDERS_SHOWN:
                     sentence += f", … {len(elsewhere)} in all"
             sentence += (f". If the question meant the relation {held_side} holds, query "
@@ -2825,6 +2914,224 @@ def _literal_elsewhere_lines(con, sql: str, tables: list, col_types: dict) -> st
                          f"is genuinely empty for {value} and its empty answer stands")
             if sentence not in sentences:
                 sentences.append(sentence)
+    return "\n".join(LITERAL_ELSEWHERE_LEAD + s for s in sentences[:LITERAL_ELSEWHERE_MAX])
+
+
+# ---------------------------------------------------------------------------
+# THE EMPTY SIDE OF AN OUTER JOIN IS TIED TO A LITERAL - wave 7, W7-A1, 2026-10-09.
+#
+# Measured on the goal-function run of 2026-09-30: a then-vs-now question's writer tied a
+# board to its current-state table and LEFT JOINed its historical twin by the SAME board name;
+# the board is printed only in the historical FEEDER table's own child column, never as a row
+# of its own historical PANELS table, so the join's own side came back NULL on its only row,
+# and the answer said the historical figure was not recorded. The result had rows (the current
+# side's own), so the empty-result path above never ran; LITERAL ELSEWHERE above looks only at
+# the columns a literal is actually COMPARED with - here the current-state column, which DOES
+# hold it - never at an outer-joined table's own join column, which the WHERE's literal only
+# ever reaches through the JOIN's own ON equality, not a comparison of its own.
+#
+# So: for each LEFT/RIGHT/FULL [OUTER] JOIN this query's own FROM names (an INNER/plain JOIN
+# never leaves a matched row's own side NULL, and a genuinely EMPTY result is already EMPTY's
+# to report, never this one's), when at least one output column reads that table and EVERY one
+# of them is NULL on EVERY row of the result (as returned - all of them, never only the rows a
+# markdown table shows), and its own ON ties its join column to a literal - directly
+# (`ref.col = 'lit'`, read the SAME way the MATCHED line's own comparisons are), or through an
+# ON equality with another table's column that the query's own top-level WHERE pins to exactly
+# one literal (`ref.col = other.col2 AND other.col2 = 'lit'`) - and that literal is never held
+# by the join column itself, the SAME "elsewhere" search LITERAL ELSEWHERE's own mismatch
+# trigger makes (`_elsewhere_holders`) runs again, rooted at the empty table instead, and one
+# line in the SAME family (same lead, so the loop's existing LITERAL_ELSEWHERE issue picks it
+# up with no change to sql_loop at all) says the join column is genuinely empty for the literal
+# and names where it IS printed among the OTHER loaded tables' columns, with counts. Nothing is
+# said when the literal is held nowhere loaded at all (the existing family's own skip). A join
+# whose ON this cannot read this way - an OR in it, an expression on either side, more than one
+# condition naming the join column - names nothing: better to say nothing than to guess.
+# Written from SHAPE: no table, column or value of the project is named.
+# ---------------------------------------------------------------------------
+#: The JOIN modifiers that can leave a matched row's own side NULL - never a plain/INNER JOIN.
+_OUTER_JOIN_WORDS = frozenset(("LEFT", "RIGHT", "FULL"))
+
+
+def _anded_conditions(tokens, depths, start, end) -> list:
+    """`tokens[start:end]` split on its own top-level ANDs - each a list of token indices - or
+    [] when an OR stands at that same depth anywhere in the span: then no one condition of it
+    is met by every row that passes it, so none is safe to read alone. Generalises
+    `_top_level_conditions`'s own WHERE-rooted split to an arbitrary span, for a JOIN's ON."""
+    base = depths[start] if start < end else 0
+    if any(depths[k] == base and _word(tokens[k]) == "OR" for k in range(start, end)):
+        return []
+    conditions, current = [], []
+    for k in range(start, end):
+        if depths[k] == base and _word(tokens[k]) == "AND":
+            conditions.append(current)
+            current = []
+        else:
+            current.append(k)
+    conditions.append(current)
+    return [ks for ks in conditions if ks]
+
+
+def _column_equality(condition):
+    """`((ref, col), (ref2, col2))` when `condition` (one ANDed condition's tokens) is exactly
+    `ref.col = ref2.col2` and nothing else - both sides qualified; None for anything else (a
+    literal on either side - `_comparison`'s own job - an expression, an unqualified column, a
+    different operator)."""
+    if (len(condition) == 7 and _is_name(condition[0]) and condition[1][1] == "."
+            and _is_name(condition[2]) and condition[3][1] == "="
+            and _is_name(condition[4]) and condition[5][1] == "."
+            and _is_name(condition[6])):
+        return (condition[0][2], condition[2][2]), (condition[4][2], condition[6][2])
+    return None
+
+
+def _where_literal_pins(sql: str, aliases: dict) -> dict:
+    """{(table name lower, column lower): literal} - every column a plain, singly-valued
+    `= 'lit'` condition ANDs at the top of the query's own WHERE pins to that one literal
+    (`_top_level_conditions` + `_comparison`, the MATCHED line's own readers), its qualifier
+    resolved through `aliases` to its real table name; an unqualified column is left out (this
+    is only ever asked of a column a JOIN's own ON already qualifies with the query's own
+    alias), and so is one the WHERE pins to two different literals in two conditions - then
+    neither is safe to read as single-valued."""
+    pins, conflicted = {}, set()
+    for condition in _top_level_conditions(sql):
+        parts = _comparison(condition)
+        if not parts or not parts[0] or parts[2] != "=" or len(parts[3]) != 1:
+            continue
+        table = aliases.get(str(parts[0]).lower())
+        if not table:
+            continue
+        key = (table.lower(), str(parts[1]).lower())
+        literal = parts[3][0][2]
+        if key in pins and pins[key] != literal:
+            conflicted.add(key)
+        else:
+            pins[key] = literal
+    for key in conflicted:
+        pins.pop(key, None)
+    return pins
+
+
+def _outer_join_pins(tokens, words, depths, aliases, where_pins) -> list:
+    """`[(table, ref, join column, literal), …]` - every LEFT/RIGHT/FULL [OUTER] JOIN this
+    query's own FROM makes (depth 0; a plain/INNER JOIN never leaves a matched row's own side
+    NULL), whose own join column is tied to exactly one literal: directly in its ON
+    (`ref.col = 'lit'`, read by `_comparison`), or through an ON equality with another table's
+    column `where_pins` ties to exactly one literal (`ref.col = other.col2`, with
+    `other.col2 = 'lit'` in the query's own WHERE). A join whose ON this cannot read this way
+    at all names nothing."""
+    n = len(tokens)
+    found = []
+    for k in range(n):
+        if depths[k] != 0 or words[k] != "JOIN":
+            continue
+        j = k - 1
+        if j >= 0 and depths[j] == 0 and words[j] == "OUTER":
+            j -= 1
+        if j < 0 or depths[j] != 0 or words[j] not in _OUTER_JOIN_WORDS:
+            continue
+        ref_info = _table_ref(tokens, k + 1)
+        if ref_info is None:
+            continue
+        table, alias, after = ref_info
+        if after >= n or words[after] != "ON":
+            continue
+        start = after + 1
+        end = next((m for m in range(start, n) if depths[m] == 0 and (
+            words[m] in ("JOIN", "WHERE") or words[m] in _CLAUSES_AFTER_WHERE
+            or words[m] in _SET_OPERATIONS)), n)
+        on_ref = str(alias or table).lower()
+        for cond_idx in _anded_conditions(tokens, depths, start, end):
+            cond = [tokens[i] for i in cond_idx]
+            direct = _comparison(cond)
+            if (direct and direct[0] and str(direct[0]).lower() == on_ref
+                    and direct[2] == "=" and len(direct[3]) == 1):
+                found.append((table, on_ref, direct[1], direct[3][0][2]))
+                continue
+            pair = _column_equality(cond)
+            if pair is None:
+                continue
+            (ref_a, col_a), (ref_b, col_b) = pair
+            if str(ref_a).lower() == on_ref:
+                mine_col, other_ref, other_col = col_a, ref_b, col_b
+            elif str(ref_b).lower() == on_ref:
+                mine_col, other_ref, other_col = col_b, ref_a, col_a
+            else:
+                continue
+            other_table = aliases.get(str(other_ref).lower())
+            if not other_table:
+                continue
+            literal = where_pins.get((other_table.lower(), str(other_col).lower()))
+            if literal is not None:
+                found.append((table, on_ref, mine_col, literal))
+    return found
+
+
+def _selects_table_column(tokens, words, depths, start, end, ref) -> bool:
+    """Whether select-list item `tokens[start:end]` is, once one optional trailing alias is
+    dropped, exactly `ref.<column>` for the given `ref` (case-insensitive) - never a bare
+    column, an expression or a `*`: those are not confidently one table's own column, so they
+    count for neither side of 'every selected column of this table is NULL'."""
+    base = depths[start] if start < end else 0
+    k = end
+    if k > start and depths[k - 1] == base and _is_name(tokens[k - 1]):
+        k -= 1
+        if k > start and depths[k - 1] == base and _word(tokens[k - 1]) == "AS":
+            k -= 1
+    return (k - start == 3 and _is_name(tokens[start]) and tokens[start + 1][1] == "."
+            and _is_name(tokens[start + 2])
+            and str(tokens[start][2]).lower() == str(ref).lower())
+
+
+def _outer_join_elsewhere_lines(con, sql: str, tables: list, col_types: dict, col_names,
+                                result) -> str:
+    """The LITERAL ELSEWHERE line(s) for the empty side of an OUTER JOIN `sql` makes, or "" -
+    see the comment above for when it applies. Runs the same `_held_in`/`_held_counts` search
+    LITERAL ELSEWHERE's own mismatch trigger makes; the caller drops the line(s), and nothing
+    else, if anything raises."""
+    if not result or not col_names:
+        return ""
+    tokens = sql_token_spans(sql)
+    if not tokens:
+        return ""
+    words = [_word(t) for t in tokens]
+    depths = _paren_depths(tokens)
+    read_tables, aliases = _query_tables(tokens, depths)
+    if len(read_tables) < 2:
+        return ""  # nothing is JOINed at all
+    spans = _select_item_spans(sql)
+    if spans is None:
+        return ""
+    s_tokens, s_words, s_depths, items = spans
+    where_pins = _where_literal_pins(sql, aliases)
+    loaded, texts, cards = _loaded_text_context(tables, col_types)
+    compared = _compared_literals(sql, cards)
+    sentences = []
+    for table, ref, join_col, literal in _outer_join_pins(tokens, words, depths, aliases,
+                                                          where_pins):
+        key = str(table).lower()
+        if key not in loaded:
+            continue
+        own_indices = [i for i, (start, end) in enumerate(items)
+                       if i < len(col_names)
+                       and _selects_table_column(s_tokens, s_words, s_depths, start, end, ref)]
+        if not own_indices:
+            continue  # nothing of this table was asked for - nothing to say is missing
+        if any(row[i] is not None for row in result for i in own_indices):
+            continue  # the join matched somewhere - a genuine value, not an empty side
+        if _held_in(loaded[key], [join_col], literal):
+            continue  # it IS held there - not this shape
+        holders = _elsewhere_holders(con, loaded, texts, compared, key, literal)
+        if not holders:
+            continue  # held nowhere loaded - nothing to point at
+        value = _sql_literal(literal)
+        sentence = (f"{value} never appears in {table}.{join_col} (the joined side came back "
+                   "empty); it is printed in "
+                   + _and_list(f"{where} ({_entries(n)})"
+                               for where, n in holders[:LITERAL_HOLDERS_SHOWN]))
+        if len(holders) > LITERAL_HOLDERS_SHOWN:
+            sentence += f", … {len(holders)} in all"
+        if sentence not in sentences:
+            sentences.append(sentence)
     return "\n".join(LITERAL_ELSEWHERE_LEAD + s for s in sentences[:LITERAL_ELSEWHERE_MAX])
 
 
@@ -5220,6 +5527,75 @@ def _fetch_loaded_table(table: str, user_id: str, supabase_client):
     return None
 
 
+def _fetch_all_tables(user_id: str, supabase_client) -> list:
+    """Every one of this user's `structured_data` tables - table_name, columns, rows and all -
+    fetched exactly the way `execute_sql_query`'s own step 1 does, or [] when the fetch fails.
+    A small, separate fetch so a caller that only needs to find ONE generic table (the places
+    table, say) never has to drive the whole SQL pipeline to get it."""
+    try:
+        result = (supabase_client.table("structured_data")
+                  .select("table_name, columns, rows, row_count")
+                  .eq("user_id", user_id)
+                  .order("table_name")
+                  .execute())
+    except Exception as e:
+        logger.warning(f"place_code_resolver: fetching this user's tables failed "
+                       f"({type(e).__name__}: {e}); no place codes will resolve")
+        return []
+    return list(result.data or [])
+
+
+def place_code_resolver(user_id: str, supabase_client):
+    """`resolve(text) -> [(token, location id, display name or ""), …]` over this user's own
+    tables - the `place_codes` the app hands `sql_loop.iter_sql_investigation`, whose
+    PLACE_NOT_FILTERED check (task W13-A1) asks the question's own printed place codes without
+    a second resolver.
+
+    This is the SAME resolution `_place_lines` offers the SQL writer, not a rewrite of it:
+    `_places_table` finds the places table generically (by the cards' declared joins, else a
+    loaded table keyed by its own location id and kind - never by its name, T11a-R3) and
+    `resolve_place_codes` reads `text`'s printed codes off it. Both are called here exactly as
+    `_place_lines` calls them, over this user's FULL table set (there is no "routed" subset to
+    prefer when nothing has been routed yet, so `loaded` is always empty and `every` carries
+    everything).
+
+    LAZY and MEMOISED, the same contract as `column_value_reader`: building this reads
+    nothing, and the user's tables and cards are each fetched at most once however many times
+    `resolve` is called - a question whose loop never needs a place code never pays for
+    either fetch. A fetch that fails, a cards file of the wrong shape, or a corpus with no
+    places table at all (`_places_table` finding none) answers [] rather than raising: this is
+    an aid to a re-query and must never cost it."""
+    state = {"tried": False, "places": None}
+
+    def places():
+        if not state["tried"]:
+            state["tried"] = True
+            try:
+                tables = _fetch_all_tables(user_id, supabase_client)
+                cards = _load_table_cards(user_id, supabase_client)
+                state["places"] = _places_table(cards, [], tables)
+            except Exception as e:  # noqa: BLE001 - see the docstring
+                logger.warning(f"place_code_resolver: finding the places table failed "
+                               f"({type(e).__name__}: {e}); no place codes will resolve")
+                state["places"] = None
+        return state["places"]
+
+    def resolve(text):
+        found = places()
+        if found is None:
+            return []
+        table, key_col, kind_col, name_col = found
+        try:
+            return resolve_place_codes(text, table.get("rows") or [], key_col, kind_col,
+                                       name_col)
+        except Exception as e:  # noqa: BLE001 - see the docstring
+            logger.warning(f"place_code_resolver: resolving {text!r} failed "
+                           f"({type(e).__name__}: {e}); no place codes resolved")
+            return []
+
+    return resolve
+
+
 @traceable(name="query_structured_data", run_type="tool")
 def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     """Generate SQL from a natural language question and execute it against user's tabular data."""
@@ -5257,8 +5633,12 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
     # fallback.
     cards = _load_table_cards(user_id, supabase_client)
     # Each routed card's `holds` sentence, printed under its table's heading in the schema
-    # block (spec-fix5). Empty when nothing was routed: the full-schema fallback stays as it was.
+    # block (spec-fix5), and its PINNED `identifier_column` only (task W13-A2 - the schema's own
+    # 'Identifier:' line, see `_schema_block`; narrowed to a card's declared pin, never its
+    # auto-detected guess, by task W13-A3 - see `_routed_identifiers`). Both empty when nothing
+    # was routed: the full-schema fallback stays as it was.
     routed_holds = {}
+    routed_identifiers = {}
     if cards:
         try:
             selected = set(_routed_table_names(question, cards, k=3))
@@ -5272,16 +5652,18 @@ def execute_sql_query(question: str, user_id: str, supabase_client) -> str:
                         f"{[t['table_name'] for t in filtered]}")
             tables = filtered
             routed_holds = _routed_holds(cards, selected)
+            routed_identifiers = _routed_identifiers(cards, selected)
         elif filtered is not None:
             logger.warning("table_router: selection matched no live tables "
                             "(cards out of sync with structured_data?); "
                             "falling back to the full schema for this question")
 
     # 2. Build schema description for LLM: every column read off every row, cut values
-    # marked, a wide table's columns all named, each routed card's holds sentence (spec-fix5,
-    # `_schema_block`). The column types are the majority-vote types the DuckDB load below
-    # reuses, so the schema shown to the LLM matches the actual types.
-    schema_desc, table_col_types = _schema_block(tables, routed_holds)
+    # marked, a wide table's columns all named, each routed card's holds sentence and declared
+    # identifier column (spec-fix5, task W13-A2, `_schema_block`). The column types are the
+    # majority-vote types the DuckDB load below reuses, so the schema shown to the LLM matches
+    # the actual types.
+    schema_desc, table_col_types = _schema_block(tables, routed_holds, routed_identifiers)
     # A printed date column's ISO companion: its rule rides only with a table that has one.
     iso_date_line = f"\n{ISO_DATE_RULE}" if _has_iso_companion(tables) else ""
 
@@ -5503,25 +5885,35 @@ Rules:
 
 User question: {question}"""
 
-    from app.services.llm_usage import generate_with_usage
+    # Claude path (task W9-A1): LLM_PROVIDER_SQL=anthropic sends this SAME prompt text
+    # to Claude instead, as a single user turn (no system turn - nothing here uses
+    # one). Unset/"gemini" (default) runs the unchanged line below, byte-identical to
+    # before this task. See app.services.llm_provider's module docstring for why no
+    # temperature is sent on either call.
+    from app.services.llm_provider import get_llm_provider, generate_sql_text
 
-    response = generate_with_usage(
-        client,
-        model=model,
-        contents=prompt,
-        config=genai_types.GenerateContentConfig(
-            temperature=0,
-            # Thinking models (gemini-2.5+/3) spend "thought" tokens from this same
-            # budget — 2048 sometimes truncated the SQL mid-string. Keep it high.
-            # MEASURED 2026-09-28, and the reason it came back down: a two-part
-            # question made the writer pad a UNION arm with NULLs and it spent
-            # 8,188 output tokens doing it. A one-line SELECT never needs 8,192;
-            # a truncation is now caught by shape (_sql_looks_runaway) instead of
-            # being outrun by a bigger budget.
-            max_output_tokens=2048,
-        ),
-        name="sql_generate",
-    )
+    if get_llm_provider("sql") == "anthropic":
+        response = generate_sql_text(prompt, name="sql_generate")
+    else:
+        from app.services.llm_usage import generate_with_usage
+
+        response = generate_with_usage(
+            client,
+            model=model,
+            contents=prompt,
+            config=apply_llm_seed(genai_types.GenerateContentConfig(
+                temperature=0,
+                # Thinking models (gemini-2.5+/3) spend "thought" tokens from this same
+                # budget — 2048 sometimes truncated the SQL mid-string. Keep it high.
+                # MEASURED 2026-09-28, and the reason it came back down: a two-part
+                # question made the writer pad a UNION arm with NULLs and it spent
+                # 8,188 output tokens doing it. A one-line SELECT never needs 8,192;
+                # a truncation is now caught by shape (_sql_looks_runaway) instead of
+                # being outrun by a bigger budget.
+                max_output_tokens=2048,
+            )),
+            name="sql_generate",
+        )
 
     sql = response.text.strip()
     # Strip markdown code fences if present
@@ -5583,11 +5975,18 @@ User question: {question}"""
                 f"for arithmetic on them. Return ONLY the corrected SQL on a single line, "
                 f"no explanation, no semicolons, no code fences."
             )
-            repair_resp = client.models.generate_content(
-                model=model,
-                contents=repair_prompt,
-                config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=2048),
-            )
+            # Same provider switch as the primary generation above - read fresh here
+            # too (a request-scoped env change must reach the repair call the same
+            # way it reaches the first one).
+            if get_llm_provider("sql") == "anthropic":
+                repair_resp = generate_sql_text(repair_prompt, name="sql_repair")
+            else:
+                repair_resp = client.models.generate_content(
+                    model=model,
+                    contents=repair_prompt,
+                    config=apply_llm_seed(genai_types.GenerateContentConfig(
+                        temperature=0, max_output_tokens=2048)),
+                )
             sql = (repair_resp.text or "").strip().rstrip(";")
             if sql.startswith("```"):
                 lines = sql.split("\n")
@@ -5726,6 +6125,14 @@ User question: {question}"""
                                table_col_types)
         if elsewhere:
             md += "\n\n" + elsewhere
+        # The far side of an OUTER JOIN came back NULL though its own join column is tied to a
+        # literal elsewhere in the query - the literal never reaches it, though the data may
+        # still hold it elsewhere (wave 7, W7-A1). Only on a result WITH rows: a genuinely
+        # empty result is the branch above's job.
+        outer_elsewhere = _companion("outer join elsewhere", _outer_join_elsewhere_lines, con,
+                                     sql, tables, table_col_types, col_names, result)
+        if outer_elsewhere:
+            md += "\n\n" + outer_elsewhere
         # The sheet's own printed total rows, counted as items (spec-fix6).
         printed_totals = _companion("printed total rows", _printed_total_rows_line,
                                     con, sql, tables, cards, col_names, result)

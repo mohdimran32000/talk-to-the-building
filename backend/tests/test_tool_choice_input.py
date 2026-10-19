@@ -399,8 +399,10 @@ for path in PATHS:
     check(f"{path}: ...and never the frozen tool-choice copy",
           FROZEN is None or FROZEN not in p)
 stream_names = names_read(oc.stream_response)
-check("stream_response reads the live rules at exactly its four answer sites",
-      stream_names.count("OUTPUT_FORMAT_RULES") == 4, stream_names.count("OUTPUT_FORMAT_RULES"))
+check("stream_response reads the live rules at exactly its four answer sites, +1 for task "
+      "W11-A1's plan-first compose (its own fresh base system text, built from scratch "
+      "rather than appending to an already-built one) - 5 sites",
+      stream_names.count("OUTPUT_FORMAT_RULES") == 5, stream_names.count("OUTPUT_FORMAT_RULES"))
 check("stream_response never reads the frozen copy (it belongs to the tool choice only)",
       "TOOL_CHOICE_FORMAT_RULES" not in stream_names)
 

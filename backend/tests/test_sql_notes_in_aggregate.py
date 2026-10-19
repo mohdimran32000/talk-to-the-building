@@ -339,5 +339,55 @@ check("_summed_column sums what parses as a number and ignores the rest; None wi
       and sql_tool._summed_column([(1, "2"), (2, "3")], 1) == "5"
       and sql_tool._summed_column([(1, None)], 1) is None)
 
+# ===========================================================================
+print("\n7. Wave 7, W7-A1: a one-table aggregate whose WHERE carries a sub-SELECT")
+# ===========================================================================
+# THE DEFECT (diagnosed on the goal-function run of 2026-09-30, measured again in round 7):
+# the writer wrote a one-table aggregate - no JOIN at all - narrowed by a sub-SELECT over a
+# SECOND table in its WHERE (`db IN (SELECT panel FROM panels WHERE ...)`). BOTH blocks
+# skipped it: the single-table NOTES ON THE ROWS BEHIND THIS RESULT block refuses outright
+# because `_single_table_query` (non-`nested`) counts a WHERE sub-SELECT as a second SELECT
+# and bails; NOTES INSIDE THE FIGURE's own `_aggregate_rows_with_notes` requires its FROM/JOIN
+# to name 2+ loaded tables (`_query_tables`, which a sub-SELECT's own FROM never counts), and
+# this query's FROM names only the one. Reusing UNITS/section 1's exact figures - a JOIN to a
+# second table and a sub-SELECT to it are the SAME rows behind the SAME aggregate - proves the
+# fix gives the identical block, not a new shape of its own.
+PANELS_SUB = {"table_name": "bld_panels_sub", "columns": ["panel", "block"],
+             "rows": [{"panel": "PNL-A", "block": "X"}, {"panel": "PNL-B", "block": "X"}],
+             "row_count": 2}
+SUBSELECT_SQL = ("SELECT panel, SUM(pts) AS total_units, SUM(watts) AS total_load "
+                 "FROM \"bld_units\" WHERE kind = 'FCU' AND panel IN "
+                 "(SELECT panel FROM \"bld_panels_sub\" WHERE block = 'X') "
+                 "GROUP BY panel ORDER BY panel")
+out_sub = run(SUBSELECT_SQL, Q, (UNITS, PANELS_SUB))
+check("RED: the same figures as section 1's JOIN shape - PNL-A 2/200, PNL-B 5/500",
+      "| PNL-A | 2" in out_sub and "| PNL-B | 5" in out_sub, out_sub)
+block_sub = block_of(out_sub)
+check("RED: NOTES INSIDE THE FIGURE now fires for a one-table aggregate with a WHERE "
+      "sub-SELECT", bool(block_sub), out_sub)
+check("RED: it never double-fires with the single-table block on this shape",
+      "NOTES ON THE ROWS BEHIND THIS RESULT" not in out_sub, out_sub)
+check("RED: the same bullet, keyed to the same row's own contribution, same note text, as "
+      "the JOIN shape", "pts 1" in block_sub and "watts 100" in block_sub
+      and "Inference" in block_sub, block_sub)
+check("RED: the SAME 'Without the noted row(s)' figure the JOIN shape gives",
+      "Without the noted row(s), the same figure is:" in block_sub, block_sub)
+check("RED: and the SAME In-all line the JOIN shape's own fixture gives (wave 6, W6-A1)",
+      "In all: total_units 7 (6 without the noted rows); total_load 700 (600 without the "
+      "noted rows)" in block_sub, block_sub)
+
+out_sub_none = run(SUBSELECT_SQL, Q, (NONE_NOTED, PANELS_SUB))
+check("RED: the same shape with no noted row - no block",
+      not block_of(out_sub_none), out_sub_none)
+
+# "a plain one-table GROUP BY with no sub-SELECT -> whatever happens today, byte-identical"
+# is section 2's pre-existing `out_single`/SINGLE_TABLE_SQL check, re-run unchanged by this
+# same file's own suite - this gate's own gate (`_single_table_query(sql, names)` with no
+# `nested=True`) is never touched by this fix, only the fallback past it.
+check("regression: the plain single-table shape (no sub-SELECT) is still the OTHER block's "
+      "job, byte-identical to before this fix",
+      not block_of(out_single) and "NOTES ON THE ROWS BEHIND THIS RESULT" in out_single,
+      out_single)
+
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

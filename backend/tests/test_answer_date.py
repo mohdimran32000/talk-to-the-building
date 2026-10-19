@@ -171,8 +171,11 @@ tool_choice_text = oc._build_system_prompt(True, True, False, [])
 check("no stray ISO date lands in the tool-choice prompt via the clock itself",
       oc._today().isoformat() not in tool_choice_text or True)  # the clock itself is untouched
 stream_names = names_read(oc.stream_response)
-check("RED: stream_response's own code injects the date line once per answer path (4 sites)",
-      stream_names.count("_today_line") == 4, stream_names.count("_today_line"))
+check("RED: stream_response's own code injects the date line once per answer path (4 sites "
+      "from this task, +1 added by task W11-A1's plan-first compose, which builds its own "
+      "fresh base system text from scratch rather than appending to an already-built one - "
+      "5 sites)",
+      stream_names.count("_today_line") == 5, stream_names.count("_today_line"))
 
 # ===========================================================================
 print("\n4. The warranty bullet says to compare an end date against today")

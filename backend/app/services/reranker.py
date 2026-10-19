@@ -6,6 +6,7 @@ from google.genai import types
 from pydantic import BaseModel
 from langsmith import traceable
 
+from app.services.llm_config import apply_llm_seed
 from app.services.settings import get_llm_api_key, get_llm_model, get_reranking_provider, get_cohere_api_key
 
 logger = logging.getLogger(__name__)
@@ -87,11 +88,11 @@ Return a JSON object with a "rankings" array, one entry per chunk. Each element 
         client,
         model=model,
         contents=prompt,
-        config=types.GenerateContentConfig(
+        config=apply_llm_seed(types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=RerankResult,
             temperature=0.0,
-        ),
+        )),
         name="rerank_llm",
     )
     result = RerankResult.model_validate_json(response.text)

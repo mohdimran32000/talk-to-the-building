@@ -54,7 +54,9 @@ what a card carries:
      word list; see `_IDENTIFIER_VALUE_WEIGHT` below.
 The change signal is NOT a scoring tier — it is a guard, like the neighbour
 rule below. See `_CHANGE_VERB_RES` and the change-guard block in
-`select_tables`.
+`select_tables`. Neither is the maintenance-schedule signal (task W12-A1) —
+see `asks_about_maintenance_frequency` and the maintenance-schedule guard
+block in `select_tables`.
 
 This is a deliberate, reported simplification versus the blueprint's
 "embed the cards" sketch (see task-8-report.md) — swapping in a real
@@ -228,6 +230,59 @@ _IMPACT_WORD_RES = [
 # The edge shape. All three are required: a table with only an `object_id` is a
 # foreign key, not a graph — it names one end and cannot be walked backwards.
 _GRAPH_EDGE_COLUMNS = frozenset({"subject_id", "predicate", "object_id"})
+
+# ---------------------------------------------------------------------------
+# THE MAINTENANCE-SCHEDULE GUARD (task W12-A1)
+#
+# THE DEFECT: an isolated frequency question that names a device by its coded tag gives
+# that device's OWN tables a prefix-match bonus and leaves the small maintenance-schedule
+# table that actually holds the answer unranked — measured on the real cards, it comes in
+# around 32nd of 71. Vocabulary alone cannot fix this the way tier 5 fixes a row named by
+# its own identifier: the question is not naming the SCHEDULE's own row, it is naming the
+# DEVICE the schedule is about, which is a different table's identifier entirely.
+#
+# THE SIGNAL is the question's own wording, exactly like the change guard: `how often`,
+# `frequen\w*`, `maint(?:ain|enance)\w*`, `inspect\w*`, `service interval\w*`. NOT a bare
+# `check\w*` — measured: the list above fires on 13 of 348 test questions, and `check` alone
+# would fire on far more of them, because "check" is used for everything from a
+# commissioning tick-box to an inspection schedule. A check that cries wolf does not ship
+# (doc-prep/CLAUDE.md §12).
+#
+# THE EVIDENCE is the card's own COLUMN SHAPE, exactly like the change guard's graph-edge
+# test: a maintenance schedule names a TASK (a `task` or `activity` column) against a
+# PERIOD (a `frequency` column, or a column named for the period itself — one containing
+# `daily`, `weekly`, `monthly`, `quarterly`, `yearly` or `annual`). No table name is matched
+# anywhere in this module, so a second building's own maintenance tables are routed by the
+# same column shapes, whatever they are called there.
+#
+# WHY A GUARD AND NOT A SCORING TIER — the change guard's own reasoning applies without
+# change (see the module docstring and the CHANGE GUARD block above): `sql_tool` uses this
+# list as a SET, so "is the schedule in play" is a correctness question, not a relevance
+# one, and a question naming a device by its coded tag already gives that device's own
+# tables 6 points apiece on tier 1 alone — no tier weight this router could add would let a
+# three-row schedule outrank them without also outranking tables that really were the best
+# match on some OTHER question. Appending instead of promoting keeps the guard strictly
+# additive, exactly like the neighbour rule and the change guard: it can never cost a
+# question a table it already selects.
+#
+# WHY ALSO EXCLUDE A PLACEABLE CARD. A card that carries a location key is already reached
+# by tier 4 when the question names a place, and a maintenance table that is ALSO a
+# per-room register would be routed twice for no reason this guard exists for. This guard is
+# for the SMALL, UNPLACED schedules tiers 1-4 cannot reach at all — not a second vote for a
+# table that already has a way in.
+# ---------------------------------------------------------------------------
+_MAINTENANCE_FREQUENCY_RES = [
+    re.compile(r"\b(how often|frequen\w*|maint(?:ain|enance)\w*|inspect\w*"
+               r"|service interval\w*)\b", re.IGNORECASE),
+]
+
+#: The task-like columns a maintenance-schedule card names its rows by. Read off the card's
+#: own `columns`, never a table name — see `_card_is_maintenance_schedule` below.
+_TASK_LIKE_COLUMNS = frozenset({"task", "activity"})
+
+#: A period column names itself after the interval it prints rather than printing the word
+#: 'frequency' itself — both shapes occur in this corpus, so both are read.
+_PERIOD_COLUMN_RE = re.compile(r"(daily|weekly|monthly|quarterly|yearly|annual)")
 
 _STOPWORDS = {
     "the", "a", "an", "of", "is", "are", "what", "which", "how", "many",
@@ -581,6 +636,34 @@ def _asks_about_a_change(question: str) -> bool:
     return _names_a_place(q) or bool(_question_prefixes(q))
 
 
+def asks_about_maintenance_frequency(question: str) -> bool:
+    """True when the question is about HOW OFTEN something is maintained, inspected or
+    serviced — 'how often', 'frequen*', 'maint(ain|enance)*', 'inspect*', 'service
+    interval*'. See the MAINTENANCE-SCHEDULE GUARD comment block above for why this list and
+    not a bare 'check*'.
+
+    Matched against the RAW question like `_asks_about_a_change`, so nothing depends on the
+    tokeniser, and word-bounded for the same reason ('maintain' must not fire on a word that
+    merely contains it mid-token) — the stems are written out rather than fuzzily matched so
+    the list can be read and argued with.
+
+    SHARED, not local to this module (unlike `_asks_about_a_change`): `openai_client.py`'s
+    plan-first step also calls this, to decide whether a part gets BOTH tools on its first
+    pass regardless of its declared source — a part about maintenance frequency may have
+    been mislabelled, and the data this predicate exists to find is exactly the kind a wrong
+    label hides.
+
+    'maintainer' is a deliberate inclusion, not an oversight: `maint(?:ain|enance)\\w*` is
+    one of this predicate's own stems, used verbatim, and it matches 'maintainer' the same
+    way it matches 'maintenance'. Over-firing here is cheap — unlike the change guard's
+    retired `install\\w*` (module docstring), which cost real questions a graph table's 7
+    join neighbours for nothing, a false positive here only ever ADDS a tool call or a small
+    schedule card to the schema, never removes one, at both call sites this predicate
+    feeds."""
+    q = question or ""
+    return any(rx.search(q) for rx in _MAINTENANCE_FREQUENCY_RES)
+
+
 def _card_is_graph(card: dict) -> bool:
     """True when this table's rows ARE dependency links — it names both ends of
     a link and the link itself (`subject_id`, `predicate`, `object_id`).
@@ -618,6 +701,24 @@ def _card_is_placeable(card: dict) -> bool:
     return any(f".{col}" in join
                for join in card.get("declared_joins", [])
                for col in _LOCATION_COLUMNS)
+
+
+def _card_is_maintenance_schedule(card: dict) -> bool:
+    """True when this table's rows ARE a maintenance schedule: a TASK-like column (`task`
+    or `activity`) against a PERIOD (a `frequency` column, or at least one column named for
+    the period itself), and the card is NOT already placeable.
+
+    Read off the card's own `columns`, never a table name, exactly like `_card_is_graph`.
+    The placeable exclusion is deliberate (see the MAINTENANCE-SCHEDULE GUARD comment block
+    above): a per-room maintenance register already has a way into the schema through tier
+    4, so this guard is reserved for the small, unplaced schedules nothing else can reach."""
+    columns = {str(c).strip().lower() for c in card.get("columns", [])}
+    if not (columns & _TASK_LIKE_COLUMNS):
+        return False
+    has_period = "frequency" in columns or any(_PERIOD_COLUMN_RE.search(c) for c in columns)
+    if not has_period:
+        return False
+    return not _card_is_placeable(card)
 
 
 def _card_reaches_room(card: dict) -> bool:
@@ -717,6 +818,13 @@ def select_tables(question: str, cards: list[dict], k: int = 3) -> list[str]:
     for why this is a guard and not a scoring tier, and `_asks_about_a_change`
     for when it fires.
 
+    THE MAINTENANCE-SCHEDULE GUARD (task W12-A1), same shape again. When the
+    question asks how often something is maintained, every maintenance-schedule
+    card is appended too — after the ranked picks AND after the change guard,
+    never displacing one. See the MAINTENANCE-SCHEDULE GUARD comment block for
+    why, and `asks_about_maintenance_frequency`/`_card_is_maintenance_schedule`
+    for when it fires.
+
     Deterministic: identical (question, cards, k) always returns the same
     list in the same order. Ties in score are broken by a stated rule first —
     on a question that names a room BY ITS PRINTED NAME, a card whose rows
@@ -795,6 +903,17 @@ def select_tables(question: str, cards: list[dict], k: int = 3) -> list[str]:
     if asks_change:
         for card in cards:
             if _card_is_graph(card) and card["table"] not in top:
+                top.append(card["table"])
+
+    # The maintenance-schedule guard (task W12-A1), same shape as the change guard just
+    # above and for the same reason — see the MAINTENANCE-SCHEDULE GUARD comment block
+    # earlier in this module. Appended in `cards` order, after the ranked picks AND after
+    # the change guard, before the neighbour pass, so a frequency question never loses a
+    # ranked pick — or a graph table the change guard already appended — to make room for
+    # the schedule.
+    if asks_about_maintenance_frequency(question):
+        for card in cards:
+            if _card_is_maintenance_schedule(card) and card["table"] not in top:
                 top.append(card["table"])
 
     result = list(top)
