@@ -131,6 +131,7 @@ SITES = [
     ("reranker.py", 1),
     ("sub_agent.py", 3),
     ("metadata.py", 2),
+    ("agent_mode.py", 1),
 ]
 
 _RAW_RE = re.compile(r"(?<!apply_llm_seed\()\bGenerateContentConfig\(")
@@ -149,10 +150,10 @@ for fname, expected in SITES:
           f"(no call site missed)", wrapped == total, f"{wrapped} of {total} wrapped")
     check(f"{fname}: imports apply_llm_seed", bool(_IMPORT_RE.search(src)))
 
-check("19 call sites total across the app (14 from part A, +2 from part B's checked-answer "
+check("20 call sites total across the app (14 from part A, +2 from part B's checked-answer "
       "retry path, +1 from task W10-A1's follow-up-question call, +2 from task W11-A1's "
-      "plan/check calls, each wrapped the same way)",
-      total_sites == 19, total_sites)
+      "plan/check calls, +1 from agent mode's step call, each wrapped the same way)",
+      total_sites == 20, total_sites)
 
 # --------------------------------------------------------------------------- discovery, not a hardcoded list
 #
@@ -248,8 +249,8 @@ real_unwrapped = [(str(p.relative_to(BACKEND_ROOT)), t, w) for p, t, w in real_s
 check("every GenerateContentConfig( call anywhere under backend/app/ (discovered recursively, "
       "every .py file, not a hardcoded list) is wrapped in apply_llm_seed(...)",
       real_unwrapped == [], real_unwrapped)
-check("the recursive discovery over backend/app/ finds the same 19 total sites SITES does",
-      sum(t for _, t, _ in real_sites) == 19, sum(t for _, t, _ in real_sites))
+check("the recursive discovery over backend/app/ finds the same 20 total sites SITES does",
+      sum(t for _, t, _ in real_sites) == 20, sum(t for _, t, _ in real_sites))
 
 # The exclusion, stated AND verified - not just asserted in a comment: backend/scripts/ is a
 # real directory, genuinely holds an unwrapped call, and is never touched by this fix.

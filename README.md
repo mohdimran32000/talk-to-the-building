@@ -74,6 +74,61 @@ Design principles (see [CLAUDE.md](./CLAUDE.md)):
 - **Stateless completions** — chat history stored in Postgres and sent explicitly
 - **RLS everywhere** — users only ever see their own data (plus shared global docs)
 
+## Agent mode (default since v1.5)
+
+The diagram above is the **classic pipeline**. Since v1.5 the app answers in **agent mode** by
+default: one model answers each question in one conversation. It sees an index of the tables and
+document folders and four read-only tools - `describe_table`, `run_sql`, `search_docs` (the hybrid
+search and reranker above) and `read_document` - and decides for itself where to look, up to 16
+tool calls or 180 seconds. This path has no table router, no SQL loop and no answer-rule blocks:
+what the model needs to know about the data lives in the data (table cards, manifests).
+
+- **Default model:** Claude Sonnet 5.5 (`ANTHROPIC_API_KEY`). `AGENT_MODEL` picks another:
+  `anthropic:<id>`, `gemini:<id>` or `openrouter:<id>` (OpenRouter requests refuse low-precision
+  and data-retaining hosts). `AGENT_MAX_STEPS` and `AGENT_TIME_BUDGET_S` change the limits.
+- **No key:** if the agent model cannot be built (no key, no SDK), the app logs a warning and
+  answers with the classic pipeline.
+
+Measured on 100 hard questions about one building (20 + 50 + 30, the last 30 written after agent
+mode was built), one run per model, every miss checked by hand, 2026-11-07 to 2026-11-09:
+
+| Agent-mode model | Score /100 | Cost / question | Time / question |
+|---|---|---|---|
+| Claude Sonnet 5.5 + Cohere rerank (default) | **97** | ~$0.07 | ~39 s |
+| Claude Sonnet 5.5, no rerank | 95 | ~$0.07 | ~30 s |
+| Gemini 3.8 Flash | 94 | ~$0.10 | ~94 s |
+| Claude Opus 5.5, low effort | 93 | ~$0.07 | ~30 s |
+| DeepSeek V4.1 Flash | 92 | ~$0.003 | ~54 s |
+| GLM 5.3 FlashX | 91 | ~$0.015 | ~60 s |
+| MiniMax M3.1 Flash | 91 | ~$0.014 | ~82 s |
+
+One run each, so a 1-2 point gap is within run-to-run noise. The questions encode one building's
+facts and are kept privately with that corpus.
+
+### Turning it off: `AGENT_MODE=0`
+
+`AGENT_MODE=0` (or `false`, `off`, `no`) brings back the classic pipeline exactly as it was in
+v1.4 - tool choice, table router, SQL verifying loop and answer rules, with the v1.4 switches
+(`PLAN_FIRST`, `LLM_PROVIDER_*`). What you gain and lose:
+
+| | Agent mode (default) | Classic pipeline (`AGENT_MODE=0`) |
+|---|---|---|
+| Score on the same 100 questions | 97 (Sonnet 5.5) | 88 with Sonnet 5.5 + `PLAN_FIRST=1` (20 + 48 + 20; 3 of the newest 30 timed out); 10 of the first 20 on Gemini Flash-Lite |
+| Cost per question | ~$0.07 on Sonnet 5.5 | ~$0.22 with Sonnet 5.5 + plan-first; about 1 cent on Gemini Flash-Lite |
+| Keys needed | Anthropic (or the key of the model you pick) | Gemini only, unless roles are switched to Claude |
+| How it decides | the model picks its own steps, so the path can vary between runs | a deterministic router and guards, each rule covered by tests |
+| A new corpus | needs good table cards and manifests, no new prompt rules | its prompt-rule blocks were tuned on one corpus, so a new one may need new rules |
+
+**Turn it off when** there is no Anthropic key, cost per question matters more than accuracy on hard
+multi-step questions (the classic pipeline on Gemini Flash-Lite is the cheapest way to run), or you
+need the deterministic guards. **What it costs you:** lower scores on hard questions, and more
+prompt rules to maintain.
+
+**Known limits of agent mode:** it can take a figure from a table when a document states a
+different one (a maintenance interval, for example); document finds lean on the reranker (without
+it, search falls back to fusion order); and about 7 cents a question on Sonnet 5.5 is several times
+the classic pipeline on a Flash-Lite model.
+
 ## Tech Stack
 
 | Layer | Tech |
@@ -81,7 +136,7 @@ Design principles (see [CLAUDE.md](./CLAUDE.md)):
 | Frontend | React, TypeScript, Vite, Tailwind v4, shadcn/ui |
 | Backend | Python, FastAPI, SSE (sse-starlette) |
 | Database | Supabase — Postgres, pgvector, Auth, Storage, RLS |
-| LLM | Google Gemini via native `google-genai` SDK (model configurable in admin settings) |
+| LLM | Agent mode: Claude Sonnet 5.5 via the `anthropic` SDK (default; `AGENT_MODEL` picks another). Classic pipeline: Google Gemini via native `google-genai` SDK (model configurable in admin settings) |
 | Doc parsing | Docling (layout analysis + OCR, GPU-accelerated) |
 | Text-to-SQL | DuckDB (in-memory) |
 | Web search | Tavily |
@@ -109,7 +164,7 @@ So: no cards → correct answers, larger prompts; cards → the same answers on 
 | Suite | Size | Command | Needs |
 |---|---|---|---|
 | Backend validation | 112 tests | `cd backend && venv/Scripts/python scripts/test_all.py` | backend on :8001 + Supabase |
-| Backend unit tests | 10 standalone scripts | `cd backend && venv/Scripts/python -X utf8 tests/test_table_router.py` (one per file) | nothing — no network, no keys |
+| Backend unit tests | 61 standalone scripts | `cd backend && venv/Scripts/python -X utf8 tests/test_table_router.py` (one per file) | nothing — no network, no keys |
 | Frontend E2E (Playwright) | 26 tests | `cd frontend && npx playwright test e2e/full-suite.spec.ts` | backend (:8001) + frontend (:5173) |
 
 The LLM-driven **evaluation question banks are not in this repository**. They encode one
@@ -141,6 +196,7 @@ ruler measured 42/43 on its holdout split, twice, after the neighbouring-value f
    SUPABASE_ANON_KEY=...
    SUPABASE_SERVICE_ROLE_KEY=...
    GEMINI_API_KEY=...
+   ANTHROPIC_API_KEY=...             # agent mode's default model; without it the classic pipeline answers
    LANGSMITH_API_KEY=...             # optional, for tracing
    LANGSMITH_PROJECT=...             # optional
    TEST_USER_ADMIN_PASSWORD=...      # optional, only needed to run the backend tests
@@ -173,6 +229,8 @@ Built in public, checkpoint by checkpoint — each tag is a working snapshot you
 | `v1.1` | Eval hardening — 57-case SQL/routing matrix + 136-case doc-QA audit, both at two consecutive 100% runs |
 | `v1.2` | Retrieval hardening — place-aware table router (a room named in the question reaches the tables whose rows carry a location), router cards read from Supabase instead of a repo file, Cohere reranking, migrations 022–025 (1536-dim embeddings, chunk identity, global-scope search, `table_cards`), and an answer fix that stops a neighbouring column's value standing in for the one asked for |
 | `v1.3` | Measured answering — every SQL result states its shape (rows, shown, distinct items) so a cut-off list is never described as whole; the tool menu lists every table (a cap of 40 had hidden 29 of 69); router cards are read in a fixed order (a republish had reshuffled 39 of 70 routes); a room named by its printed name reaches its tables; change-impact questions walk the dependency graph; a bounded SQL verifying loop (`SQL_LOOP_MAX_STEPS`, default 3 — empty, identifier-less or failed results are re-queried with a code-built instruction, counts are cross-checked against the documents) with a runaway-SQL guard; every UNION recommendation withdrawn from the SQL prompt. The evaluation ruler grew from 183 to 276 cards with a measured 7.5 % noise floor; same-instrument gains are +4 of 70 shape questions and +4 of 82 holdout. Known limits are listed in the doc-prep project's `LIMITATIONS.md` |
+| `v1.4` | Measured on hard questions - the router finds a row by the identifier printed on it (SQL recall 72 % -> 88 % at top 3), a stable tool menu, plan-first answers (`PLAN_FIRST=1`), a Claude provider path (`LLM_PROVIDER_*`) and a guard against filters on places the question never named; every new behaviour behind a switch, off by default |
+| `v1.5` | Agent mode on by default - one model (Claude Sonnet 5.5) with an index and four read-only tools answers each question: 97/100 on 100 hard questions, against 88 for the best classic-pipeline configuration, at about a third of its cost per question. `AGENT_MODE=0` returns the classic pipeline; it also answers, with a warning, when the agent model's key is missing. See [Agent mode](#agent-mode-default-since-v15) |
 
 ## Docs
 

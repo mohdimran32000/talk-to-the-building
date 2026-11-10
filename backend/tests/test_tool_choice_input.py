@@ -42,6 +42,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import os  # noqa: E402
+os.environ["AGENT_MODE"] = "0"  # these checks cover the classic pipeline; agent mode is on by default
 
 from app.services import llm_usage as llm_usage_mod  # noqa: E402
 from app.services import openai_client as oc  # noqa: E402

@@ -1815,6 +1815,21 @@ def stream_response(
     _user_turns = [m["content"] for m in messages if m["role"] == "user"][-2:]
     _current_question.set(" ".join(_user_turns))
 
+    # Agent mode (ON by default since v1.5; AGENT_MODE=0 turns it off): one model, an index and
+    # four read-only tools answer the whole question instead of the pipeline below - see
+    # agent_mode.py. If its model cannot be built from this configuration (no key, no SDK), the
+    # pipeline below answers and a warning says why; any other error is not swallowed.
+    from app.services import agent_mode
+    if agent_mode.agent_mode_enabled() and supabase_client and user_id:
+        try:
+            adapter = agent_mode.adapter_from_env()
+        except (ValueError, ImportError) as e:
+            logger.warning("agent mode is on but cannot start (%s) - answering with the classic pipeline. "
+                           "Set the agent model's key, or AGENT_MODE=0 to use the classic pipeline on purpose.", e)
+        else:
+            yield from agent_mode.stream_agent(messages, user_id, supabase_client, adapter=adapter)
+            return
+
     # Claude path (task W9-A1): LLM_PROVIDER_ANSWER=anthropic sends each of the four
     # answer prompts below to Claude instead - same system text, same conversation
     # turns (merged onto Claude's role pair), the same configured answer temperature
