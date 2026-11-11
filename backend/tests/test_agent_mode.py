@@ -690,5 +690,149 @@ try:
 finally:
     am.AgentContext.from_database = real_from_db
 
+# ---------------------------------------------------------------------------
+print("13. loading: rows go in by the chunk, and the database is kept until the data changes")
+import duckdb  # noqa: E402
+from app.services.sql_tool import _infer_column_types, _loaded_value  # noqa: E402
+
+ODD = {"table_name": "acme_odd", "columns": ["code", "qty", "note", "naïve"], "row_count": 6,
+       "rows": [{"code": "0552", "qty": "1,200", "note": None, "naïve": "é"},
+                {"code": "17", "qty": "N/A", "note": "", "naïve": None},
+                {"code": None, "qty": "3.5", "note": "x,y", "naïve": "ok"},
+                {"code": "9", "qty": None, "note": "'quoted'", "naïve": ""},
+                {"code": "10", "qty": "4", "note": "line\nbreak", "naïve": "z"},
+                {"code": "11", "qty": "5", "note": "z", "naïve": "z"}]}
+WIDE = {"table_name": "acme_wide", "columns": [f"c{i}" for i in range(60)], "row_count": 700,
+        "rows": [{f"c{i}": (str(r * i) if i % 3 else f"t{r}-{i}") for i in range(60)} for r in range(700)]}
+
+
+def dump(con, name):
+    cols = con.execute("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ? "
+                       "ORDER BY ordinal_position", [name]).fetchall()
+    return cols, con.execute(f'SELECT * FROM "{name}"').fetchall()
+
+
+for t in (ODD, WIDE, TABLES[0]):
+    types_ = _infer_column_types(t["columns"], t["rows"])
+    vals = [[_loaded_value(r.get(c), types_[c]) for c in t["columns"]] for r in t["rows"]]
+    ref = duckdb.connect(":memory:")
+    ref.execute(f'CREATE TABLE "{t["table_name"]}" (' + ", ".join(f'"{c}" {types_[c]}' for c in t["columns"]) + ")")
+    ref.executemany(f'INSERT INTO "{t["table_name"]}" VALUES ({", ".join("?" * len(t["columns"]))})', vals)
+    new = ctx(tables=[t], cards=[])._connection()
+    check(f"{t['table_name']}: the chunked load holds exactly what the row-by-row load held",
+          dump(new, t["table_name"]) == dump(ref, t["table_name"]))
+
+
+class _FakeQuery:
+    def __init__(self, sb, name):
+        self.sb, self.name, self.cols, self.user = sb, name, "*", None
+
+    def select(self, cols):
+        self.cols = cols
+        return self
+
+    def eq(self, col, value):
+        if col == "user_id":
+            self.user = value
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def execute(self):
+        self.sb.calls.append((self.name, self.cols))
+        data = [r for r in self.sb.data.get(self.name, []) if self.user is None or r.get("user_id", self.user) == self.user]
+        want = None if self.cols.strip() == "*" else [c.strip() for c in self.cols.split(",")]
+        return SimpleNamespace(data=[dict(r) if want is None else {k: r.get(k) for k in want} for r in data])
+
+    def __getattr__(self, _name):  # any other builder step (limit, in_, ...) is a no-op here
+        return lambda *a, **k: self
+
+
+class _FakeSB:
+    def __init__(self, data):
+        self.data, self.calls = data, []
+
+    def table(self, name):
+        return _FakeQuery(self, name)
+
+
+def sd_rows(tables, user="u1", stamp="2026-11-11T00:00:00"):
+    return [dict(t, id=f"id-{t['table_name']}", user_id=user, created_at=stamp) for t in tables]
+
+
+def rows_reads(sb):
+    return sum(1 for name, cols in sb.calls if name == "structured_data" and "rows" in cols)
+
+
+am._DATA_CACHE.clear()
+sb = _FakeSB({"structured_data": sd_rows(TABLES), "documents": [dict(d, user_id="u1") for d in DOCS]})
+c1 = am.AgentContext.from_database("u1", sb)
+check("the first question reads the rows", rows_reads(sb) == 1 and len(c1.tables) == 2, sb.calls)
+first = c1.run_sql("SELECT count(*) AS n FROM acme_pumps")
+c2 = am.AgentContext.from_database("u1", sb)
+check("a second question on unchanged data does not read the rows again", rows_reads(sb) == 1, sb.calls)
+check("and reuses the database already built", c2._connection() is c1._connection())
+check("and gets the same answers", c2.run_sql("SELECT count(*) AS n FROM acme_pumps") == first)
+
+sb.data["structured_data"] = sd_rows(TABLES + [ODD])
+c3 = am.AgentContext.from_database("u1", sb)
+check("new data is read again", rows_reads(sb) == 2 and len(c3.tables) == 3, sb.calls)
+check("and gets a fresh database that holds it",
+      c3._connection() is not c1._connection() and "6" in c3.run_sql("SELECT count(*) AS n FROM acme_odd"))
+
+sb.data["structured_data"] = sd_rows([dict(TABLES[0], row_count=5, rows=TABLES[0]["rows"][:5]), TABLES[1], ODD])
+c4 = am.AgentContext.from_database("u1", sb)
+check("a changed row count is new data too", rows_reads(sb) == 3
+      and "5" in c4.run_sql("SELECT count(*) AS n FROM acme_pumps").splitlines()[1], c4.run_sql("SELECT count(*) AS n FROM acme_pumps"))
+
+other = _FakeSB({"structured_data": sd_rows([TABLES[1]], user="u2"), "documents": []})
+c5 = am.AgentContext.from_database("u2", other)
+check("another user never sees this user's database",
+      [t["table_name"] for t in c5.tables] == ["acme_rooms"] and c5._connection() is not c4._connection()
+      and c5.run_sql("SELECT count(*) FROM acme_pumps").startswith("SQL ERROR"), c5.tables)
+
+saved_age = am.DATA_CACHE_MAX_AGE_S
+am.DATA_CACHE_MAX_AGE_S = 0
+am.AgentContext.from_database("u1", sb)
+check("a kept database older than the limit is read again", rows_reads(sb) == 4, sb.calls)
+am.DATA_CACHE_MAX_AGE_S = saved_age
+
+am._DATA_CACHE.clear()
+sb = _FakeSB({"structured_data": sd_rows(TABLES), "documents": []})
+shared = [am.AgentContext.from_database("u1", sb) for _ in range(2)]
+outs = []
+threads = [threading.Thread(target=lambda c=c, k=k: outs.append((k, c.run_sql(f"SELECT count(*) AS n FROM acme_pumps WHERE kw > {k}"))))
+           for c in shared for k in (0, 2, 4, 6)]
+for th in threads:
+    th.start()
+for th in threads:
+    th.join()
+got = sorted((k, o.splitlines()[1].strip()) for k, o in outs)
+check("two questions querying one kept database at once both answer right",
+      got == sorted([(k, n) for k, n in zip((0, 2, 4, 6), want_counts)] * 2) and rows_reads(sb) == 1, got)
+check("a kept database still cannot read a local file",
+      shared[1].run_sql("SELECT * FROM read_csv('C:/Windows/win.ini')").startswith("SQL ERROR"))
+
+print("13b. the database starts loading as soon as the question arrives")
+am._DATA_CACHE.clear()
+probe = ctx()
+real_from_db = am.AgentContext.from_database
+am.AgentContext.from_database = classmethod(lambda cls, user_id, sb: probe)
+try:
+    class LooksFirst(FakeAdapter):
+        def step(self, allow_tools):
+            deadline = time.monotonic() + 3
+            while probe._con is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.built_before_any_tool = probe._con is not None
+            return super().step(allow_tools)
+
+    lf = LooksFirst([am.Turn(text="Two rooms.", tool_calls=[])])
+    list(am.stream_agent([{"role": "user", "content": "q"}], "u1", None, adapter=lf))
+    check("the database is loaded without waiting for the model's first query", lf.built_before_any_tool)
+finally:
+    am.AgentContext.from_database = real_from_db
+
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

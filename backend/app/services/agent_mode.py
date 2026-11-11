@@ -52,6 +52,12 @@ READ_LINES = 400
 HOLDS_CAP = 160
 # The tool calls one model turn asks for run at the same time, at most this many at once.
 TOOL_WORKERS = 4
+# Rows go into DuckDB as multi-row INSERTs of at most this many values (row by row took ~10 s for
+# ~21k rows; this takes ~3 s, measured on the same data with identical contents).
+INSERT_VALUES = 10_000
+# A user's loaded database is kept between questions until their tables change, and never longer
+# than this - structured_data has no updated_at, so an edit made in place would not show in the key.
+DATA_CACHE_MAX_AGE_S = 600.0
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 # Quality and safety are enforced per request rather than by trusting one host's name: no fp4/int4
@@ -173,28 +179,84 @@ def _cell(value) -> str:
     return text if len(text) <= CELL_CAP else text[:CELL_CAP - 1] + "…"
 
 
+def _insert_rows(con, name: str, cols: list, vals: list):
+    """Load rows as multi-row INSERTs, in order. Same values and types as one INSERT per row."""
+    if not vals:
+        return
+    row = "(" + ", ".join("?" * len(cols)) + ")"
+    per = max(1, INSERT_VALUES // max(1, len(cols)))
+    for i in range(0, len(vals), per):
+        chunk = vals[i:i + per]
+        con.execute(f'INSERT INTO "{name}" VALUES ' + ", ".join([row] * len(chunk)),
+                    [v for r in chunk for v in r])
+
+
+class _DataCache:
+    """Each user's tables and their loaded database, kept between questions. The key is the user's
+    structured_data rows (id, name, row count, created_at): any upload, delete or re-upload changes
+    it. A changed key, or an entry older than DATA_CACHE_MAX_AGE_S, means a fresh read."""
+
+    def __init__(self):
+        self._lock, self._by_user = threading.Lock(), {}
+
+    def entry(self, user_id, key, load_tables) -> dict:
+        with self._lock:
+            e = self._by_user.get(user_id)
+            if e and e["key"] == key and time.monotonic() - e["at"] < DATA_CACHE_MAX_AGE_S:
+                return e
+        tables = load_tables()  # the slow read happens outside the lock
+        e = {"key": key, "at": time.monotonic(), "tables": tables, "con": None, "lock": threading.Lock()}
+        with self._lock:
+            self._by_user[user_id] = e
+        return e
+
+    def clear(self):
+        with self._lock:
+            self._by_user.clear()
+
+
+_DATA_CACHE = _DataCache()
+
+
 class AgentContext:
     """The data one question can see — this user's tables, cards and documents — and the tools."""
 
     def __init__(self, user_id, supabase_client, tables, cards, documents,
                  retrieve: Optional[Callable] = None, reader: Optional[Callable] = None,
-                 sql_timeout: Optional[float] = None):
+                 sql_timeout: Optional[float] = None, cache_entry: Optional[dict] = None):
         self.user_id, self.sb = user_id, supabase_client
         self.tables, self.cards, self.documents = tables or [], cards or [], documents or []
         self._retrieve, self._reader = retrieve, reader
         self.sql_timeout = sql_timeout
         self._con = None
-        self._con_lock = threading.Lock()
+        self._entry = cache_entry
+        self._con_lock = cache_entry["lock"] if cache_entry is not None else threading.Lock()
 
     @classmethod
     def from_database(cls, user_id, supabase_client):
+        """This user's data. The table rows (the slow part) are read only when the user's tables
+        have changed since the last question; cards and documents are read every time."""
         from app.services.sql_tool import _load_table_cards
-        tables = (supabase_client.table("structured_data")
-                  .select("table_name, columns, rows, row_count").eq("user_id", user_id)
-                  .order("table_name").execute().data) or []
+        stamp = (supabase_client.table("structured_data").select("id, table_name, row_count, created_at")
+                 .eq("user_id", user_id).order("table_name").execute().data) or []
+        key = tuple((s.get("id"), s.get("table_name"), s.get("row_count"), str(s.get("created_at")))
+                    for s in stamp)
+        entry = _DATA_CACHE.entry(user_id, key, lambda: (
+            supabase_client.table("structured_data").select("table_name, columns, rows, row_count")
+            .eq("user_id", user_id).order("table_name").execute().data) or [])
         documents = (supabase_client.table("documents").select("id, file_name, folder_path")
                      .eq("user_id", user_id).execute().data) or []
-        return cls(user_id, supabase_client, tables, _load_table_cards(user_id, supabase_client), documents)
+        return cls(user_id, supabase_client, entry["tables"], _load_table_cards(user_id, supabase_client),
+                   documents, cache_entry=entry)
+
+    def prefetch(self):
+        """Start loading the database now, while the model reads the question."""
+        def warm():
+            try:
+                self._connection()
+            except Exception as e:  # noqa: BLE001 - run_sql meets the same error and reports it
+                logger.warning("agent mode: loading the database early failed (%s: %s)", type(e).__name__, e)
+        threading.Thread(target=warm, daemon=True, name="agent-db").start()
 
     # -- dispatch -----------------------------------------------------------
     def call_tool(self, name: str, args: dict) -> str:
@@ -216,6 +278,8 @@ class AgentContext:
             return self._build_connection()
 
     def _build_connection(self):
+        if self._con is None and self._entry is not None and self._entry["con"] is not None:
+            self._con = self._entry["con"]
         if self._con is None:
             from app.services.sql_tool import _infer_column_types, _loaded_value
             con = duckdb.connect(":memory:")
@@ -226,12 +290,14 @@ class AgentContext:
                 types_ = _infer_column_types(cols, rows)
                 con.execute(f'CREATE TABLE "{t["table_name"]}" ('
                             + ", ".join(f'"{c}" {types_[c]}' for c in cols) + ")")
-                con.executemany(f'INSERT INTO "{t["table_name"]}" VALUES ({", ".join("?" * len(cols))})',
-                                [[_loaded_value(r.get(c), types_[c]) for c in cols] for r in rows])
+                _insert_rows(con, t["table_name"], cols,
+                             [[_loaded_value(r.get(c), types_[c]) for c in cols] for r in rows])
             # No file, network or extension access from model-written SQL, and it cannot be undone.
             con.execute("SET enable_external_access = false")
             con.execute("SET lock_configuration = true")
             self._con = con
+            if self._entry is not None:
+                self._entry["con"] = con
         return self._con
 
     def run_sql(self, query: str) -> str:
@@ -475,6 +541,7 @@ def stream_agent(messages, user_id, supabase_client, adapter=None):
     The loop runs on a worker thread, so each tool's start and finish and the answer's text go out
     while the model is still working; an error in the loop is raised here, as before."""
     ctx = AgentContext.from_database(user_id, supabase_client)
+    ctx.prefetch()
     adapter = adapter or adapter_from_env()
     events, box = queue.Queue(), {}
 
