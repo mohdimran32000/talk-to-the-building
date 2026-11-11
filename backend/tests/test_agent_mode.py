@@ -262,6 +262,117 @@ am.run_agent([{"role": "user", "content": "q"}], ctx(), fa, max_steps=8, time_bu
 check("a missing argument returns an error, not a crash", "error" in fa.results[0][0][2].lower(), fa.results)
 
 # ---------------------------------------------------------------------------
+print("6b. one turn's tool calls run at the same time; results keep their order")
+import threading  # noqa: E402
+import time  # noqa: E402
+
+
+def slow_retrieve(query, user_id, supabase_client, top_k):
+    time.sleep(0.4)
+    return [{"file_name": f"doc-{query}.md", "content": f"excerpt for {query}"}]
+
+
+three = [call("search_docs", query=q) for q in ("a", "b", "c")]
+for i, tc in enumerate(three):
+    tc.id = f"s{i}"
+fa = FakeAdapter([am.Turn(text="", tool_calls=three), am.Turn(text="ok", tool_calls=[])])
+t0 = time.monotonic()
+res = am.run_agent([{"role": "user", "content": "q"}], ctx(retrieve=slow_retrieve), fa, max_steps=8, time_budget=90)
+took = time.monotonic() - t0
+check("three 0.4 s searches in one turn take well under 1.2 s", took < 0.9, f"{took:.2f}s")
+check("each result goes back against its own call, in the call order",
+      [r[0] for r in fa.results[0]] == ["s0", "s1", "s2"]
+      and all(f"doc-{q}.md" in r[2] for q, r in zip("abc", fa.results[0])), fa.results)
+check("steps are recorded in the call order", [s["args"]["query"] for s in res["steps"]] == ["a", "b", "c"],
+      res["steps"])
+
+sqls = [call("run_sql", query=f"SELECT count(*) AS n FROM acme_pumps WHERE kw > {k}") for k in (0, 2, 4, 6)]
+for i, tc in enumerate(sqls):
+    tc.id = f"q{i}"
+want_counts = ["6", "5", "4", "2"]  # kw = 1.5, 3, 4.5, 6, 7.5, 9
+for attempt in range(3):
+    fa = FakeAdapter([am.Turn(text="", tool_calls=sqls), am.Turn(text="ok", tool_calls=[])])
+    am.run_agent([{"role": "user", "content": "q"}], ctx(), fa, max_steps=8, time_budget=90)
+    got = [r[2].splitlines()[1].strip() for r in fa.results[0]]
+    check(f"four queries at once on one fresh context all answer right (try {attempt + 1})",
+          got == want_counts, fa.results[0])
+
+c_par = ctx()
+fa = FakeAdapter([am.Turn(text="", tool_calls=[call("run_sql", query="SELECT * FROM read_csv('C:/Windows/win.ini')"),
+                                                call("run_sql", query="SELECT tag FROM acme_pumps")]),
+                  am.Turn(text="ok", tool_calls=[])])
+am.run_agent([{"role": "user", "content": "q"}], c_par, fa, max_steps=8, time_budget=90)
+check("a parallel query still cannot read a local file",
+      fa.results[0][0][2].startswith("SQL ERROR") and "for 16-bit" not in fa.results[0][0][2], fa.results[0][0])
+check("and its neighbour still answers", "P-01" in fa.results[0][1][2], fa.results[0][1])
+
+done = []
+fa = FakeAdapter([am.Turn(text="", tool_calls=[call("run_sql", query="SELECT tag FROM acme_pumps"),
+                                                call("search_docs", query="pump")]),
+                  am.Turn(text="ok", tool_calls=[])])
+lock = threading.Lock()
+
+
+def on_done(ev):
+    with lock:
+        done.append(ev)
+
+
+am.run_agent([{"role": "user", "content": "q"}], ctx(retrieve=slow_retrieve), fa, max_steps=8, time_budget=90,
+             on_done=on_done)
+names = sorted(n for n, _ in done)
+check("each finished tool is reported once, with a short detail",
+      names == ["run_sql", "search_docs"] and all(isinstance(d, str) and d for _, d in done), done)
+check("a query's detail says how many rows came back",
+      any(n == "run_sql" and "6 rows" in d for n, d in done), done)
+check("a search's detail says how many excerpts came back",
+      any(n == "search_docs" and "1 excerpt" in d for n, d in done), done)
+err_done = []
+fa = FakeAdapter([am.Turn(text="", tool_calls=[call("run_sql", query="SELECT nope FROM acme_pumps")]),
+                  am.Turn(text="ok", tool_calls=[])])
+am.run_agent([{"role": "user", "content": "q"}], ctx(), fa, max_steps=8, time_budget=90, on_done=err_done.append)
+check("a failed tool is reported as an error", err_done and err_done[0][1].lower().startswith("error"), err_done)
+
+# ---------------------------------------------------------------------------
+print("6c. the answer streams as it is written")
+
+
+class StreamingFake(FakeAdapter):
+    """Like FakeAdapter, but speaks each turn's text in pieces through on_text."""
+
+    def step(self, allow_tools, on_text=None):
+        turn = super().step(allow_tools)
+        if on_text and turn.text:
+            for piece in turn.text.split(" "):
+                on_text(piece + " ")
+            turn = am.Turn(text="".join(p + " " for p in turn.text.split(" ")), tool_calls=turn.tool_calls,
+                           usage=turn.usage)
+        return turn
+
+
+pieces = []
+fa = StreamingFake([am.Turn(text="", tool_calls=[call("run_sql", query="SELECT 1")]),
+                    am.Turn(text="Six pumps in all.", tool_calls=[])])
+res = am.run_agent([{"role": "user", "content": "q"}], ctx(), fa, max_steps=8, time_budget=90, on_text=pieces.append)
+check("the final answer arrives in pieces", len(pieces) == 4 and "".join(pieces).strip() == "Six pumps in all.", pieces)
+check("the result says the answer was streamed", res.get("streamed") is True and res["answer"].strip() == "Six pumps in all.",
+      res)
+
+pieces = []
+fa = StreamingFake([am.Turn(text="Checking the register.", tool_calls=[call("run_sql", query="SELECT 1")]),
+                    am.Turn(text="Six.", tool_calls=[])])
+res = am.run_agent([{"role": "user", "content": "q"}], ctx(), fa, max_steps=8, time_budget=90, on_text=pieces.append)
+check("text written before a tool call is kept apart from the answer",
+      "".join(pieces).replace(" ", "") == "Checkingtheregister.\n\nSix.", repr("".join(pieces)))
+check("the answer itself is still only the last turn's text", res["answer"].strip() == "Six.", res["answer"])
+
+pieces = []
+fa = FakeAdapter([am.Turn(text="Six.", tool_calls=[])])
+res = am.run_agent([{"role": "user", "content": "q"}], ctx(), fa, max_steps=8, time_budget=90, on_text=pieces.append)
+check("a model that cannot stream still answers, unstreamed",
+      pieces == [] and res["answer"] == "Six." and not res.get("streamed"), (pieces, res))
+
+# ---------------------------------------------------------------------------
 print("7. the prompt is generic")
 p = am.system_prompt("INDEX-HERE", max_steps=8)
 check("it carries the index and the step cap", "INDEX-HERE" in p and "8" in p)
@@ -413,6 +524,75 @@ check("an unknown effort level refuses rather than send it",
       _raises(lambda: am.AnthropicAdapter("claude-opus-5-5", SimpleNamespace(messages=None), effort="extreme")))
 
 # ---------------------------------------------------------------------------
+print("9c. the Claude adapter streams when asked")
+
+
+class _Block(SimpleNamespace):
+    """A streamed content block: like the SDK's, it carries an SDK-only parsed_output field."""
+
+    def model_dump(self, mode="python", exclude_none=False):
+        d = dict(vars(self))
+        d["parsed_output"] = None
+        return {k: v for k, v in d.items() if not (exclude_none and v is None)}
+
+
+class _FakeStream:
+    def __init__(self, events, final):
+        self.events, self.final = events, final
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        return iter(self.events)
+
+    def get_final_message(self):
+        return self.final
+
+
+class _StreamingMessages(_FakeMessages):
+    def __init__(self, replies, streams):
+        super().__init__(replies)
+        self.streams, self.stream_kw = list(streams), []
+
+    def stream(self, **kw):
+        self.stream_kw.append(kw)
+        return self.streams.pop(0)
+
+
+s_think = _Block(type="thinking", thinking="", signature="sig2")
+s_text = _Block(type="text", text="Six pumps.", citations=None)
+final = SimpleNamespace(content=[s_think, s_text], stop_reason="end_turn",
+                        usage=SimpleNamespace(input_tokens=50, output_tokens=20, cache_read_input_tokens=5000,
+                                              cache_creation_input_tokens=0))
+events = [SimpleNamespace(type="message_start"), SimpleNamespace(type="text", text="Six "),
+          SimpleNamespace(type="content_block_delta"), SimpleNamespace(type="text", text="pumps.")]
+claude_calls.clear()
+sm = _StreamingMessages([], [_FakeStream(events, final)])
+sa = am.AnthropicAdapter("claude-sonnet-5-5", SimpleNamespace(messages=sm))
+sa.start("SYS", [{"role": "user", "content": "q"}])
+got = []
+st = sa.step(allow_tools=True, on_text=got.append)
+check("with on_text the stream is used, not create", len(sm.stream_kw) == 1 and claude_calls == [], (sm.stream_kw, claude_calls))
+skw = sm.stream_kw[0]
+check("the streamed request is the same request (model, cached system, tools, cache, tool choice)",
+      skw["model"] == "claude-sonnet-5-5" and skw["system"][0]["cache_control"] == {"type": "ephemeral"}
+      and len(skw["tools"]) == 4 and skw.get("cache_control") == {"type": "ephemeral"}
+      and skw["tool_choice"] == {"type": "auto"}, sorted(skw))
+check("text deltas reach on_text as they come", got == ["Six ", "pumps."], got)
+check("the turn's text is the final message's text", st.text == "Six pumps." and st.tool_calls == [], st)
+check("the streamed turn is priced like any other", st.usage["output"] == 20 and st.usage["cached"] == 5000
+      and st.usage["cost"] > 0, st.usage)
+replayed = sa.messages[-1]
+check("the streamed turn is replayed as plain blocks, thinking signature kept, no SDK-only fields",
+      replayed["role"] == "assistant"
+      and replayed["content"] == [{"type": "thinking", "thinking": "", "signature": "sig2"},
+                                  {"type": "text", "text": "Six pumps."}], replayed)
+
+# ---------------------------------------------------------------------------
 print("10. adapter choice from AGENT_MODEL")
 os.environ["AGENT_MODEL"] = "openrouter:deepseek/some-flash"
 os.environ["OPENROUTER_API_KEY"] = "k"
@@ -456,6 +636,59 @@ fa = FakeAdapter([am.Turn(text="a", tool_calls=[], usage={"input": 5, "output": 
 am.run_agent([{"role": "user", "content": "q"}], ctx(), fa, max_steps=8, time_budget=90)
 check("each model call's usage lands in the log", am.usage_log() == [{"input": 5, "output": 1, "cached": 0}],
       am.usage_log())
+
+# ---------------------------------------------------------------------------
+print("12. the chat stream: steps and answer go out while the model works")
+real_from_db = am.AgentContext.from_database
+am.AgentContext.from_database = classmethod(lambda cls, user_id, sb: ctx())
+try:
+    seen_start = threading.Event()
+
+    class WaitsForTheScreen(StreamingFake):
+        """Holds the second model call until the consumer has seen the first tool start."""
+
+        def step(self, allow_tools, on_text=None):
+            if self.allowed:
+                self.saw_it = seen_start.wait(timeout=3)
+            return super().step(allow_tools, on_text)
+
+    wa = WaitsForTheScreen([am.Turn(text="", tool_calls=[call("run_sql", query="SELECT tag FROM acme_pumps")]),
+                            am.Turn(text="Six pumps.", tool_calls=[])])
+    out = []
+    for ev in am.stream_agent([{"role": "user", "content": "q"}], "u1", None, adapter=wa):
+        out.append(ev)
+        if ev[0] == "tool_start":
+            seen_start.set()
+    check("a tool start reaches the screen before the model has finished", getattr(wa, "saw_it", False), out)
+    kinds = [k for k, _ in out]
+    check("the order is start, done, answer pieces, done",
+          kinds[:2] == ["tool_start", "tool_done"] and kinds[-1] == "done"
+          and all(k == "token" for k in kinds[2:-1]) and len(kinds) > 4, kinds)
+    check("the streamed pieces make the answer, sent once",
+          "".join(d for k, d in out if k == "token").strip() == "Six pumps.", out)
+    check("tool_start keeps its shape", json.loads(out[0][1]) == {"tool": "run_sql", "args": {"query": "SELECT tag FROM acme_pumps"}},
+          out[0])
+    check("tool_done names the tool and says what came back",
+          json.loads(out[1][1])["tool"] == "run_sql" and "6 rows" in json.loads(out[1][1])["detail"], out[1])
+    check("the run is still recorded for the eval", am.last_run().get("steps") and "seconds" in am.last_run(),
+          am.last_run())
+
+    plain = FakeAdapter([am.Turn(text="Two rooms.", tool_calls=[])])
+    out = list(am.stream_agent([{"role": "user", "content": "q"}], "u1", None, adapter=plain))
+    check("a model that cannot stream sends its answer as one token at the end",
+          out == [("token", "Two rooms."), ("done", "")], out)
+
+    class Broken(FakeAdapter):
+        def step(self, allow_tools):
+            raise RuntimeError("API down")
+
+    try:
+        list(am.stream_agent([{"role": "user", "content": "q"}], "u1", None, adapter=Broken([])))
+        check("a model error still reaches the caller", False, "no exception")
+    except RuntimeError as e:
+        check("a model error still reaches the caller", "API down" in str(e), e)
+finally:
+    am.AgentContext.from_database = real_from_db
 
 print(f"\n{'ALL PASS' if not FAILS else f'{len(FAILS)} FAILED: ' + ', '.join(FAILS)}")
 sys.exit(1 if FAILS else 0)

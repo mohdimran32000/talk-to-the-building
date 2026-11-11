@@ -19,13 +19,17 @@ seconds (default 180); then the model must answer with what it has. If the model
 from the configuration (no key, no SDK), the chat path falls back to the classic pipeline and logs
 a warning - see openai_client.stream_response.
 """
+import contextvars
 import difflib
 import inspect
 import json
 import logging
 import os
+import queue
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -46,6 +50,8 @@ DOC_TOP_K = 8
 EXCERPT_CAP = 1_500
 READ_LINES = 400
 HOLDS_CAP = 160
+# The tool calls one model turn asks for run at the same time, at most this many at once.
+TOOL_WORKERS = 4
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 # Quality and safety are enforced per request rather than by trusting one host's name: no fp4/int4
@@ -178,6 +184,7 @@ class AgentContext:
         self._retrieve, self._reader = retrieve, reader
         self.sql_timeout = sql_timeout
         self._con = None
+        self._con_lock = threading.Lock()
 
     @classmethod
     def from_database(cls, user_id, supabase_client):
@@ -202,6 +209,13 @@ class AgentContext:
 
     # -- SQL ----------------------------------------------------------------
     def _connection(self):
+        """The loaded in-memory database, built once. A turn's queries run at the same time, so each
+        one takes its own cursor (a DuckDB connection is not shared across threads) and the first
+        build is locked."""
+        with self._con_lock:
+            return self._build_connection()
+
+    def _build_connection(self):
         if self._con is None:
             from app.services.sql_tool import _infer_column_types, _loaded_value
             con = duckdb.connect(":memory:")
@@ -228,7 +242,7 @@ class AgentContext:
                    "nothing that writes, loads, attaches or changes settings.")
         if ";" in bare or not _STARTS.match(bare) or _FORBIDDEN.search(bare):
             return refused
-        con = self._connection()
+        con = self._connection().cursor()
         try:
             result = _execute_with_timeout(con, sql, timeout=self.sql_timeout or SQL_QUERY_TIMEOUT)
             col_names = [d[0] for d in (con.description or [])]
@@ -236,6 +250,8 @@ class AgentContext:
             return f"SQL ERROR - {e} (timeout). Narrow the query."
         except Exception as e:  # noqa: BLE001 - the error text is what the model repairs from
             return f"SQL ERROR - {type(e).__name__}: {e}"
+        finally:
+            con.close()
         n, shown = len(result), min(len(result), SQL_ROW_CAP)
         lines = [" | ".join(col_names)]
         lines += [" | ".join(_cell(v) for v in row) for row in result[:shown]]
@@ -367,51 +383,134 @@ _NOT_RUN = "NOT RUN - the tool budget is used up. Answer now from what you have.
 _NO_ANSWER = "I could not finish an answer within the tool budget."
 
 
+_ROWS_LINE = re.compile(r"\((?:shown \d+ of )?(\d+) rows\)")
+_FAILED = ("ERROR", "SQL ERROR", "REFUSED", "READ ERROR", "UNKNOWN")
+
+
+def _done_detail(name: str, text: str) -> str:
+    """One short line for the chat screen once a tool has finished."""
+    text = text or ""
+    if text.startswith(_FAILED):
+        return "Error: " + _one_line(text, 120)
+    if name == "run_sql":
+        m = _ROWS_LINE.search(text)
+        return f"{m.group(1)} rows" if m else "Done"
+    if name == "search_docs":
+        n = len(re.findall(r"^\[\d+\] ", text, re.M))
+        return f"{n} excerpt" + ("" if n == 1 else "s")
+    if name == "read_document":
+        return _one_line(text.splitlines()[0] if text else "", 120) or "Done"
+    return "Done"
+
+
+def _run_tools(ctx: AgentContext, calls: list, on_done=None) -> list:
+    """Run one turn's tool calls at the same time; results come back in the call order. Each task runs
+    in a copy of the caller's context, so tracing still nests under the question."""
+    def one(tc):
+        text = ctx.call_tool(tc.name, tc.args)
+        if on_done:
+            on_done((tc.name, _done_detail(tc.name, text)))
+        return text
+
+    if len(calls) <= 1:
+        return [one(tc) for tc in calls]
+    contexts = [contextvars.copy_context() for _ in calls]
+    with ThreadPoolExecutor(max_workers=min(TOOL_WORKERS, len(calls))) as pool:
+        return list(pool.map(lambda pair: pair[0].run(one, pair[1]), zip(contexts, calls)))
+
+
 def run_agent(messages, ctx: AgentContext, adapter, max_steps: int = DEFAULT_MAX_STEPS,
-              time_budget: float = DEFAULT_TIME_BUDGET_S, clock=time.monotonic, on_event=None) -> dict:
+              time_budget: float = DEFAULT_TIME_BUDGET_S, clock=time.monotonic, on_event=None,
+              on_done=None, on_text=None) -> dict:
+    """on_event((tool, args)) as each tool starts, on_done((tool, detail)) as it finishes, and
+    on_text(piece) for answer text as the model writes it - when the adapter can stream."""
     adapter.start(system_prompt(build_index(ctx.cards, ctx.tables, ctx.documents), max_steps), messages)
-    steps, stopped, t0 = [], None, clock()
+    streams = on_text is not None and "on_text" in inspect.signature(adapter.step).parameters
+    steps, stopped, t0, streamed = [], None, clock(), False
     while True:
         allow = len(steps) < max_steps and clock() - t0 < time_budget
         if not allow and stopped is None:
             stopped = "step_cap" if len(steps) >= max_steps else "time_budget"
-        turn = adapter.step(allow_tools=allow)
+        spoken = []
+        if streams:
+            def speak(piece, _spoken=spoken):
+                _spoken.append(piece)
+                on_text(piece)
+            turn = adapter.step(allow_tools=allow, on_text=speak)
+        else:
+            turn = adapter.step(allow_tools=allow)
         if turn.usage:
             _USAGE.append(turn.usage)
         if not allow or not turn.tool_calls:
             answer = turn.text if (turn.text or "").strip() else _NO_ANSWER
+            streamed = bool(spoken) and answer == turn.text
             break
-        results = []
-        for tc in turn.tool_calls:
-            if len(steps) >= max_steps:
-                results.append((tc.id, tc.name, _NOT_RUN))
-                continue
-            if on_event:
+        if spoken:
+            on_text("\n\n")  # text written before a tool call stays apart from what follows
+        slots, todo = [None] * len(turn.tool_calls), []
+        for i, tc in enumerate(turn.tool_calls):
+            if len(steps) + len(todo) >= max_steps:
+                slots[i] = (tc.id, tc.name, _NOT_RUN)
+            else:
+                todo.append((i, tc))
+        if on_event:
+            for _, tc in todo:
                 on_event((tc.name, tc.args))
-            text = ctx.call_tool(tc.name, tc.args)
+        texts = _run_tools(ctx, [tc for _, tc in todo], on_done)
+        for (i, tc), text in zip(todo, texts):
             steps.append({"tool": tc.name, "args": tc.args, "chars": len(text)})
             if len(steps) == max_steps:
                 text += _LAST_CALL_NOTE
-            results.append((tc.id, tc.name, text))
-        adapter.add_tool_results(results)
-    return {"answer": answer, "steps": steps, "stopped": stopped, "seconds": round(clock() - t0, 1)}
+            slots[i] = (tc.id, tc.name, text)
+        adapter.add_tool_results(slots)
+    return {"answer": answer, "steps": steps, "stopped": stopped, "seconds": round(clock() - t0, 1),
+            "streamed": streamed}
+
+
+_END = object()
 
 
 def stream_agent(messages, user_id, supabase_client, adapter=None):
-    """stream_response's agent-mode path: the same event names the chat route and the eval read."""
+    """stream_response's agent-mode path: the same event names the chat route and the eval read.
+    The loop runs on a worker thread, so each tool's start and finish and the answer's text go out
+    while the model is still working; an error in the loop is raised here, as before."""
     ctx = AgentContext.from_database(user_id, supabase_client)
-    events = []
-    result = run_agent(messages, ctx, adapter or adapter_from_env(),
-                       max_steps=int(os.environ.get("AGENT_MAX_STEPS", DEFAULT_MAX_STEPS)),
-                       time_budget=float(os.environ.get("AGENT_TIME_BUDGET_S", DEFAULT_TIME_BUDGET_S)),
-                       on_event=events.append)
+    adapter = adapter or adapter_from_env()
+    events, box = queue.Queue(), {}
+
+    def on_start(ev):
+        events.put(("tool_start", json.dumps({"tool": ev[0], "args": ev[1]}, ensure_ascii=False)))
+
+    def on_done(ev):
+        events.put(("tool_done", json.dumps({"tool": ev[0], "detail": ev[1]}, ensure_ascii=False)))
+
+    def work():
+        try:
+            box["result"] = run_agent(
+                messages, ctx, adapter,
+                max_steps=int(os.environ.get("AGENT_MAX_STEPS", DEFAULT_MAX_STEPS)),
+                time_budget=float(os.environ.get("AGENT_TIME_BUDGET_S", DEFAULT_TIME_BUDGET_S)),
+                on_event=on_start, on_done=on_done, on_text=lambda piece: events.put(("token", piece)))
+        except BaseException as e:  # noqa: BLE001 - handed to the caller below
+            box["error"] = e
+        finally:
+            events.put(_END)
+
+    threading.Thread(target=contextvars.copy_context().run, args=(work,), daemon=True, name="agent-mode").start()
+    while True:
+        item = events.get()
+        if item is _END:
+            break
+        yield item
+    if "error" in box:
+        raise box["error"]
+    result = box["result"]
     _LAST_RUN.clear()
     _LAST_RUN.update({k: result[k] for k in ("steps", "stopped", "seconds")})
     logger.info("agent mode: %d tool calls, stopped=%s, %.1fs", len(result["steps"]), result["stopped"],
                 result["seconds"])
-    for name, args in events:
-        yield ("tool_start", json.dumps({"tool": name, "args": args}, ensure_ascii=False))
-    yield ("token", result["answer"])
+    if not result.get("streamed"):
+        yield ("token", result["answer"])
     yield ("done", "")
 
 
@@ -525,6 +624,16 @@ class GeminiAdapter:
             for call_id, name, text in results]))
 
 
+def _replayable(block):
+    """A streamed content block as a plain request block. The stream's final message is the SDK's
+    parsed form, which carries fields the API does not accept back; thinking keeps its signature."""
+    if isinstance(block, dict):
+        return block
+    d = block.model_dump(mode="json", exclude_none=True)
+    d.pop("parsed_output", None)
+    return d
+
+
 class AnthropicAdapter:
     """Claude's Messages API. The system prompt and the growing conversation are cached; each assistant
     turn is replayed exactly as returned, so thinking blocks stay valid; tool results go back together
@@ -544,16 +653,29 @@ class AnthropicAdapter:
         self.messages = [{"role": "user" if m["role"] == "user" else "assistant", "content": m["content"]}
                          for m in messages]
 
-    def step(self, allow_tools):
+    def step(self, allow_tools, on_text=None):
+        """One model call. With on_text, the call streams and each piece of text is handed over as it
+        is written; the turn that comes back is the same either way."""
         extra = {"output_config": {"effort": self.effort}} if self.effort else {}
-        resp = self.client.messages.create(
+        request = dict(
             model=self.model, max_tokens=self.max_tokens, system=self.system, messages=self.messages,
             tools=[{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
                    for t in TOOLS],
             tool_choice={"type": "auto" if allow_tools else "none"},
             cache_control={"type": "ephemeral"}, **extra)
-        content = list(getattr(resp, "content", None) or [])
-        self.messages.append({"role": "assistant", "content": content})
+        if on_text is None:
+            resp = self.client.messages.create(**request)
+            content = list(getattr(resp, "content", None) or [])
+            replay = content
+        else:
+            with self.client.messages.stream(**request) as stream:
+                for event in stream:
+                    if getattr(event, "type", None) == "text" and getattr(event, "text", ""):
+                        on_text(event.text)
+                resp = stream.get_final_message()
+            content = list(getattr(resp, "content", None) or [])
+            replay = [_replayable(b) for b in content]
+        self.messages.append({"role": "assistant", "content": replay})
         text = "".join(getattr(b, "text", "") or "" for b in content if getattr(b, "type", None) == "text")
         calls = [ToolCall(b.id, b.name, dict(b.input or {}))
                  for b in content if getattr(b, "type", None) == "tool_use"]
