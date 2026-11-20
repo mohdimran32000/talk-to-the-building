@@ -105,6 +105,13 @@ mode was built), one run per model, every miss checked by hand, 2026-11-07 to 20
 One run each, so a 1-2 point gap is within run-to-run noise. The questions encode one building's
 facts and are kept privately with that corpus.
 
+**Speed (v1.5.1).** The times above are v1.5's. v1.5.1 makes three changes:
+- The tool calls one model turn asks for now run at the same time.
+- Each tool's start and finish reach the chat as they happen.
+- The tables are loaded into DuckDB in batches and kept between questions until the user's data changes.
+
+On the first 20 questions with Sonnet 5.5 + Cohere, the same answers came back faster: 33.0 → 15.8 s per question on average, with the first step on screen after about 2.6 s. That is one run each, scored by hand as 19/20 before and after. The answer text itself still arrives at the end of the turn, because Claude Sonnet 5.5 holds a turn's text until it knows no tool call follows.
+
 ### Turning it off: `AGENT_MODE=0`
 
 `AGENT_MODE=0` (or `false`, `off`, `no`) brings back the classic pipeline exactly as it was in
@@ -231,6 +238,7 @@ Built in public, checkpoint by checkpoint — each tag is a working snapshot you
 | `v1.3` | Measured answering — every SQL result states its shape (rows, shown, distinct items) so a cut-off list is never described as whole; the tool menu lists every table (a cap of 40 had hidden 29 of 69); router cards are read in a fixed order (a republish had reshuffled 39 of 70 routes); a room named by its printed name reaches its tables; change-impact questions walk the dependency graph; a bounded SQL verifying loop (`SQL_LOOP_MAX_STEPS`, default 3 — empty, identifier-less or failed results are re-queried with a code-built instruction, counts are cross-checked against the documents) with a runaway-SQL guard; every UNION recommendation withdrawn from the SQL prompt. The evaluation ruler grew from 183 to 276 cards with a measured 7.5 % noise floor; same-instrument gains are +4 of 70 shape questions and +4 of 82 holdout. Known limits are listed in the doc-prep project's `LIMITATIONS.md` |
 | `v1.4` | Measured on hard questions - the router finds a row by the identifier printed on it (SQL recall 72 % -> 88 % at top 3), a stable tool menu, plan-first answers (`PLAN_FIRST=1`), a Claude provider path (`LLM_PROVIDER_*`) and a guard against filters on places the question never named; every new behaviour behind a switch, off by default |
 | `v1.5` | Agent mode on by default - one model (Claude Sonnet 5.5) with an index and four read-only tools answers each question: 97/100 on 100 hard questions, against 88 for the best classic-pipeline configuration, at about a third of its cost per question. `AGENT_MODE=0` returns the classic pipeline; it also answers, with a warning, when the agent model's key is missing. See [Agent mode](#agent-mode-default-since-v15) |
+| `v1.5.1` | Agent mode, faster: a turn's tool calls run at the same time, tool progress streams to the chat, and tables load into DuckDB in batches and stay loaded between questions until the data changes - 33.0 -> 15.8 s per question on 20 hard questions, same answers (19/20 by hand before and after) |
 
 ## Docs
 
